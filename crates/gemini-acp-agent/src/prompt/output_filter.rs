@@ -21,7 +21,6 @@ enum DropMode {
     ThinkingBlock,
 }
 
-/// Filtre incrémental pour la sortie visible de Gemini.
 #[derive(Debug)]
 pub struct OutputFilter {
     candidate: String,
@@ -42,19 +41,11 @@ impl Default for OutputFilter {
 }
 
 impl OutputFilter {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
-    /// Consume un chunk et retourne uniquement le texte sûr à afficher.
-    pub fn push(&mut self, chunk: &str) -> String {
-        self.process(chunk, false)
-    }
+    pub fn push(&mut self, chunk: &str) -> String { self.process(chunk, false) }
 
-    /// Termine le stream et libère un éventuel candidat partiellement reconnu.
-    pub fn finish(&mut self) -> String {
-        self.process("", true)
-    }
+    pub fn finish(&mut self) -> String { self.process("", true) }
 
     fn process(&mut self, chunk: &str, final_chunk: bool) -> String {
         let mut input = std::mem::take(&mut self.candidate);
@@ -63,114 +54,84 @@ impl OutputFilter {
         let mut i = 0;
 
         while i < input.len() {
-            if self.drop_mode != DropMode::None {
-                match self.drop_mode {
-                    DropMode::ToolResultLine => {
-                        if input.as_bytes()[i] == b'\n' {
-                            self.drop_mode = DropMode::None;
-                            self.at_line_start = true;
-                        }
-                        i += 1;
-                        continue;
+            match self.drop_mode {
+                DropMode::ToolResultLine => {
+                    if input.as_bytes()[i] == b'\n' {
+                        self.drop_mode = DropMode::None;
+                        self.at_line_start = true;
                     }
-                    DropMode::ToolCallBlock => {
-                        if let Some(len) = line_prefix_len(&input[i..], "```") {
-                            i += len;
-                            self.drop_mode = DropMode::None;
-                            self.at_line_start = false;
-                            continue;
-                        }
-                        let ch = input[i..].chars().next().expect("index UTF-8 valide");
-                        i += ch.len_utf8();
-                        self.at_line_start = ch == '\n';
-                        continue;
-                    }
-                    DropMode::ThinkingBlock => {
-                        if let Some(end) = input[i..].find(THINKING_CLOSE) {
-                            i += end + THINKING_CLOSE.len();
-                            self.drop_mode = DropMode::None;
-                            self.at_line_start = false;
-                            continue;
-                        }
-                        // La fermeture peut être coupée entre deux chunks.
-                        let keep = partial_suffix_len(&input[i..], THINKING_CLOSE);
-                        let end = input.len() - keep;
-                        if end > i {
-                            self.at_line_start = input[..end].ends_with('\n');
-                            i = end;
-                        }
-                        if !final_chunk && i < input.len() {
-                            self.candidate.push_str(&input[i..]);
-                        }
-                        break;
-                    }
-                    DropMode::None => unreachable!(),
+                    i += 1;
+                    continue;
                 }
-                continue;
+                DropMode::ToolCallBlock => {
+                    if input[i..].starts_with("```") {
+                        i += 3;
+                        self.drop_mode = DropMode::None;
+                        self.at_line_start = false;
+                        continue;
+                    }
+                    let ch = input[i..].chars().expect("index UTF-8 valide").next().unwrap();
+                    i += ch.len_utf8();
+                    self.at_line_start = ch == '\n';
+                    continue;
+                }
+                DropMode::ThinkingBlock => {
+                    if let Some(end) = input[i..].find(THINKING_CLOSE) {
+                        i += end + THINKING_CLOSE.len();
+                        self.drop_mode = DropMode::None;
+                        self.at_line_start = false;
+                        continue;
+                    }
+                    let keep = partial_suffix_len(&input[i..], THINKING_CLOSE);
+                    let end = input.len() - keep;
+                    if end > i { i = end; }
+                    if !final_chunk && i < input.len() {
+                        self.candidate.push_str(&input[i..]);
+                    }
+                    break;
+                }
+                DropMode::None => {}
             }
 
             if self.skipping_marker_spacing {
-                while i < input.len() && matches!(input.as_bytes()[i], b' ' | b'\t') {
-                    i += 1;
-                }
+                while i < input.len() && matches!(input.as_bytes()[i], b' ' | b'\t') { i += 1; }
                 self.skipping_marker_spacing = false;
                 if i == input.len() {
-                    if !final_chunk {
-                        return out;
-                    }
+                    if !final_chunk { return out; }
                     break;
                 }
             }
 
             if self.at_line_start {
                 let rest = &input[i..];
-
-                if let Some(len) = complete_or_partial(rest, TOOL_RESULT_PREFIX, final_chunk) {
-                    if len == TOOL_RESULT_PREFIX.len() {
-                        self.drop_mode = DropMode::ToolResultLine;
-                        i += len;
-                        continue;
-                    }
-                    self.candidate.push_str(rest);
-                    break;
+                if rest.starts_with(TOOL_RESULT_PREFIX) {
+                    self.drop_mode = DropMode::ToolResultLine;
+                    i += TOOL_RESULT_PREFIX.len();
+                    continue;
+                }
+                if rest.starts_with(TOOL_CALL_FENCE) {
+                    self.drop_mode = DropMode::ToolCallBlock;
+                    i += TOOL_CALL_FENCE.len();
+                    continue;
+                }
+                if rest.starts_with(THINKING_OPEN) {
+                    self.drop_mode = DropMode::ThinkingBlock;
+                    i += THINKING_OPEN.len();
+                    continue;
+                }
+                if rest.starts_with(ASSISTANT_MARKER) {
+                    i += ASSISTANT_MARKER.len();
+                    self.skipping_marker_spacing = true;
+                    continue;
+                }
+                if rest.starts_with(USER_MARKER) {
+                    i += USER_MARKER.len();
+                    self.skipping_marker_spacing = true;
+                    continue;
                 }
 
-                if let Some(len) = complete_or_partial(rest, TOOL_CALL_FENCE, final_chunk) {
-                    if len == TOOL_CALL_FENCE.len() {
-                        self.drop_mode = DropMode::ToolCallBlock;
-                        i += len;
-                        continue;
-                    }
-                    self.candidate.push_str(rest);
-                    break;
-                }
-
-                if let Some(len) = complete_or_partial(rest, THINKING_OPEN, final_chunk) {
-                    if len == THINKING_OPEN.len() {
-                        self.drop_mode = DropMode::ThinkingBlock;
-                        i += len;
-                        continue;
-                    }
-                    self.candidate.push_str(rest);
-                    break;
-                }
-
-                if let Some(len) = complete_or_partial(rest, ASSISTANT_MARKER, final_chunk) {
-                    if len == ASSISTANT_MARKER.len() {
-                        i += len;
-                        self.skipping_marker_spacing = true;
-                        continue;
-                    }
-                    self.candidate.push_str(rest);
-                    break;
-                }
-
-                if let Some(len) = complete_or_partial(rest, USER_MARKER, final_chunk) {
-                    if len == USER_MARKER.len() {
-                        i += len;
-                        self.skipping_marker_spacing = true;
-                        continue;
-                    }
+                let prefixes = [TOOL_RESULT_PREFIX, TOOL_CALL_FENCE, THINKING_OPEN, ASSISTANT_MARKER, USER_MARKER];
+                if !final_chunk && prefixes.iter().any(|prefix| prefix.starts_with(rest)) {
                     self.candidate.push_str(rest);
                     break;
                 }
@@ -187,46 +148,18 @@ impl OutputFilter {
             out.push_str(&self.candidate);
             self.candidate.clear();
         }
-
         out
     }
 }
 
-/// Retourne la longueur du préfixe complet si `text` commence par `prefix`,
-/// ou la longueur totale de `text` lorsqu'il s'agit d'un début de préfixe.
-fn complete_or_partial(text: &str, prefix: &str, final_chunk: bool) -> Option<usize> {
-    if text.starts_with(prefix) {
-        return Some(prefix.len());
-    }
-    if !final_chunk && prefix.starts_with(text) {
-        return Some(text.len());
-    }
-    None
-}
-
-fn line_prefix_len(text: &str, prefix: &str) -> Option<usize> {
-    if text.starts_with(prefix) && (text.len() == prefix.len() || text.as_bytes()[prefix.len()] == b'\n') {
-        Some(prefix.len())
-    } else {
-        None
-    }
-}
-
-/// Nombre d'octets du suffixe de `text` qui peut encore être le début de
-/// `needle`. Cela permet de retenir uniquement la partie ambiguë à la frontière
-/// d'un chunk.
 fn partial_suffix_len(text: &str, needle: &str) -> usize {
     let max = text.len().min(needle.len().saturating_sub(1));
     for len in (1..=max).rev() {
-        if text.ends_with(&needle[..len]) {
-            return len;
-        }
+        if text.ends_with(&needle[..len]) { return len; }
     }
     0
 }
 
-/// Nettoie un texte déjà assemblé avec exactement les mêmes règles que le
-/// filtre streaming.
 pub fn sanitize_text(text: &str) -> String {
     let mut filter = OutputFilter::new();
     let mut out = filter.push(text);
@@ -271,6 +204,12 @@ mod tests {
     fn filters_tool_call_and_thinking_blocks() {
         let input = "<thinking>secret</thinking>\n```tool_call\n{\"name\":\"glob\"}\n```\n[Tool result for glob]: []\n[Assistant]: Réponse finale";
         assert_eq!(sanitize_text(input), "Réponse finale");
+    }
+
+    #[test]
+    fn filters_tool_call_followed_immediately_by_tool_result() {
+        let input = "```tool_call\n{\"name\":\"glob\"}\n```[Tool result for glob]: []\n[Assistant]: Réponse";
+        assert_eq!(sanitize_text(input), "Réponse");
     }
 
     #[test]
