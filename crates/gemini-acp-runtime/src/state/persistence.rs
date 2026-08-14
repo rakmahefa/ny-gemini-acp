@@ -9,6 +9,11 @@ use super::{Live, Session, Store};
 impl Store {
     pub async fn open(dir: &Path) -> Result<Self> {
         tokio::fs::create_dir_all(dir).await.with_context(|| format!("création du répertoire {}", dir.display()))?;
+        cleanup_orphan_tmp_files(dir).await;
+        let sessions_dir = dir.join("sessions");
+        if tokio::fs::metadata(&sessions_dir).await.is_ok() {
+            cleanup_orphan_tmp_files(&sessions_dir).await;
+        }
         Ok(Self { dir: dir.to_path_buf(), live: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())) })
     }
 
@@ -68,5 +73,21 @@ impl Store {
         let existed = self.live.write().await.remove(id).is_some() || self.path(id).exists();
         let _ = tokio::fs::remove_file(self.path(id)).await;
         existed
+    }
+}
+
+async fn cleanup_orphan_tmp_files(dir: &Path) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let is_tmp = path.is_file()
+            && path.file_name().and_then(|name| name.to_str()).map(|name| name.ends_with(".json.tmp") || name.ends_with(".tmp")).unwrap_or(false);
+        if is_tmp {
+            let _ = tokio::fs::remove_file(path).await;
+        }
     }
 }
