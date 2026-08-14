@@ -75,11 +75,13 @@ impl OutputFilter {
                 if rest.starts_with(ASSISTANT_MARKER) {
                     i += ASSISTANT_MARKER.len();
                     self.at_line_start = false;
+                    skip_marker_spacing(bytes, &mut i);
                     continue;
                 }
                 if rest.starts_with(USER_MARKER) {
                     i += USER_MARKER.len();
                     self.at_line_start = false;
+                    skip_marker_spacing(bytes, &mut i);
                     continue;
                 }
 
@@ -108,6 +110,14 @@ impl OutputFilter {
     }
 }
 
+/// Ignore uniquement l'espacement horizontal introduit après un marqueur de
+/// rôle. Le saut de ligne reste significatif et doit être traité normalement.
+fn skip_marker_spacing(bytes: &[u8], index: &mut usize) {
+    while *index < bytes.len() && matches!(bytes[*index], b' ' | b'\t') {
+        *index += 1;
+    }
+}
+
 /// Nettoie un texte déjà assemblé avec exactement les mêmes règles que le
 /// filtre streaming.
 pub fn sanitize_text(text: &str) -> String {
@@ -130,6 +140,12 @@ mod tests {
     fn removes_role_marker_but_preserves_content() {
         assert_eq!(sanitize_text("[Assistant]: J'exécute cargo check"), "J'exécute cargo check");
         assert_eq!(sanitize_text("[User]: analyse le projet"), "analyse le projet");
+    }
+
+    #[test]
+    fn removes_role_marker_with_multiple_spaces() {
+        assert_eq!(sanitize_text("[Assistant]:   J'exécute cargo check"), "J'exécute cargo check");
+        assert_eq!(sanitize_text("[User]:\t analyse le projet"), "analyse le projet");
     }
 
     #[test]
@@ -156,7 +172,7 @@ mod tests {
             let mut filter = OutputFilter::new();
             assert_eq!(filter.push(&marker[..split]), "");
             assert_eq!(filter.push(&marker[split..]), "");
-            assert_eq!(filter.push(" suite"), " suite");
+            assert_eq!(filter.push(" suite"), "suite");
             assert_eq!(filter.finish(), "");
         }
     }
