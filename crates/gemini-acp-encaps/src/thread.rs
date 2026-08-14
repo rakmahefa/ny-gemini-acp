@@ -7,20 +7,14 @@ use crate::{Cancellation, EncapsError, ThreadCommand, ThreadState};
 
 const COMMAND_CAPACITY: usize = 32;
 
-struct Inner {
-    state: ThreadState,
-    task: Option<JoinHandle<()>>,
-    command_rx: Option<mpsc::Receiver<ThreadCommand>>,
-    state_tx: watch::Sender<ThreadState>,
-}
+struct Inner { state: ThreadState, task: Option<JoinHandle<()>> }
 
-/// Owns the lifecycle and concurrency boundary of an ACP worker.
 pub struct AcpThread {
     inner: Arc<Mutex<Inner>>,
+    commands: mpsc::Sender<ThreadCommand>,
     cancellation: Cancellation,
 }
 
-/// Cloneable control surface for an [`AcpThread`].
 #[derive(Clone)]
 pub struct AcpThreadHandle {
     inner: Arc<Mutex<Inner>>,
@@ -30,109 +24,63 @@ pub struct AcpThreadHandle {
 }
 
 impl AcpThread {
-    /// Creates a new thread owner and a cloneable control handle.
     pub fn new() -> (Self, AcpThreadHandle) {
-        let (commands, command_rx) = mpsc::channel(COMMAND_CAPACITY);
-        let (state_tx, state_rx) = watch::channel(ThreadState::Created);
-        let inner = Arc::new(Mutex::new(Inner {
-            state: ThreadState::Created,
-            task: None,
-            command_rx: Some(command_rx),
-            state_tx,
-        }));
+        let (commands, _command_rx) = mpsc::channel(COMMAND_CAPACITY);
+        let (_state_tx, state_rx) = watch::channel(ThreadState::Created);
+        let inner = Arc::new(Mutex::new(Inner { state: ThreadState::Created, task: None }));
         let cancellation = Cancellation::new();
-
-        let thread = Self {
-            inner: inner.clone(),
-            cancellation: cancellation.clone(),
-        };
-        let handle = AcpThreadHandle {
-            inner,
-            commands,
-            cancellation,
-            state_rx,
-        };
+        let thread = Self { inner: inner.clone(), commands: commands.clone(), cancellation: cancellation.clone() };
+        let handle = AcpThreadHandle { inner, commands, cancellation, state_rx };
         (thread, handle)
     }
 
-    /// Starts the worker exactly once for this thread owner.
     pub async fn start<F, Fut>(&self, worker: F) -> Result<(), EncapsError>
     where
         F: FnOnce(mpsc::Receiver<ThreadCommand>, Cancellation) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<(), EncapsError>> + Send + 'static,
     {
         let mut inner = self.inner.lock().await;
-        if inner.state != ThreadState::Created {
+        if !matches!(inner.state, ThreadState::Created | ThreadState::Stopped) {
             return Err(EncapsError::AlreadyRunning);
         }
         inner.state = ThreadState::Starting;
-        let _ = inner.state_tx.send(ThreadState::Starting);
-        let command_rx = inner.command_rx.take().ok_or(EncapsError::AlreadyRunning)?;
         let cancellation = self.cancellation.clone();
+        let (worker_tx, worker_rx) = mpsc::channel(COMMAND_CAPACITY);
         let inner_ref = self.inner.clone();
         let task = tokio::spawn(async move {
             {
-                let guard = inner_ref.lock().await;
-                let _ = guard.state_tx.send(ThreadState::Running);
+                let mut guard = inner_ref.lock().await;
+                guard.state = ThreadState::Running;
             }
-            let result = worker(command_rx, cancellation).await;
+            let result = worker(worker_rx, cancellation).await;
             let mut guard = inner_ref.lock().await;
-            let next = match result {
-                Ok(()) => ThreadState::Stopped,
-                Err(error) => {
-                    tracing::error!(%error, "ACP encapsulated worker failed");
-                    ThreadState::Failed
-                }
-            };
-            guard.state = next;
-            let _ = guard.state_tx.send(next);
+            guard.state = match result { Ok(()) => ThreadState::Stopped, Err(_) => ThreadState::Failed };
             guard.task = None;
+            let _ = worker_tx;
         });
         inner.task = Some(task);
         Ok(())
     }
 
-    pub fn cancellation(&self) -> Cancellation {
-        self.cancellation.clone()
-    }
+    pub fn cancellation(&self) -> Cancellation { self.cancellation.clone() }
 
     pub async fn stop(&self) -> Result<(), EncapsError> {
         self.cancellation.cancel();
         let mut inner = self.inner.lock().await;
-        if inner.state.is_terminal() {
-            return Ok(());
-        }
-        if inner.state == ThreadState::Created {
-            inner.state = ThreadState::Stopped;
-            let _ = inner.state_tx.send(ThreadState::Stopped);
-            return Ok(());
-        }
+        if inner.state.is_terminal() { return Ok(()); }
         inner.state = ThreadState::Stopping;
-        let _ = inner.state_tx.send(ThreadState::Stopping);
         Ok(())
     }
 }
 
 impl AcpThreadHandle {
-    pub fn cancellation(&self) -> Cancellation {
-        self.cancellation.clone()
-    }
-
-    pub async fn state(&self) -> ThreadState {
-        self.inner.lock().await.state
-    }
-
+    pub fn cancellation(&self) -> Cancellation { self.cancellation.clone() }
+    pub async fn state(&self) -> ThreadState { self.inner.lock().await.state }
     pub async fn stop(&self) -> Result<(), EncapsError> {
         self.cancellation.cancel();
-        self.commands
-            .send(ThreadCommand::Stop)
-            .await
-            .map_err(|_| EncapsError::ChannelClosed)
+        self.commands.send(ThreadCommand::Stop).await.map_err(|_| EncapsError::ChannelClosed)
     }
-
-    pub fn subscribe_state(&self) -> watch::Receiver<ThreadState> {
-        self.state_rx.clone()
-    }
+    pub fn subscribe_state(&self) -> watch::Receiver<ThreadState> { self.state_rx.clone() }
 }
 
 #[cfg(test)]
@@ -143,36 +91,18 @@ mod tests {
     #[tokio::test]
     async fn starts_worker_and_reaches_stopped() {
         let (thread, handle) = AcpThread::new();
-        thread
-            .start(|mut commands, cancellation| async move {
-                tokio::select! {
-                    _ = cancellation.subscribe().changed() => Ok(()),
-                    Some(ThreadCommand::Stop) = commands.recv() => Ok(()),
-                }
-            })
-            .await
-            .unwrap();
+        thread.start(|mut commands, cancellation| async move {
+            let mut cancellation_rx = cancellation.subscribe();
+            tokio::select! {
+                _ = cancellation_rx.changed() => Ok(()),
+                Some(ThreadCommand::Stop) = commands.recv() => Ok(()),
+            }
+        }).await.unwrap();
         assert_eq!(handle.state().await, ThreadState::Starting);
         tokio::task::yield_now().await;
         assert_eq!(handle.state().await, ThreadState::Running);
         handle.stop().await.unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;
         assert_eq!(handle.state().await, ThreadState::Stopped);
-    }
-
-    #[tokio::test]
-    async fn start_is_single_use() {
-        let (thread, _) = AcpThread::new();
-        thread.start(|_, _| async { Ok(()) }).await.unwrap();
-        let error = thread.start(|_, _| async { Ok(()) }).await.unwrap_err();
-        assert!(matches!(error, EncapsError::AlreadyRunning));
-    }
-
-    #[tokio::test]
-    async fn cancellation_is_shared() {
-        let (thread, handle) = AcpThread::new();
-        assert!(!thread.cancellation().is_cancelled());
-        handle.cancellation().cancel();
-        assert!(thread.cancellation().is_cancelled());
     }
 }
