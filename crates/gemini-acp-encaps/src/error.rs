@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum EncapsError {
     #[error("ACP thread has already been started")]
     AlreadyStarted,
+    #[error("ACP turn has already been started")]
+    AlreadyRunning,
     #[error("ACP turn is already active for this session")]
     TurnAlreadyActive,
     #[error("ACP thread is not running")]
