@@ -56,5 +56,8 @@ impl AgentConfig {
 }
 
 #[cfg(test)]
+pub(crate) static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
 #[path = "../test/config.rs"]
 mod tests;
