@@ -44,7 +44,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                     let tools = tools.clone();
                     let turn_manager = turn_manager.clone();
                     let turn_cx = cx.clone();
-                    let sid = req.session_id.0.clone();
+                    let sid = req.session_id.0.to_string();
                     let session_id = req.session_id.clone();
 
                     turn_manager
@@ -64,7 +64,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                             .await
                         })
                         .await
-                        .map_err(|error| tracing::error!(%error, "failed to enqueue ACP turn"))?;
+                        .map_err(|error| anyhow::anyhow!("failed to enqueue ACP turn: {error}"))?;
                     Ok(())
                 }
             },

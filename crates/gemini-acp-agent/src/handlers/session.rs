@@ -43,7 +43,7 @@ fn session_id_error(id: &SessionId) -> AcpError {
 fn session_mode_id(mode: AcpSessionMode) -> SessionModeId {
     SessionModeId::from(match mode {
         AcpSessionMode::Default => "default",
-        AcpSessionMode::AcceptEdits => "accept_edits",
+        AcpSessionMode::AcceptEdits => "accept_edits".into(),
         AcpSessionMode::BypassPermissions => "bypass_permissions",
     })
 }
@@ -455,13 +455,13 @@ mod tests {
     fn all_modes_have_stable_acp_ids() {
         let modes = build_available_modes();
         let ids: Vec<&str> = modes.iter().map(|mode| mode.id.0.as_ref()).collect();
-        assert_eq!(ids, vec!["default", "accept_edits", "bypass_permissions"]);
+        assert_eq!(ids, vec!["default", "accept_edits".into(), "bypass_permissions"]);
     }
 
     #[test]
     fn mode_state_uses_current_mode() {
         let state = build_mode_state(AcpSessionMode::AcceptEdits);
-        assert_eq!(state.current_mode_id.0, "accept_edits");
+        assert_eq!(state.current_mode_id.0, "accept_edits".into());
         assert_eq!(state.available_modes.len(), 3);
     }
 
