@@ -10,16 +10,13 @@ const COMMAND_CAPACITY: usize = 32;
 struct Inner {
     state: ThreadState,
     task: Option<JoinHandle<()>>,
+    command_rx: Option<mpsc::Receiver<ThreadCommand>>,
+    state_tx: watch::Sender<ThreadState>,
 }
 
 /// Owns the lifecycle and concurrency boundary of an ACP worker.
-///
-/// The worker callback is deliberately generic: the encapsulation layer does
-/// not know about ACP requests or Gemini. The agent layer supplies that work
-/// when it is migrated onto this foundation.
 pub struct AcpThread {
     inner: Arc<Mutex<Inner>>,
-    commands: mpsc::Sender<ThreadCommand>,
     cancellation: Cancellation,
 }
 
@@ -33,19 +30,20 @@ pub struct AcpThreadHandle {
 }
 
 impl AcpThread {
-    /// Creates a stopped thread owner and a control handle.
+    /// Creates a new thread owner and a cloneable control handle.
     pub fn new() -> (Self, AcpThreadHandle) {
         let (commands, command_rx) = mpsc::channel(COMMAND_CAPACITY);
         let (state_tx, state_rx) = watch::channel(ThreadState::Created);
         let inner = Arc::new(Mutex::new(Inner {
             state: ThreadState::Created,
             task: None,
+            command_rx: Some(command_rx),
+            state_tx,
         }));
         let cancellation = Cancellation::new();
 
         let thread = Self {
             inner: inner.clone(),
-            commands: commands.clone(),
             cancellation: cancellation.clone(),
         };
         let handle = AcpThreadHandle {
@@ -54,48 +52,43 @@ impl AcpThread {
             cancellation,
             state_rx,
         };
-
-        // Keep the receiver alive until start() installs the actual worker.
-        drop(command_rx);
-        drop(state_tx);
         (thread, handle)
     }
 
-    /// Starts a worker. A worker is a Tokio task, keeping the API runtime
-    /// agnostic while providing a single ownership boundary.
+    /// Starts the worker exactly once for this thread owner.
     pub async fn start<F, Fut>(&self, worker: F) -> Result<(), EncapsError>
     where
         F: FnOnce(mpsc::Receiver<ThreadCommand>, Cancellation) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<(), EncapsError>> + Send + 'static,
     {
         let mut inner = self.inner.lock().await;
-        if !matches!(inner.state, ThreadState::Created | ThreadState::Stopped) {
+        if inner.state != ThreadState::Created {
             return Err(EncapsError::AlreadyRunning);
         }
 
         inner.state = ThreadState::Starting;
+        let _ = inner.state_tx.send(ThreadState::Starting);
+        let command_rx = inner.command_rx.take().ok_or(EncapsError::AlreadyRunning)?;
         let cancellation = self.cancellation.clone();
-        let commands = self.commands.clone();
         let inner_ref = self.inner.clone();
-
-        let (worker_tx, worker_rx) = mpsc::channel(COMMAND_CAPACITY);
-        // Forward commands from the public channel to the worker channel.
-        // This keeps the control surface independent from worker internals.
-        let mut public_rx = commands.subscribe_receiver();
-        let _ = (&mut public_rx, &worker_tx);
 
         let task = tokio::spawn(async move {
             {
-                let mut guard = inner_ref.lock().await;
-                guard.state = ThreadState::Running;
+                let guard = inner_ref.lock().await;
+                let _ = guard.state_tx.send(ThreadState::Running);
             }
 
-            let result = worker(worker_rx, cancellation).await;
+            let result = worker(command_rx, cancellation).await;
             let mut guard = inner_ref.lock().await;
-            guard.state = match result {
+            let next = match result {
                 Ok(()) => ThreadState::Stopped,
-                Err(_) => ThreadState::Failed,
+                Err(error) => {
+                    tracing::error!(%error, "ACP encapsulated worker failed");
+                    ThreadState::Failed
+                }
             };
+            guard.state = next;
+            let _ = guard.state_tx.send(next);
             guard.task = None;
         });
 
@@ -109,12 +102,17 @@ impl AcpThread {
 
     pub async fn stop(&self) -> Result<(), EncapsError> {
         self.cancellation.cancel();
-        let _ = self.commands.send(ThreadCommand::Stop).await;
         let mut inner = self.inner.lock().await;
         if inner.state.is_terminal() {
             return Ok(());
         }
+        if inner.state == ThreadState::Created {
+            inner.state = ThreadState::Stopped;
+            let _ = inner.state_tx.send(ThreadState::Stopped);
+            return Ok(());
+        }
         inner.state = ThreadState::Stopping;
+        let _ = inner.state_tx.send(ThreadState::Stopping);
         Ok(())
     }
 }
