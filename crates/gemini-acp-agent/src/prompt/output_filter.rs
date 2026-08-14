@@ -10,14 +10,37 @@ const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 const ASSISTANT_MARKER: &str = "[Assistant]:";
 const USER_MARKER: &str = "[User]:";
 const TOOL_CALL_FENCE: &str = "```tool_call";
+const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
 const THINKING_OPEN: &str = "<thinking>";
 const THINKING_CLOSE: &str = "</thinking>";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolCallFence {
+    Backtick,
+    SingleQuote,
+}
+
+impl ToolCallFence {
+    const fn opening(self) -> &'static str {
+        match self {
+            Self::Backtick => TOOL_CALL_FENCE,
+            Self::SingleQuote => TOOL_CALL_SINGLE_QUOTE_FENCE,
+        }
+    }
+
+    const fn closing(self) -> &'static str {
+        match self {
+            Self::Backtick => "```",
+            Self::SingleQuote => "'''",
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DropMode {
     None,
     ToolResultLine,
-    ToolCallBlock,
+    ToolCallBlock(ToolCallFence),
     ThinkingBlock,
 }
 
@@ -71,13 +94,11 @@ impl OutputFilter {
                     i += 1;
                     continue;
                 }
-                DropMode::ToolCallBlock => {
-                    if input[i..].starts_with("```") {
-                        i += 3;
+                DropMode::ToolCallBlock(fence) => {
+                    let closing = fence.closing();
+                    if input[i..].starts_with(closing) {
+                        i += closing.len();
                         self.drop_mode = DropMode::None;
-                        // The closing fence belongs to the protocol. Treat the
-                        // following bytes as a fresh line so a tool result can
-                        // immediately follow it without leaking.
                         self.at_line_start = true;
                         self.suppress_protocol_newline = true;
                         continue;
@@ -137,8 +158,13 @@ impl OutputFilter {
                     continue;
                 }
                 if rest.starts_with(TOOL_CALL_FENCE) {
-                    self.drop_mode = DropMode::ToolCallBlock;
+                    self.drop_mode = DropMode::ToolCallBlock(ToolCallFence::Backtick);
                     i += TOOL_CALL_FENCE.len();
+                    continue;
+                }
+                if rest.starts_with(TOOL_CALL_SINGLE_QUOTE_FENCE) {
+                    self.drop_mode = DropMode::ToolCallBlock(ToolCallFence::SingleQuote);
+                    i += TOOL_CALL_SINGLE_QUOTE_FENCE.len();
                     continue;
                 }
                 if rest.starts_with(THINKING_OPEN) {
@@ -160,6 +186,7 @@ impl OutputFilter {
                 let prefixes = [
                     TOOL_RESULT_PREFIX,
                     TOOL_CALL_FENCE,
+                    TOOL_CALL_SINGLE_QUOTE_FENCE,
                     THINKING_OPEN,
                     ASSISTANT_MARKER,
                     USER_MARKER,
@@ -245,6 +272,27 @@ mod tests {
     fn filters_tool_call_followed_immediately_by_tool_result() {
         let input = "```tool_call\n{\"name\":\"glob\"}\n```[Tool result for glob]: []\n[Assistant]: Réponse";
         assert_eq!(sanitize_text(input), "Réponse");
+    }
+
+    #[test]
+    fn filters_single_quote_tool_call_blocks() {
+        let input = "'''tool_call\n{\"name\":\"glob\"}\n'''[Tool result for glob]: []\n[Assistant]: Réponse";
+        assert_eq!(sanitize_text(input), "Réponse");
+    }
+
+    #[test]
+    fn filters_single_quote_tool_call_split_across_chunks() {
+        let mut filter = OutputFilter::new();
+        assert_eq!(filter.push("'''tool_"), "");
+        assert_eq!(filter.push("call\n{}\n'''"), "");
+        assert_eq!(filter.push("[Tool result for glob]: []\n[Assistant]: Suite"), "Suite");
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn preserves_single_quote_python_strings() {
+        let input = "Voici du Python :\n'''docstring'''\nprint('ok')";
+        assert_eq!(sanitize_text(input), input);
     }
 
     #[test]
