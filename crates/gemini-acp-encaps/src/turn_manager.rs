@@ -131,18 +131,22 @@ mod tests {
         let first = tokio::spawn(async move {
             m1.start("session", move |cancellation| async move {
                 s1.fetch_add(1, Ordering::SeqCst);
-                b1.notified().await;
-                cancellation.cancelled().await;
-                Ok(())
+                let mut rx = cancellation.subscribe();
+                tokio::select! {
+                    _ = b1.notified() => Ok(()),
+                    _ = rx.changed() => Ok(()),
+                }
             })
             .await
         });
         let second = tokio::spawn(async move {
             m2.start("session", move |cancellation| async move {
                 s2.fetch_add(1, Ordering::SeqCst);
-                b2.notified().await;
-                cancellation.cancelled().await;
-                Ok(())
+                let mut rx = cancellation.subscribe();
+                tokio::select! {
+                    _ = b2.notified() => Ok(()),
+                    _ = rx.changed() => Ok(()),
+                }
             })
             .await
         });
