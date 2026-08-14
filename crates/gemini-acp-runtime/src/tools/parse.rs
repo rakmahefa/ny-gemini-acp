@@ -124,6 +124,12 @@ fn extract_follow_up(text: &str) -> (String, Option<(String, String)>) {
         cursor = end + 1;
     }
 
+    // A valid FollowUp commonly occupies its own line. Removing the tag must
+    // not leave two copies of the surrounding line break in the visible text.
+    if found.is_some() && clean.ends_with('\n') && text[cursor..].starts_with('\n') {
+        cursor += 1;
+    }
+
     clean.push_str(&text[cursor..]);
     (clean.trim().to_owned(), found)
 }
