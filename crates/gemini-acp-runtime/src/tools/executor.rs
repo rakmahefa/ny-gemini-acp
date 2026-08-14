@@ -375,11 +375,7 @@ impl<'a> ToolExecutor<'a> {
                 terminal_id.clone(),
             ))],
             vec![],
-            Some(terminal_lifecycle_meta(
-                &terminal_id.0.to_string(),
-                None,
-                None,
-            )),
+            Some(terminal_lifecycle_meta(&terminal_id.0, None, None)),
         );
 
         let wait = WaitForTerminalExitRequest::new(self.session_id.clone(), terminal_id.clone());
@@ -390,7 +386,7 @@ impl<'a> ToolExecutor<'a> {
                 return Ok(ExecutionOutcome {
                     result: ToolResult::err("terminal annulé par session/cancel"),
                     terminal_id: Some(terminal_id.0.to_string()),
-                    terminal_meta: Some(terminal_lifecycle_meta(&terminal_id.0.to_string(), None, None)),
+                    terminal_meta: Some(terminal_lifecycle_meta(&terminal_id.0, None, None)),
                     cancelled: true,
                 });
             }
@@ -448,7 +444,7 @@ impl<'a> ToolExecutor<'a> {
             },
             terminal_id: Some(terminal_id.0.to_string()),
             terminal_meta: Some(terminal_lifecycle_meta(
-                &terminal_id.0.to_string(),
+                &terminal_id.0,
                 Some(&terminal_text),
                 Some((exit_code, signal.as_deref())),
             )),
