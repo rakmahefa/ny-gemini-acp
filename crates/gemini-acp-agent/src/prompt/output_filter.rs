@@ -16,6 +16,7 @@ pub struct OutputFilter {
     candidate: String,
     at_line_start: bool,
     dropping_tool_result: bool,
+    skipping_marker_spacing: bool,
 }
 
 impl Default for OutputFilter {
@@ -24,6 +25,7 @@ impl Default for OutputFilter {
             candidate: String::new(),
             at_line_start: true,
             dropping_tool_result: false,
+            skipping_marker_spacing: false,
         }
     }
 }
@@ -65,6 +67,19 @@ impl OutputFilter {
                 continue;
             }
 
+            if self.skipping_marker_spacing {
+                while i < bytes.len() && matches!(bytes[i], b' ' | b'\t') {
+                    i += 1;
+                }
+                self.skipping_marker_spacing = false;
+                if i == bytes.len() {
+                    if !final_chunk {
+                        return out;
+                    }
+                    break;
+                }
+            }
+
             if self.at_line_start {
                 let rest = &input[i..];
                 if rest.starts_with(TOOL_RESULT_PREFIX) {
@@ -75,13 +90,13 @@ impl OutputFilter {
                 if rest.starts_with(ASSISTANT_MARKER) {
                     i += ASSISTANT_MARKER.len();
                     self.at_line_start = false;
-                    skip_marker_spacing(bytes, &mut i);
+                    self.skipping_marker_spacing = true;
                     continue;
                 }
                 if rest.starts_with(USER_MARKER) {
                     i += USER_MARKER.len();
                     self.at_line_start = false;
-                    skip_marker_spacing(bytes, &mut i);
+                    self.skipping_marker_spacing = true;
                     continue;
                 }
 
@@ -107,14 +122,6 @@ impl OutputFilter {
         }
 
         out
-    }
-}
-
-/// Ignore uniquement l'espacement horizontal introduit après un marqueur de
-/// rôle. Le saut de ligne reste significatif et doit être traité normalement.
-fn skip_marker_spacing(bytes: &[u8], index: &mut usize) {
-    while *index < bytes.len() && matches!(bytes[*index], b' ' | b'\t') {
-        *index += 1;
     }
 }
 
