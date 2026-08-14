@@ -2,8 +2,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EncapsError {
-    #[error("ACP thread is already running")]
-    AlreadyRunning,
+    #[error("ACP thread has already been started")]
+    AlreadyStarted,
+    #[error("ACP turn is already active for this session")]
+    TurnAlreadyActive,
     #[error("ACP thread is not running")]
     NotRunning,
     #[error("ACP thread is shutting down")]
