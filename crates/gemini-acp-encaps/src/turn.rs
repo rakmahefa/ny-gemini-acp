@@ -60,7 +60,13 @@ impl AcpTurn {
             cancellation: cancellation.clone(),
             state_rx,
         };
-        (Self { inner, cancellation }, handle)
+        (
+            Self {
+                inner,
+                cancellation,
+            },
+            handle,
+        )
     }
 
     /// Runs the turn exactly once. Completion is represented by the worker's
@@ -161,7 +167,9 @@ mod tests {
             let mut rx = cancellation.subscribe();
             rx.changed().await.map_err(|_| EncapsError::ChannelClosed)?;
             Ok(())
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
         tokio::task::yield_now().await;
         handle.cancel().await.unwrap();
         tokio::time::sleep(Duration::from_millis(5)).await;

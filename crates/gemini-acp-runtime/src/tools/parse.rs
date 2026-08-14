@@ -14,8 +14,12 @@ pub enum ParsedToolKind {
 }
 
 impl ParsedToolKind {
-    pub fn is_elicitation(self) -> bool { matches!(self, Self::Elicitation) }
-    pub fn is_action(self) -> bool { matches!(self, Self::Action) }
+    pub fn is_elicitation(self) -> bool {
+        matches!(self, Self::Elicitation)
+    }
+    pub fn is_action(self) -> bool {
+        matches!(self, Self::Action)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -30,15 +34,31 @@ impl ParsedToolCall {
     pub fn new(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         let original_name = name.into();
         let kind = classify_tool_kind(&original_name);
-        let name = if kind.is_elicitation() { "AskUserQuestion".to_owned() } else { original_name };
-        Self { id: id.into(), name, arguments, kind }
+        let name = if kind.is_elicitation() {
+            "AskUserQuestion".to_owned()
+        } else {
+            original_name
+        };
+        Self {
+            id: id.into(),
+            name,
+            arguments,
+            kind,
+        }
     }
 
-    pub fn is_elicitation(&self) -> bool { self.kind.is_elicitation() }
-    pub fn is_action(&self) -> bool { self.kind.is_action() }
+    pub fn is_elicitation(&self) -> bool {
+        self.kind.is_elicitation()
+    }
+    pub fn is_action(&self) -> bool {
+        self.kind.is_action()
+    }
 
     pub fn to_history_block(&self) -> String {
-        format!("```tool_call\n{}\n```", json!({"id": self.id, "name": self.name, "arguments": self.arguments}))
+        format!(
+            "```tool_call\n{}\n```",
+            json!({"id": self.id, "name": self.name, "arguments": self.arguments})
+        )
     }
 }
 
@@ -51,25 +71,35 @@ fn classify_tool_kind(name: &str) -> ParsedToolKind {
     }
 }
 
-fn generated_id(sequence: usize) -> String { format!("gemini_call_{sequence}") }
+fn generated_id(sequence: usize) -> String {
+    format!("gemini_call_{sequence}")
+}
 
 pub fn parse_tool_calls(text: &str) -> (String, Vec<ParsedToolCall>) {
     static RE_TOOL_CALL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static RE_FUNC_CALL: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
 
-    let re_tool_call = RE_TOOL_CALL.get_or_init(|| regex::Regex::new(r"(?s)```tool_call\s*\n(.*?)\n```").expect("regex statique"));
-    let re_func_call = RE_FUNC_CALL.get_or_init(|| regex::Regex::new(r"(?s)```function_call\s*\n(.*?)\n```").expect("regex statique"));
+    let re_tool_call = RE_TOOL_CALL.get_or_init(|| {
+        regex::Regex::new(r"(?s)```tool_call\s*\n(.*?)\n```").expect("regex statique")
+    });
+    let re_func_call = RE_FUNC_CALL.get_or_init(|| {
+        regex::Regex::new(r"(?s)```function_call\s*\n(.*?)\n```").expect("regex statique")
+    });
 
     let mut calls = Vec::new();
     let mut clean = text.to_string();
 
     for cap in re_tool_call.captures_iter(&clean) {
-        if let Some(call) = parse_single(cap[1].trim(), calls.len()) { calls.push(call); }
+        if let Some(call) = parse_single(cap[1].trim(), calls.len()) {
+            calls.push(call);
+        }
     }
     clean = re_tool_call.replace_all(&clean, "").trim().to_string();
 
     for cap in re_func_call.captures_iter(&clean) {
-        if let Some(call) = parse_single_func(cap[1].trim(), calls.len()) { calls.push(call); }
+        if let Some(call) = parse_single_func(cap[1].trim(), calls.len()) {
+            calls.push(call);
+        }
     }
     clean = re_func_call.replace_all(&clean, "").trim().to_string();
 
@@ -88,7 +118,11 @@ pub fn parse_tool_calls(text: &str) -> (String, Vec<ParsedToolCall>) {
     if calls.is_empty() && clean.trim_start().starts_with('{') {
         if let Ok(data) = serde_json::from_str::<Value>(clean.trim()) {
             if let Some(name) = data.get("name").and_then(Value::as_str) {
-                let args = data.get("arguments").or_else(|| data.get("args")).cloned().unwrap_or_else(|| json!({}));
+                let args = data
+                    .get("arguments")
+                    .or_else(|| data.get("args"))
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
                 calls.push(ParsedToolCall::new(generated_id(0), name, args));
                 clean.clear();
             }
@@ -117,7 +151,9 @@ fn extract_follow_up(text: &str) -> (String, Option<(String, String)>) {
         let tag = &text[start..=end];
 
         if let Some((label, query)) = parse_follow_up_tag(tag) {
-            if found.is_none() { found = Some((label, query)); }
+            if found.is_none() {
+                found = Some((label, query));
+            }
         } else {
             clean.push_str(tag);
         }
@@ -154,7 +190,9 @@ fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
     let attrs = parse_attributes(inner);
     let label = attrs.get("label")?.trim();
     let query = attrs.get("query")?.trim();
-    if label.is_empty() || query.is_empty() { return None; }
+    if label.is_empty() || query.is_empty() {
+        return None;
+    }
     Some((decode_xml(label), decode_xml(query)))
 }
 
@@ -163,28 +201,51 @@ fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
     let bytes = input.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
-        if index >= bytes.len() || bytes[index] == b'/' { break; }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] == b'/' {
+            break;
+        }
         let key_start = index;
-        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' { index += 1; }
-        if key_start == index { index += 1; continue; }
+        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' {
+            index += 1;
+        }
+        if key_start == index {
+            index += 1;
+            continue;
+        }
         let key = &input[key_start..index];
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
-        if index >= bytes.len() || bytes[index] != b'=' { break; }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b'=' {
+            break;
+        }
         index += 1;
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
-        if index >= bytes.len() { break; }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
         let value = if bytes[index] == b'\'' || bytes[index] == b'"' {
             let quote = bytes[index];
             index += 1;
             let value_start = index;
-            while index < bytes.len() && bytes[index] != quote { index += 1; }
+            while index < bytes.len() && bytes[index] != quote {
+                index += 1;
+            }
             let value = input[value_start..index].to_owned();
-            if index < bytes.len() { index += 1; }
+            if index < bytes.len() {
+                index += 1;
+            }
             value
         } else {
             let value_start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() { index += 1; }
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
             input[value_start..index].to_owned()
         };
         attrs.insert(key.to_ascii_lowercase(), value);
@@ -204,7 +265,12 @@ fn decode_xml(input: &str) -> String {
 fn parse_single(raw: &str, sequence: usize) -> Option<ParsedToolCall> {
     let data: Value = serde_json::from_str(raw).ok()?;
     let name = data.get("name").and_then(Value::as_str)?;
-    let id = data.get("id").and_then(Value::as_str).filter(|id| !id.trim().is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| generated_id(sequence));
+    let id = data
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| generated_id(sequence));
     let arguments = data.get("arguments").cloned().unwrap_or_else(|| json!({}));
     Some(ParsedToolCall::new(id, name, arguments))
 }
@@ -212,8 +278,18 @@ fn parse_single(raw: &str, sequence: usize) -> Option<ParsedToolCall> {
 fn parse_single_func(raw: &str, sequence: usize) -> Option<ParsedToolCall> {
     let data: Value = serde_json::from_str(raw).ok()?;
     let name = data.get("name").and_then(Value::as_str)?;
-    let id = data.get("id").or_else(|| data.get("call_id")).and_then(Value::as_str).filter(|id| !id.trim().is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| generated_id(sequence));
-    let arguments = data.get("args").or_else(|| data.get("arguments")).cloned().unwrap_or_else(|| json!({}));
+    let id = data
+        .get("id")
+        .or_else(|| data.get("call_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| generated_id(sequence));
+    let arguments = data
+        .get("args")
+        .or_else(|| data.get("arguments"))
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     Some(ParsedToolCall::new(id, name, arguments))
 }
 
@@ -223,7 +299,9 @@ mod tests {
 
     #[test]
     fn preserves_model_call_id() {
-        let (_, calls) = parse_tool_calls("```tool_call\n{\"id\":\"abc\",\"name\":\"file_read\",\"arguments\":{}}\n```");
+        let (_, calls) = parse_tool_calls(
+            "```tool_call\n{\"id\":\"abc\",\"name\":\"file_read\",\"arguments\":{}}\n```",
+        );
         assert_eq!(calls[0].id, "abc");
     }
 

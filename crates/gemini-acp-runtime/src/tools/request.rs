@@ -39,7 +39,10 @@ impl ToolCallState {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ToolCallRequestError {
     #[error("invalid tool call state transition: {from:?} -> {to:?}")]
-    InvalidTransition { from: ToolCallState, to: ToolCallState },
+    InvalidTransition {
+        from: ToolCallState,
+        to: ToolCallState,
+    },
     #[error("tool call request is already terminal: {0:?}")]
     AlreadyTerminal(ToolCallState),
 }
@@ -62,7 +65,13 @@ impl ToolCallRequest {
         arguments: Value,
         kind: ToolCallKind,
     ) -> Self {
-        Self { id: id.into(), name: name.into(), arguments, kind, state: ToolCallState::Pending }
+        Self {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+            kind,
+            state: ToolCallState::Pending,
+        }
     }
 
     pub fn tool(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
@@ -73,7 +82,9 @@ impl ToolCallRequest {
         Self::new(id, name, arguments, ToolCallKind::Elicitation)
     }
 
-    pub const fn is_terminal(&self) -> bool { self.state.is_terminal() }
+    pub const fn is_terminal(&self) -> bool {
+        self.state.is_terminal()
+    }
 
     pub fn transition(&mut self, next: ToolCallState) -> Result<(), ToolCallRequestError> {
         if self.state.is_terminal() {
@@ -94,7 +105,10 @@ impl ToolCallRequest {
         );
 
         if !allowed {
-            return Err(ToolCallRequestError::InvalidTransition { from: self.state, to: next });
+            return Err(ToolCallRequestError::InvalidTransition {
+                from: self.state,
+                to: next,
+            });
         }
 
         self.state = next;
@@ -123,7 +137,11 @@ mod tests {
 
     #[test]
     fn elicitation_can_wait_for_user_before_execution() {
-        let mut request = ToolCallRequest::elicitation("ask-1", "AskUserQuestion", json!({"question": "Continue?"}));
+        let mut request = ToolCallRequest::elicitation(
+            "ask-1",
+            "AskUserQuestion",
+            json!({"question": "Continue?"}),
+        );
         request.transition(ToolCallState::WaitingForUser).unwrap();
         request.transition(ToolCallState::Executing).unwrap();
         request.transition(ToolCallState::Completed).unwrap();
@@ -134,7 +152,13 @@ mod tests {
     fn invalid_backtracking_is_rejected() {
         let mut request = ToolCallRequest::tool("call-2", "file_read", json!({}));
         request.transition(ToolCallState::Executing).unwrap();
-        assert!(matches!(request.transition(ToolCallState::Pending), Err(ToolCallRequestError::InvalidTransition { from: ToolCallState::Executing, to: ToolCallState::Pending })));
+        assert!(matches!(
+            request.transition(ToolCallState::Pending),
+            Err(ToolCallRequestError::InvalidTransition {
+                from: ToolCallState::Executing,
+                to: ToolCallState::Pending
+            })
+        ));
     }
 
     #[test]
@@ -142,7 +166,12 @@ mod tests {
         let mut request = ToolCallRequest::tool("call-3", "file_write", json!({}));
         request.cancel().unwrap();
         assert_eq!(request.state, ToolCallState::Cancelled);
-        assert!(matches!(request.transition(ToolCallState::Executing), Err(ToolCallRequestError::AlreadyTerminal(ToolCallState::Cancelled))));
+        assert!(matches!(
+            request.transition(ToolCallState::Executing),
+            Err(ToolCallRequestError::AlreadyTerminal(
+                ToolCallState::Cancelled
+            ))
+        ));
     }
 
     #[test]

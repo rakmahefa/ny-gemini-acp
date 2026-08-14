@@ -24,11 +24,21 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
         .builder()
         .name("gemini-acp")
         .on_receive_request(
-            { let state = state.clone(); async move |req: InitializeRequest, responder, _cx| handlers::init::handle(req, responder, &state).await },
+            {
+                let state = state.clone();
+                async move |req: InitializeRequest, responder, _cx| {
+                    handlers::init::handle(req, responder, &state).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: NewSessionRequest, responder, _cx| handlers::session::handle_new(req, responder, &state).await },
+            {
+                let state = state.clone();
+                async move |req: NewSessionRequest, responder, _cx| {
+                    handlers::session::handle_new(req, responder, &state).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         // session/prompt : TurnManager remplace wait_prompt_done + prompt_handle.
@@ -49,18 +59,18 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
 
                     turn_manager
                         .start(sid, move |_cancellation| async move {
-                            let interactive = gemini_acp_runtime::tools::interactive::InteractiveContext {
-                                cx: turn_cx.clone(),
-                                session_id,
-                            };
-                            gemini_acp_runtime::tools::interactive::scope(
-                                interactive,
-                                async move {
-                                    prompt::run_turn(store, tools, client, req, responder, turn_cx)
-                                        .await
-                                        .map_err(|e| gemini_acp_encaps::EncapsError::Task(e.to_string()))
-                                },
-                            )
+                            let interactive =
+                                gemini_acp_runtime::tools::interactive::InteractiveContext {
+                                    cx: turn_cx.clone(),
+                                    session_id,
+                                };
+                            gemini_acp_runtime::tools::interactive::scope(interactive, async move {
+                                prompt::run_turn(store, tools, client, req, responder, turn_cx)
+                                    .await
+                                    .map_err(|e| {
+                                        gemini_acp_encaps::EncapsError::Task(e.to_string())
+                                    })
+                            })
                             .await
                         })
                         .await
@@ -71,42 +81,84 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: ListSessionsRequest, responder, _cx| handlers::session::handle_list(req, responder, &state).await },
+            {
+                let state = state.clone();
+                async move |req: ListSessionsRequest, responder, _cx| {
+                    handlers::session::handle_list(req, responder, &state).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: LoadSessionRequest, responder, cx| handlers::session::handle_load(req, responder, &state, &cx).await },
+            {
+                let state = state.clone();
+                async move |req: LoadSessionRequest, responder, cx| {
+                    handlers::session::handle_load(req, responder, &state, &cx).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: ResumeSessionRequest, responder, cx| handlers::session::handle_resume(req, responder, &state, &cx).await },
+            {
+                let state = state.clone();
+                async move |req: ResumeSessionRequest, responder, cx| {
+                    handlers::session::handle_resume(req, responder, &state, &cx).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: DeleteSessionRequest, responder, _cx| handlers::session::handle_delete(req, responder, &state).await },
+            {
+                let state = state.clone();
+                async move |req: DeleteSessionRequest, responder, _cx| {
+                    handlers::session::handle_delete(req, responder, &state).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: CloseSessionRequest, responder, _cx| handlers::session::handle_close(req, responder, &state).await },
+            {
+                let state = state.clone();
+                async move |req: CloseSessionRequest, responder, _cx| {
+                    handlers::session::handle_close(req, responder, &state).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: SetSessionConfigOptionRequest, responder, cx| handlers::config::handle(req, responder, &state, &cx).await },
+            {
+                let state = state.clone();
+                async move |req: SetSessionConfigOptionRequest, responder, cx| {
+                    handlers::config::handle(req, responder, &state, &cx).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: SetSessionModeRequest, responder, cx| handlers::session::handle_set_mode(req, responder, &state, &cx).await },
+            {
+                let state = state.clone();
+                async move |req: SetSessionModeRequest, responder, cx| {
+                    handlers::session::handle_set_mode(req, responder, &state, &cx).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_request(
-            { let state = state.clone(); async move |req: ForkSessionRequest, responder, _cx| handlers::session::handle_fork(req, responder, &state).await },
+            {
+                let state = state.clone();
+                async move |req: ForkSessionRequest, responder, _cx| {
+                    handlers::session::handle_fork(req, responder, &state).await
+                }
+            },
             agent_client_protocol::on_receive_request!(),
         )
         .on_receive_notification(
             {
                 let state = state.clone();
                 let turn_manager = turn_manager.clone();
-                async move |notif: CancelNotification, _cx| handlers::cancel::handle(notif, &state, &turn_manager).await
+                async move |notif: CancelNotification, _cx| {
+                    handlers::cancel::handle(notif, &state, &turn_manager).await
+                }
             },
             agent_client_protocol::on_receive_notification!(),
         )

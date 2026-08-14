@@ -42,7 +42,10 @@ fn actionable_error_message_safety_blocked() {
 
 #[test]
 fn actionable_stream_error_safety_blocked() {
-    assert!(actionable_stream_error("SafetyBlocked: Gemini n'a produit aucune réponse").contains("Gemini a refusé ce contenu"));
+    assert!(
+        actionable_stream_error("SafetyBlocked: Gemini n'a produit aucune réponse")
+            .contains("Gemini a refusé ce contenu")
+    );
 }
 
 #[test]

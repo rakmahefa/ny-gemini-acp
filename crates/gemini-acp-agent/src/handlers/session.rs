@@ -106,7 +106,11 @@ fn replay_tool_result(
             ToolCall::new(call_id.clone(), info.title.clone())
                 .kind(info.kind)
                 .status(if result_text.is_some() {
-                    if is_ok { ToolCallStatus::Completed } else { ToolCallStatus::Failed }
+                    if is_ok {
+                        ToolCallStatus::Completed
+                    } else {
+                        ToolCallStatus::Failed
+                    }
                 } else {
                     ToolCallStatus::InProgress
                 })
@@ -164,7 +168,9 @@ pub async fn handle_new(
                 ))
                 .modes(build_mode_state(session.mode)),
         ),
-        Err(error) => responder.respond_with_internal_error(format!("création de session: {error:#}")),
+        Err(error) => {
+            responder.respond_with_internal_error(format!("création de session: {error:#}"))
+        }
     }
 }
 
@@ -176,8 +182,7 @@ pub async fn handle_list(
     let sessions = match state.sessions.list(req.cwd.as_deref()).await {
         Ok(sessions) => sessions,
         Err(error) => {
-            return responder
-                .respond_with_internal_error(format!("liste des sessions: {error:#}"));
+            return responder.respond_with_internal_error(format!("liste des sessions: {error:#}"));
         }
     };
 
@@ -207,12 +212,12 @@ pub async fn handle_load(
     let session = match state.sessions.load(&req.session_id.0, &req.cwd).await {
         Ok(session) => session,
         Err(error) => {
-            return responder.respond_with_error(
-                AcpError::invalid_params().data(serde_json::json!({
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
                     "session_id": req.session_id.to_string(),
                     "error": format!("session introuvable ou workspace incompatible: {error:#}")
-                })),
-            );
+                }),
+            ));
         }
     };
 
@@ -304,12 +309,12 @@ pub async fn handle_resume(
     let session = match state.sessions.resume(&req.session_id.0, &req.cwd).await {
         Ok(session) => session,
         Err(error) => {
-            return responder.respond_with_error(
-                AcpError::invalid_params().data(serde_json::json!({
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
                     "session_id": req.session_id.to_string(),
                     "error": format!("session introuvable ou workspace incompatible: {error:#}")
-                })),
-            );
+                }),
+            ));
         }
     };
 
@@ -337,13 +342,15 @@ pub async fn handle_delete(
 
     match state.sessions.delete(&req.session_id.0).await {
         Ok(true) => responder.respond(DeleteSessionResponse::new()),
-        Ok(false) => responder.respond_with_error(
-            AcpError::invalid_params().data(serde_json::json!({
+        Ok(false) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
                 "session_id": req.session_id.to_string(),
                 "error": "session introuvable"
-            })),
-        ),
-        Err(error) => responder.respond_with_internal_error(format!("suppression de session: {error:#}")),
+            })))
+        }
+        Err(error) => {
+            responder.respond_with_internal_error(format!("suppression de session: {error:#}"))
+        }
     }
 }
 
@@ -358,13 +365,15 @@ pub async fn handle_close(
 
     match state.sessions.close(&req.session_id.0).await {
         Ok(true) => responder.respond(CloseSessionResponse::new()),
-        Ok(false) => responder.respond_with_error(
-            AcpError::invalid_params().data(serde_json::json!({
+        Ok(false) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
                 "session_id": req.session_id.to_string(),
                 "error": "session introuvable"
-            })),
-        ),
-        Err(error) => responder.respond_with_internal_error(format!("fermeture de session: {error:#}")),
+            })))
+        }
+        Err(error) => {
+            responder.respond_with_internal_error(format!("fermeture de session: {error:#}"))
+        }
     }
 }
 
@@ -380,23 +389,21 @@ pub async fn handle_set_mode(
             .map(|mode| session_mode_id(*mode).0.to_string())
             .collect::<Vec<_>>()
             .join(", ");
-        return responder.respond_with_error(
-            AcpError::invalid_params().data(serde_json::json!({
-                "mode_id": req.mode_id.to_string(),
-                "error": format!("mode_id invalide. Modes valides: {valid}")
-            })),
-        );
+        return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+            "mode_id": req.mode_id.to_string(),
+            "error": format!("mode_id invalide. Modes valides: {valid}")
+        })));
     };
 
     let updated = match state.sessions.set_mode(&req.session_id.0, new_mode).await {
         Ok(session) => session,
         Err(error) => {
-            return responder.respond_with_error(
-                AcpError::invalid_params().data(serde_json::json!({
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
                     "session_id": req.session_id.to_string(),
                     "error": format!("impossible de changer le mode: {error:#}")
-                })),
-            );
+                }),
+            ));
         }
     };
 
@@ -427,12 +434,12 @@ pub async fn handle_fork(
                 ))
                 .modes(build_mode_state(forked.mode)),
         ),
-        Err(error) => responder.respond_with_error(
-            AcpError::invalid_params().data(serde_json::json!({
+        Err(error) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
                 "session_id": req.session_id.to_string(),
                 "error": format!("fork impossible: {error:#}")
-            })),
-        ),
+            })))
+        }
     }
 }
 
@@ -446,8 +453,12 @@ mod tests {
         assert!(is_valid_session_id("sess_aabbccddeeff00112233445566778899"));
         assert!(!is_valid_session_id(""));
         assert!(!is_valid_session_id("sess_short"));
-        assert!(!is_valid_session_id("sess_0123456789abcdef0123456789ABCDEF"));
-        assert!(!is_valid_session_id("../sess_0123456789abcdef0123456789abcdef"));
+        assert!(!is_valid_session_id(
+            "sess_0123456789abcdef0123456789ABCDEF"
+        ));
+        assert!(!is_valid_session_id(
+            "../sess_0123456789abcdef0123456789abcdef"
+        ));
         assert!(!is_valid_session_id("sess_/etc/passwd"));
     }
 
@@ -455,7 +466,10 @@ mod tests {
     fn all_modes_have_stable_acp_ids() {
         let modes = build_available_modes();
         let ids: Vec<&str> = modes.iter().map(|mode| mode.id.0.as_ref()).collect();
-        assert_eq!(ids, vec!["default", "accept_edits".into(), "bypass_permissions"]);
+        assert_eq!(
+            ids,
+            vec!["default", "accept_edits".into(), "bypass_permissions"]
+        );
     }
 
     #[test]
@@ -467,8 +481,12 @@ mod tests {
 
     #[test]
     fn rejected_tool_results_are_not_replayed_as_success() {
-        assert!(is_rejected_or_cancelled_tool_result("write (src/a.rs) refusé par l'utilisateur."));
-        assert!(is_rejected_or_cancelled_tool_result("échec de la demande de permission ACP : transport"));
+        assert!(is_rejected_or_cancelled_tool_result(
+            "write (src/a.rs) refusé par l'utilisateur."
+        ));
+        assert!(is_rejected_or_cancelled_tool_result(
+            "échec de la demande de permission ACP : transport"
+        ));
         assert!(!is_rejected_or_cancelled_tool_result("File Updated"));
     }
 }

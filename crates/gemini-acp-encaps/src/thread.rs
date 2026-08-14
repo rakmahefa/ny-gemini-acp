@@ -201,10 +201,7 @@ mod tests {
     #[tokio::test]
     async fn start_is_single_use_even_after_stop() {
         let (thread, handle) = AcpThread::new();
-        thread
-            .start(|_, _| async { Ok(()) })
-            .await
-            .unwrap();
+        thread.start(|_, _| async { Ok(()) }).await.unwrap();
         wait_for_state(&handle, ThreadState::Stopped).await;
         let result = thread.start(|_, _| async { Ok(()) }).await;
         assert!(matches!(result, Err(EncapsError::AlreadyStarted)));

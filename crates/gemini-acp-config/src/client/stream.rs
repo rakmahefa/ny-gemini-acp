@@ -3,20 +3,18 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context};
-use futures_util::StreamExt;
 use crate::core::auth::sapisid_hash;
 use crate::core::cookies::CookieJar;
 use crate::core::frames::{self, StreamDecoder};
 use crate::core::models;
+use anyhow::{bail, Context};
+use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, ORIGIN, REFERER};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 use super::config::{ENDPOINT, TOKEN_TTL};
-use super::payload::{
-    emit_delta, extract_page_tokens, load_jar, next_reqid, payload,
-};
+use super::payload::{emit_delta, extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
 
 impl Client {
@@ -42,16 +40,16 @@ impl Client {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     let es = e.to_string();
-                    if es.contains("cookie") || es.contains("Cookie") || es.contains("BardErrorInfo") {
+                    if es.contains("cookie")
+                        || es.contains("Cookie")
+                        || es.contains("BardErrorInfo")
+                    {
                         return Err(e);
                     }
                     if emitted.is_empty() && attempt < attempts {
                         // Backoff exponentiel avec jitter.
                         let base_ms = self.inner.config.retry_delay.as_millis() as u64;
-                        let delay_ms = std::cmp::min(
-                            base_ms * (1u64 << (attempt - 1)),
-                            30_000,
-                        );
+                        let delay_ms = std::cmp::min(base_ms * (1u64 << (attempt - 1)), 30_000);
                         let jitter = delay_ms / 4;
                         let ts_nanos = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)

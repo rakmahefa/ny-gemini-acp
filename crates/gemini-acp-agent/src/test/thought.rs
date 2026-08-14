@@ -97,8 +97,12 @@ fn bare_double_newline_does_not_end_thought() {
     let mut stream = ThoughtStream::new(true);
     stream.feed("Pensée suffisamment longue pour dépasser la fenêtre");
     let events = stream.feed("\n\nSuite de la pensée");
-    assert!(!events.iter().any(|event| matches!(event, ThoughtEvent::ThoughtEnd)));
-    assert!(!events.iter().any(|event| matches!(event, ThoughtEvent::ResponseChunk(_))));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, ThoughtEvent::ThoughtEnd)));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, ThoughtEvent::ResponseChunk(_))));
     let tail = stream.finish();
     assert!(tail.iter().any(|event| match event {
         ThoughtEvent::ThoughtChunk(text) => text.contains("Suite de la pensée"),

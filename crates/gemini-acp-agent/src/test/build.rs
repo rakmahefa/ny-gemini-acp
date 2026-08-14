@@ -1,11 +1,25 @@
 use super::*;
 
 fn session(messages: &[(&str, &str)]) -> Session {
-    let mut s = Session::new("sess_test".into(), "/home/dev/projet".into(), vec![], "gemini-3.6-flash");
-    s.messages = messages.iter().map(|(role, text)| (
-        if *role == "u" { Role::User } else { Role::Assistant },
-        (*text).to_string(),
-    )).collect();
+    let mut s = Session::new(
+        "sess_test".into(),
+        "/home/dev/projet".into(),
+        vec![],
+        "gemini-3.6-flash",
+    );
+    s.messages = messages
+        .iter()
+        .map(|(role, text)| {
+            (
+                if *role == "u" {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
+                (*text).to_string(),
+            )
+        })
+        .collect();
     s
 }
 
@@ -22,7 +36,9 @@ fn prompt_contient_systeme_et_tour_courant() {
 #[test]
 fn fenetre_glissante_12_max() {
     let mut s = session(&[]);
-    for i in 0..40 { s.messages.push((Role::User, format!("Question {i}"))); }
+    for i in 0..40 {
+        s.messages.push((Role::User, format!("Question {i}")));
+    }
     let p = build_prompt(&s, None);
     assert!(p.contains("Question 39"));
     assert!(!p.contains("Question 0"));
@@ -33,13 +49,20 @@ fn fenetre_glissante_12_max() {
 fn troncature_32k_garde_le_tour_courant() {
     let mut msgs = vec![(Role::User, "🚀 premier message très long ".repeat(3_000))];
     for i in 0..4 {
-        msgs.push((Role::Assistant, format!("réponse {i} ") + &"x".repeat(9_000)));
+        msgs.push((
+            Role::Assistant,
+            format!("réponse {i} ") + &"x".repeat(9_000),
+        ));
         msgs.push((Role::User, format!("question {i} ") + &"y".repeat(9_000)));
     }
     let mut s = session(&[]);
     s.messages = msgs;
     let p = build_prompt(&s, None);
-    assert!(p.chars().count() <= 32_000 + 500, "budget dépassé: {}", p.chars().count());
+    assert!(
+        p.chars().count() <= 32_000 + 500,
+        "budget dépassé: {}",
+        p.chars().count()
+    );
     assert!(p.contains("question 3"));
 }
 

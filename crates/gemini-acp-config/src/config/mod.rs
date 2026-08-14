@@ -36,10 +36,7 @@ impl AgentConfig {
     pub fn from_env() -> Self {
         Self {
             cookie_file: env::env_or("GEMINI_ACP_COOKIES", "vendor/cookie.json").into(),
-            default_model: env::env_or(
-                "GEMINI_ACP_MODEL",
-                crate::core::models::DEFAULT_MODEL,
-            ),
+            default_model: env::env_or("GEMINI_ACP_MODEL", crate::core::models::DEFAULT_MODEL),
             data_dir: env::data_dir_default(),
             auth_user: env::parse_auth_user(),
             proxy: std::env::var("GEMINI_ACP_PROXY").ok(),

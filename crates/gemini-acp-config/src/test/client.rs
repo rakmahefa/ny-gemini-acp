@@ -4,7 +4,12 @@ use payload::decode_freq;
 
 #[test]
 fn payload_102_cases() {
-    let resolved = models::Resolved { name: "m".into(), mode: 1, think: 4, extra: Some(vec![(31, 2)]) };
+    let resolved = models::Resolved {
+        name: "m".into(),
+        mode: 1,
+        think: 4,
+        extra: Some(vec![(31, 2)]),
+    };
     let body = payload::payload("bonjour", &resolved, &[], Some("tok"));
     assert!(body.contains("f.req="));
     assert!(body.contains("&at=tok"));
@@ -24,11 +29,20 @@ fn payload_102_cases() {
 #[test]
 fn payload_avec_refs_images() {
     let resolved = models::resolve("gemini-3.6-flash", models::DEFAULT_MODEL).unwrap();
-    let refs = vec!["/generated/image1".to_string(), "/generated/image2".to_string()];
+    let refs = vec![
+        "/generated/image1".to_string(),
+        "/generated/image2".to_string(),
+    ];
     let body = payload::payload("décris", &resolved, &refs, None);
     let outer: serde_json::Value = serde_json::from_str(&decode_freq(&body)).unwrap();
     let arr: serde_json::Value = serde_json::from_str(outer[1].as_str().unwrap()).unwrap();
-    assert_eq!(arr[0][3], serde_json::json!([[null, null, "/generated/image1"], [null, null, "/generated/image2"]]));
+    assert_eq!(
+        arr[0][3],
+        serde_json::json!([
+            [null, null, "/generated/image1"],
+            [null, null, "/generated/image2"]
+        ])
+    );
 }
 
 #[test]
@@ -43,7 +57,10 @@ fn token_extraction() {
 
 #[test]
 fn encodage_form() {
-    let params = vec![("a b".to_string(), "x=y".to_string()), ("c".to_string(), "é".to_string())];
+    let params = vec![
+        ("a b".to_string(), "x=y".to_string()),
+        ("c".to_string(), "é".to_string()),
+    ];
     assert_eq!(payload::form_urlencode(&params), "a+b=x%3Dy&c=%C3%A9");
 }
 
@@ -51,12 +68,23 @@ fn encodage_form() {
 fn emit_delta_sequence() {
     let (tx, mut rx) = mpsc::channel(8);
     let mut emitted = String::new();
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
-        payload::emit_delta("Bonj".to_string(), &mut emitted, &tx).await.unwrap();
-        payload::emit_delta("Bonjour".to_string(), &mut emitted, &tx).await.unwrap();
-        payload::emit_delta("Bonjour le".to_string(), &mut emitted, &tx).await.unwrap();
-        payload::emit_delta("Bonjour le".to_string(), &mut emitted, &tx).await.unwrap();
+        payload::emit_delta("Bonj".to_string(), &mut emitted, &tx)
+            .await
+            .unwrap();
+        payload::emit_delta("Bonjour".to_string(), &mut emitted, &tx)
+            .await
+            .unwrap();
+        payload::emit_delta("Bonjour le".to_string(), &mut emitted, &tx)
+            .await
+            .unwrap();
+        payload::emit_delta("Bonjour le".to_string(), &mut emitted, &tx)
+            .await
+            .unwrap();
         assert_eq!(rx.recv().await.unwrap().unwrap(), "Bonj");
         assert_eq!(rx.recv().await.unwrap().unwrap(), "our");
         assert_eq!(rx.recv().await.unwrap().unwrap(), " le");
@@ -68,9 +96,14 @@ fn emit_delta_sequence() {
 fn emit_delta_divergence() {
     let (tx, _rx) = mpsc::channel(8);
     let mut emitted = String::from("Bonjour tout le monde");
-    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
     rt.block_on(async {
-        let err = payload::emit_delta("Autre chose".to_string(), &mut emitted, &tx).await.unwrap_err();
+        let err = payload::emit_delta("Autre chose".to_string(), &mut emitted, &tx)
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("content changed"));
     });
 }

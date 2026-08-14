@@ -58,20 +58,32 @@ impl Tool for SearchTool {
             Err(error) => return ToolResult::Err(format!("regex invalide: {error}")),
         };
         let root = match args.get("path").and_then(Value::as_str) {
-            Some(path) if !path.is_empty() => match sandbox::validate_path(path, cwd, allowed_dirs) {
+            Some(path) if !path.is_empty() => match sandbox::validate_path(path, cwd, allowed_dirs)
+            {
                 Ok(path) => path,
                 Err(error) => return ToolResult::Err(error.to_string()),
             },
             _ => cwd.to_path_buf(),
         };
-        let glob = args.get("glob").and_then(Value::as_str).filter(|v| !v.is_empty()).map(ToOwned::to_owned);
-        let max_results = args.get("max_results").and_then(Value::as_u64).unwrap_or(50).clamp(1, MAX_MATCHES as u64) as usize;
+        let glob = args
+            .get("glob")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .map(ToOwned::to_owned);
+        let max_results = args
+            .get("max_results")
+            .and_then(Value::as_u64)
+            .unwrap_or(50)
+            .clamp(1, MAX_MATCHES as u64) as usize;
 
         let future = search_tree(root.clone(), regex, glob, max_results);
         match tokio::time::timeout(SEARCH_TIMEOUT, future).await {
             Ok(Ok(result)) => ToolResult::Ok(result.format()),
             Ok(Err(error)) => ToolResult::Err(error),
-            Err(_) => ToolResult::Err(format!("recherche interrompue après {}s", SEARCH_TIMEOUT.as_secs())),
+            Err(_) => ToolResult::Err(format!(
+                "recherche interrompue après {}s",
+                SEARCH_TIMEOUT.as_secs()
+            )),
         }
     }
 }
@@ -86,43 +98,74 @@ struct SearchOutput {
 impl SearchOutput {
     fn format(self) -> String {
         if self.matches.is_empty() {
-            return format!("Aucune correspondance. ({} fichiers inspectés)", self.files_scanned);
+            return format!(
+                "Aucune correspondance. ({} fichiers inspectés)",
+                self.files_scanned
+            );
         }
         let mut output = self.matches.join("\n");
         if self.truncated {
             output.push_str("\n… résultats tronqués");
         }
-        output.push_str(&format!("\n({} correspondance(s), {} fichiers inspectés)", self.matches.len(), self.files_scanned));
+        output.push_str(&format!(
+            "\n({} correspondance(s), {} fichiers inspectés)",
+            self.matches.len(),
+            self.files_scanned
+        ));
         output
     }
 }
 
-async fn search_tree(root: PathBuf, regex: Regex, glob: Option<String>, max_results: usize) -> Result<SearchOutput, String> {
-    let metadata = tokio::fs::metadata(&root).await.map_err(|e| format!("chemin introuvable {}: {e}", root.display()))?;
+async fn search_tree(
+    root: PathBuf,
+    regex: Regex,
+    glob: Option<String>,
+    max_results: usize,
+) -> Result<SearchOutput, String> {
+    let metadata = tokio::fs::metadata(&root)
+        .await
+        .map_err(|e| format!("chemin introuvable {}: {e}", root.display()))?;
     if metadata.is_file() {
         let mut output = SearchOutput::default();
         search_file(&root, &regex, glob.as_deref(), max_results, &mut output).await?;
         return Ok(output);
     }
     if !metadata.is_dir() {
-        return Err(format!("{} n'est ni un fichier ni un répertoire", root.display()));
+        return Err(format!(
+            "{} n'est ni un fichier ni un répertoire",
+            root.display()
+        ));
     }
 
     let mut output = SearchOutput::default();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
-        let mut entries = tokio::fs::read_dir(&dir).await.map_err(|e| format!("lecture impossible {}: {e}", dir.display()))?;
-        while let Some(entry) = entries.next_entry().await.map_err(|e| format!("lecture impossible {}: {e}", dir.display()))? {
+        let mut entries = tokio::fs::read_dir(&dir)
+            .await
+            .map_err(|e| format!("lecture impossible {}: {e}", dir.display()))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| format!("lecture impossible {}: {e}", dir.display()))?
+        {
             if output.matches.len() >= max_results {
                 output.truncated = true;
                 return Ok(output);
             }
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
-            if name == ".git" || name == "target" || name == "node_modules" || name == ".venv" || name == "__pycache__" {
+            if name == ".git"
+                || name == "target"
+                || name == "node_modules"
+                || name == ".venv"
+                || name == "__pycache__"
+            {
                 continue;
             }
-            let file_type = entry.file_type().await.map_err(|e| format!("type impossible {}: {e}", path.display()))?;
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|e| format!("type impossible {}: {e}", path.display()))?;
             if file_type.is_dir() {
                 stack.push(path);
             } else if file_type.is_file() {
@@ -137,7 +180,13 @@ async fn search_tree(root: PathBuf, regex: Regex, glob: Option<String>, max_resu
     Ok(output)
 }
 
-async fn search_file(path: &Path, regex: &Regex, glob: Option<&str>, max_results: usize, output: &mut SearchOutput) -> Result<(), String> {
+async fn search_file(
+    path: &Path,
+    regex: &Regex,
+    glob: Option<&str>,
+    max_results: usize,
+    output: &mut SearchOutput,
+) -> Result<(), String> {
     if output.matches.len() >= max_results || output.files_scanned >= MAX_FILES {
         output.truncated = true;
         return Ok(());
@@ -147,11 +196,15 @@ async fn search_file(path: &Path, regex: &Regex, glob: Option<&str>, max_results
             return Ok(());
         }
     }
-    let metadata = tokio::fs::metadata(path).await.map_err(|e| format!("stat impossible {}: {e}", path.display()))?;
+    let metadata = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| format!("stat impossible {}: {e}", path.display()))?;
     if metadata.len() > MAX_FILE_BYTES {
         return Ok(());
     }
-    let bytes = tokio::fs::read(path).await.map_err(|e| format!("lecture impossible {}: {e}", path.display()))?;
+    let bytes = tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("lecture impossible {}: {e}", path.display()))?;
     output.files_scanned += 1;
     if bytes.contains(&0) {
         return Ok(());
@@ -159,7 +212,9 @@ async fn search_file(path: &Path, regex: &Regex, glob: Option<&str>, max_results
     let text = String::from_utf8_lossy(&bytes);
     for (index, line) in text.lines().enumerate() {
         if regex.is_match(line) {
-            output.matches.push(format!("{}:{}:{}", path.display(), index + 1, line));
+            output
+                .matches
+                .push(format!("{}:{}:{}", path.display(), index + 1, line));
             if output.matches.len() >= max_results {
                 output.truncated = true;
                 break;
@@ -173,7 +228,15 @@ fn glob_matches(pattern: &str, path: &Path) -> bool {
     let normalized = path.to_string_lossy().replace('\\', "/");
     let pattern = pattern.replace('\\', "/");
     let regex = glob_to_regex(&pattern);
-    Regex::new(&regex).map(|re| re.is_match(&normalized) || path.file_name().map(|n| re.is_match(&n.to_string_lossy())).unwrap_or(false)).unwrap_or(false)
+    Regex::new(&regex)
+        .map(|re| {
+            re.is_match(&normalized)
+                || path
+                    .file_name()
+                    .map(|n| re.is_match(&n.to_string_lossy()))
+                    .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 fn glob_to_regex(pattern: &str) -> String {
@@ -219,18 +282,30 @@ mod tests {
 
     #[tokio::test]
     async fn search_native_basic_and_glob() {
-        let dir = std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(dir.join("src")).await.unwrap();
-        tokio::fs::write(dir.join("src/a.rs"), "fn hello() {}\n").await.unwrap();
-        tokio::fs::write(dir.join("src/a.txt"), "fn should_not_match\n").await.unwrap();
-        let result = SearchTool.execute(&json!({"pattern":"fn hello","path":"src","glob":"*.rs"}), &dir, &[]).await;
+        tokio::fs::write(dir.join("src/a.rs"), "fn hello() {}\n")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.join("src/a.txt"), "fn should_not_match\n")
+            .await
+            .unwrap();
+        let result = SearchTool
+            .execute(
+                &json!({"pattern":"fn hello","path":"src","glob":"*.rs"}),
+                &dir,
+                &[],
+            )
+            .await;
         assert!(matches!(result, ToolResult::Ok(value) if value.contains("a.rs:1:fn hello")));
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
     async fn invalid_regex_is_reported() {
-        let dir = std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let result = SearchTool.execute(&json!({"pattern":"["}), &dir, &[]).await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("regex invalide")));
@@ -239,19 +314,27 @@ mod tests {
 
     #[tokio::test]
     async fn binary_file_is_skipped() {
-        let dir = std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        tokio::fs::write(dir.join("bin.dat"), b"secret\0pattern").await.unwrap();
-        let result = SearchTool.execute(&json!({"pattern":"pattern"}), &dir, &[]).await;
+        tokio::fs::write(dir.join("bin.dat"), b"secret\0pattern")
+            .await
+            .unwrap();
+        let result = SearchTool
+            .execute(&json!({"pattern":"pattern"}), &dir, &[])
+            .await;
         assert!(matches!(result, ToolResult::Ok(value) if value.contains("Aucune correspondance")));
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
 
     #[tokio::test]
     async fn traversal_is_blocked() {
-        let dir = std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        let result = SearchTool.execute(&json!({"pattern":"root","path":"/etc"}), &dir, &[]).await;
+        let result = SearchTool
+            .execute(&json!({"pattern":"root","path":"/etc"}), &dir, &[])
+            .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
         let _ = tokio::fs::remove_dir_all(dir).await;
     }

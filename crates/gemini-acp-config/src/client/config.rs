@@ -12,7 +12,8 @@ pub const DEFAULT_BL: &str = "boq_assistant-bard-web-server_20260716.08_p0";
 pub(crate) const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36";
 pub(crate) const TOKEN_TTL: Duration = Duration::from_secs(600);
-pub(crate) const ENDPOINT: &str = "_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate";
+pub(crate) const ENDPOINT: &str =
+    "_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate";
 
 /// Endpoint d'initiation de l'upload Scotty (images, cf. §4.2 — refs).
 pub(crate) const UPLOAD_ENDPOINT: &str = "https://content-push.googleapis.com/upload/";

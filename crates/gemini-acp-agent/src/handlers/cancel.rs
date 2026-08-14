@@ -12,21 +12,22 @@ pub async fn handle(
 ) -> Result<(), AcpError> {
     tracing::info!(session = %notif.session_id, "session/cancel");
 
-    turns
-        .cancel(&notif.session_id.0)
-        .await
-        .map_err(|e| AcpError::invalid_params().data(serde_json::json!({
+    turns.cancel(&notif.session_id.0).await.map_err(|e| {
+        AcpError::invalid_params().data(serde_json::json!({
             "session_id": notif.session_id.0,
             "error": e.to_string(),
-        })))?;
+        }))
+    })?;
 
     state
         .sessions
         .cancel(&notif.session_id.0)
         .await
-        .map_err(|e| AcpError::invalid_params().data(serde_json::json!({
-            "session_id": notif.session_id.0,
-            "error": e.to_string(),
-        })))?;
+        .map_err(|e| {
+            AcpError::invalid_params().data(serde_json::json!({
+                "session_id": notif.session_id.0,
+                "error": e.to_string(),
+            }))
+        })?;
     Ok(())
 }

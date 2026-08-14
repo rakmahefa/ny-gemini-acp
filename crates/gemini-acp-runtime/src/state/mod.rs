@@ -5,7 +5,9 @@ use std::sync::Arc;
 use anyhow::{bail, Result};
 use tokio::sync::{watch, RwLock};
 
-use crate::tools::lifecycle::{cancel_session as cancel_tool_lifecycle, reset_session_cancellation};
+use crate::tools::lifecycle::{
+    cancel_session as cancel_tool_lifecycle, reset_session_cancellation,
+};
 
 mod busy;
 mod persistence;
@@ -22,10 +24,15 @@ pub struct Store {
 }
 
 impl Store {
-    pub async fn begin_turn(&self, id: &str) -> Result<(Session, watch::Receiver<bool>, u64), TurnError> {
+    pub async fn begin_turn(
+        &self,
+        id: &str,
+    ) -> Result<(Session, watch::Receiver<bool>, u64), TurnError> {
         let mut live = self.live.write().await;
         if let Some(entry) = live.get_mut(id) {
-            if entry.busy { return Err(TurnError::AlreadyRunning); }
+            if entry.busy {
+                return Err(TurnError::AlreadyRunning);
+            }
             entry.busy = true;
             entry.generation += 1;
             let gen = entry.generation;
@@ -35,20 +42,43 @@ impl Store {
             let _ = self.acquire_busy(id).await;
             return Ok((entry.session.clone(), rx, gen));
         }
-        let session = self.read(id).await.ok_or_else(|| TurnError::NotFound(id.to_string()))?;
+        let session = self
+            .read(id)
+            .await
+            .ok_or_else(|| TurnError::NotFound(id.to_string()))?;
         let gen = 1u64;
         let (tx, rx) = watch::channel(false);
-        live.insert(id.to_string(), Live { session: session.clone(), cancel: tx, busy: true, generation: gen });
+        live.insert(
+            id.to_string(),
+            Live {
+                session: session.clone(),
+                cancel: tx,
+                busy: true,
+                generation: gen,
+            },
+        );
         reset_session_cancellation(id);
         let _ = self.acquire_busy(id).await;
         Ok((session, rx, gen))
     }
 
-    pub async fn update_session<F>(&self, id: &str, f: F) -> Result<()> where F: FnOnce(&mut Session) {
+    pub async fn update_session<F>(&self, id: &str, f: F) -> Result<()>
+    where
+        F: FnOnce(&mut Session),
+    {
         let mut live = self.live.write().await;
-        if let Some(entry) = live.get_mut(id) { f(&mut entry.session); self.persist(&entry.session).await?; return Ok(()); }
-        let mut session = self.read(id).await.ok_or_else(|| anyhow::anyhow!("session introuvable: {id}"))?;
-        f(&mut session); self.persist(&session).await?; Ok(())
+        if let Some(entry) = live.get_mut(id) {
+            f(&mut entry.session);
+            self.persist(&entry.session).await?;
+            return Ok(());
+        }
+        let mut session = self
+            .read(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("session introuvable: {id}"))?;
+        f(&mut session);
+        self.persist(&session).await?;
+        Ok(())
     }
 
     pub async fn end_turn(&self, id: &str, mut session: Session, expected_gen: u64) -> Result<()> {
@@ -57,7 +87,10 @@ impl Store {
             if let Some(entry) = live.get(id) {
                 if entry.generation != expected_gen {
                     tracing::warn!(session = %id, expected_gen, current_gen = entry.generation, "end_turn: tour obsolète ignoré");
-                    bail!("tour obsolète: génération attendue {expected_gen}, courante {}", entry.generation);
+                    bail!(
+                        "tour obsolète: génération attendue {expected_gen}, courante {}",
+                        entry.generation
+                    );
                 }
             }
         }
@@ -66,34 +99,66 @@ impl Store {
         if let Some(current) = self.get(id).await {
             if !current.messages.is_empty() {
                 let snap_n = current.messages.len();
-                if let Ok(raw) = serde_json::to_string_pretty(&current) { let _ = tokio::fs::write(self.snapshot_path(id, snap_n), &raw).await; }
+                if let Ok(raw) = serde_json::to_string_pretty(&current) {
+                    let _ = tokio::fs::write(self.snapshot_path(id, snap_n), &raw).await;
+                }
                 self.prune_snapshots(id, MAX_SNAPSHOTS).await;
             }
         }
         let persist_result = self.persist(&session).await;
-        if let Some(entry) = self.live.write().await.get_mut(id) { entry.session = session.clone(); entry.busy = false; }
+        if let Some(entry) = self.live.write().await.get_mut(id) {
+            entry.session = session.clone();
+            entry.busy = false;
+        }
         self.release_busy(id).await;
         persist_result
     }
 
     pub async fn cancel(&self, id: &str) {
         let mut live = self.live.write().await;
-        if let Some(entry) = live.get_mut(id) { let _ = entry.cancel.send(true); }
+        if let Some(entry) = live.get_mut(id) {
+            let _ = entry.cancel.send(true);
+        }
         cancel_tool_lifecycle(id);
     }
-    pub async fn cancel_all(&self) { let live = self.live.read().await; for (id, entry) in live.iter() { let _ = entry.cancel.send(true); cancel_tool_lifecycle(id); } }
+    pub async fn cancel_all(&self) {
+        let live = self.live.read().await;
+        for (id, entry) in live.iter() {
+            let _ = entry.cancel.send(true);
+            cancel_tool_lifecycle(id);
+        }
+    }
     pub async fn close(&self, id: &str) -> bool {
         let mut live = self.live.write().await;
         let existed = live.contains_key(id) || self.path(id).exists();
-        if let Some(entry) = live.get(id) { let _ = entry.cancel.send(true); }
-        cancel_tool_lifecycle(id); live.remove(id); drop(live); self.release_busy(id).await; existed
+        if let Some(entry) = live.get(id) {
+            let _ = entry.cancel.send(true);
+        }
+        cancel_tool_lifecycle(id);
+        live.remove(id);
+        drop(live);
+        self.release_busy(id).await;
+        existed
     }
     pub async fn fork(&self, source_id: &str) -> Result<Session> {
-        let source = self.get(source_id).await.ok_or_else(|| anyhow::anyhow!("session source introuvable: {source_id}"))?;
+        let source = self
+            .get(source_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("session source introuvable: {source_id}"))?;
         let new_id = format!("sess_{}", uuid::Uuid::new_v4().simple());
-        let forked = source.fork(new_id); self.persist(&forked).await?;
+        let forked = source.fork(new_id);
+        self.persist(&forked).await?;
         let (cancel, _) = watch::channel(false);
-        self.live.write().await.insert(forked.id.clone(), Live { session: forked.clone(), cancel, busy: false, generation: 0 }); Ok(forked)
+        self.live.write().await.insert(
+            forked.id.clone(),
+            Live {
+                session: forked.clone(),
+                cancel,
+                busy: false,
+                generation: 0,
+            },
+        );
+        Ok(forked)
     }
 }
 
