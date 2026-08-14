@@ -5,10 +5,6 @@ use tokio::sync::Mutex;
 
 use crate::{AcpTurn, AcpTurnHandle, Cancellation, EncapsError, TurnState};
 
-/// Serializes ACP turns independently for each session.
-///
-/// Turns are queued per session and may execute concurrently across different
-/// sessions. Cancellation also applies while a turn is waiting in the queue.
 #[derive(Clone, Default)]
 pub struct TurnManager {
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
@@ -36,9 +32,10 @@ impl TurnManager {
         let active = self.active.clone();
         let key = session_id.clone();
         let start_result = turn.start(move |cancellation| async move {
+            let mut cancellation_rx = cancellation.subscribe();
             let guard = tokio::select! {
                 guard = lock.lock() => guard,
-                _ = cancellation.subscribe().changed() => return Ok(()),
+                _ = cancellation_rx.changed() => return Ok(()),
             };
 
             if cancellation.is_cancelled() {
