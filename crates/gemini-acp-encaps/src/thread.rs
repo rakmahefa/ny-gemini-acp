@@ -100,11 +100,12 @@ impl AcpThread {
 
             let result = worker(command_rx, cancellation).await;
             let mut guard = inner_ref.lock().await;
-            guard.state = match result {
+            let state = match result {
                 Ok(()) => ThreadState::Stopped,
                 Err(_) => ThreadState::Failed,
             };
-            let _ = guard.state_tx.send(guard.state);
+            guard.state = state;
+            let _ = guard.state_tx.send(state);
             guard.task = None;
         });
         inner.task = Some(task);
@@ -166,7 +167,6 @@ impl AcpThreadHandle {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
 
     async fn wait_for_state(handle: &AcpThreadHandle, expected: ThreadState) {
         let mut rx = handle.subscribe_state();
@@ -212,7 +212,8 @@ mod tests {
         let (thread, handle) = AcpThread::new();
         thread
             .start(|_, cancellation| async move {
-                cancellation.cancelled().await;
+                let mut rx = cancellation.subscribe();
+                rx.changed().await.map_err(|_| EncapsError::ChannelClosed)?;
                 Ok(())
             })
             .await
@@ -235,7 +236,8 @@ mod tests {
         thread
             .start(move |_, cancellation| async move {
                 starts.fetch_add(1, Ordering::SeqCst);
-                cancellation.cancelled().await;
+                let mut rx = cancellation.subscribe();
+                rx.changed().await.map_err(|_| EncapsError::ChannelClosed)?;
                 Ok(())
             })
             .await
@@ -244,6 +246,5 @@ mod tests {
         handle.stop().await.unwrap();
         wait_for_state(&handle, ThreadState::Stopped).await;
         assert_eq!(worker_starts.load(Ordering::SeqCst), 1);
-        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
