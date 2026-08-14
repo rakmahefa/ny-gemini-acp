@@ -8,6 +8,7 @@
 //! - [`follow_up`]      — parsing et normalisation du composant Gemini `<FollowUp>`.
 //! - [`notify`]         — notifications ACP (chunks texte, usage tokens).
 //! - [`output_filter`]  — filtrage streaming des marqueurs ACP échappés par Gemini.
+//! - [`tool_history`]   — sérialisation non ambiguë des sorties d'outils dans l'historique.
 //! - [`title`]          — dérivation automatique du titre de session.
 //! - [`turn`]           — orchestration du tour complet.
 
@@ -18,6 +19,7 @@ pub mod follow_up;
 pub mod notify;
 pub mod output_filter;
 pub mod title;
+pub mod tool_history;
 pub mod turn;
 
 pub use turn::run_turn;
