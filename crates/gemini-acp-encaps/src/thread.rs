@@ -15,6 +15,7 @@ struct CommandBus {
 struct Inner {
     state: ThreadState,
     task: Option<JoinHandle<()>>,
+    state_tx: watch::Sender<ThreadState>,
 }
 
 pub struct AcpThread {
@@ -32,6 +33,11 @@ pub struct AcpThreadHandle {
 }
 
 impl AcpThread {
+    /// Creates a new single-use ACP thread and its control handle.
+    ///
+    /// An `AcpThread` may be started at most once. After the worker reaches a
+    /// terminal state it cannot be restarted because its command receiver and
+    /// cancellation domain belong to that execution instance.
     pub fn new() -> (Self, AcpThreadHandle) {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let commands = Arc::new(CommandBus {
@@ -42,6 +48,7 @@ impl AcpThread {
         let inner = Arc::new(Mutex::new(Inner {
             state: ThreadState::Created,
             task: None,
+            state_tx,
         }));
         let cancellation = Cancellation::new();
         let thread = Self {
@@ -55,18 +62,21 @@ impl AcpThread {
             cancellation,
             state_rx,
         };
-        let _ = state_tx;
         (thread, handle)
     }
 
+    /// Starts the worker exactly once.
+    ///
+    /// `Created` is the only state from which start is valid. A completed or
+    /// failed thread is terminal and must not be reused for another worker.
     pub async fn start<F, Fut>(&self, worker: F) -> Result<(), EncapsError>
     where
         F: FnOnce(mpsc::Receiver<ThreadCommand>, Cancellation) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<(), EncapsError>> + Send + 'static,
     {
         let mut inner = self.inner.lock().await;
-        if !matches!(inner.state, ThreadState::Created | ThreadState::Stopped) {
-            return Err(EncapsError::AlreadyRunning);
+        if inner.state != ThreadState::Created {
+            return Err(EncapsError::AlreadyStarted);
         }
 
         let command_rx = self
@@ -78,12 +88,14 @@ impl AcpThread {
             .ok_or(EncapsError::ChannelClosed)?;
 
         inner.state = ThreadState::Starting;
+        let _ = inner.state_tx.send(ThreadState::Starting);
         let cancellation = self.cancellation.clone();
         let inner_ref = self.inner.clone();
         let task = tokio::spawn(async move {
             {
                 let mut guard = inner_ref.lock().await;
                 guard.state = ThreadState::Running;
+                let _ = guard.state_tx.send(ThreadState::Running);
             }
 
             let result = worker(command_rx, cancellation).await;
@@ -92,6 +104,7 @@ impl AcpThread {
                 Ok(()) => ThreadState::Stopped,
                 Err(_) => ThreadState::Failed,
             };
+            let _ = guard.state_tx.send(guard.state);
             guard.task = None;
         });
         inner.task = Some(task);
@@ -102,13 +115,19 @@ impl AcpThread {
         self.cancellation.clone()
     }
 
+    /// Requests shutdown. Repeated calls are harmless once shutdown has begun.
+    /// The worker owns the final transition to `Stopped` or `Failed`.
     pub async fn stop(&self) -> Result<(), EncapsError> {
-        self.cancellation.cancel();
         let mut inner = self.inner.lock().await;
-        if inner.state.is_terminal() {
+        if inner.state.is_terminal() || inner.state == ThreadState::Stopping {
+            return Ok(());
+        }
+        if inner.state == ThreadState::Created {
             return Ok(());
         }
         inner.state = ThreadState::Stopping;
+        let _ = inner.state_tx.send(ThreadState::Stopping);
+        self.cancellation.cancel();
         Ok(())
     }
 }
@@ -122,13 +141,20 @@ impl AcpThreadHandle {
         self.inner.lock().await.state
     }
 
+    /// Requests shutdown through the same cancellation path as `AcpThread`.
+    /// Calling `stop` multiple times is idempotent.
     pub async fn stop(&self) -> Result<(), EncapsError> {
+        let mut inner = self.inner.lock().await;
+        if inner.state.is_terminal() || inner.state == ThreadState::Stopping {
+            return Ok(());
+        }
+        if inner.state == ThreadState::Created {
+            return Ok(());
+        }
+        inner.state = ThreadState::Stopping;
+        let _ = inner.state_tx.send(ThreadState::Stopping);
         self.cancellation.cancel();
-        let sender = self.commands.sender.lock().await;
-        sender
-            .send(ThreadCommand::Stop)
-            .await
-            .map_err(|_| EncapsError::ChannelClosed)
+        Ok(())
     }
 
     pub fn subscribe_state(&self) -> watch::Receiver<ThreadState> {
@@ -139,7 +165,15 @@ impl AcpThreadHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    async fn wait_for_state(handle: &AcpThreadHandle, expected: ThreadState) {
+        let mut rx = handle.subscribe_state();
+        while *rx.borrow() != expected {
+            rx.changed().await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn starts_worker_and_reaches_stopped() {
@@ -154,11 +188,62 @@ mod tests {
             })
             .await
             .unwrap();
-        assert_eq!(handle.state().await, ThreadState::Starting);
-        tokio::task::yield_now().await;
+        wait_for_state(&handle, ThreadState::Running).await;
         assert_eq!(handle.state().await, ThreadState::Running);
         handle.stop().await.unwrap();
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        wait_for_state(&handle, ThreadState::Stopped).await;
         assert_eq!(handle.state().await, ThreadState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn start_is_single_use_even_after_stop() {
+        let (thread, handle) = AcpThread::new();
+        thread
+            .start(|_, _| async { Ok(()) })
+            .await
+            .unwrap();
+        wait_for_state(&handle, ThreadState::Stopped).await;
+        let result = thread.start(|_, _| async { Ok(()) }).await;
+        assert!(matches!(result, Err(EncapsError::AlreadyStarted)));
+    }
+
+    #[tokio::test]
+    async fn stop_is_idempotent_and_concurrent() {
+        let (thread, handle) = AcpThread::new();
+        thread
+            .start(|_, cancellation| async move {
+                cancellation.cancelled().await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        wait_for_state(&handle, ThreadState::Running).await;
+
+        let first = handle.clone();
+        let second = handle.clone();
+        let (a, b) = tokio::join!(first.stop(), second.stop());
+        assert!(a.is_ok());
+        assert!(b.is_ok());
+        wait_for_state(&handle, ThreadState::Stopped).await;
+    }
+
+    #[tokio::test]
+    async fn stop_does_not_require_command_receiver() {
+        let (thread, handle) = AcpThread::new();
+        let worker_starts = Arc::new(AtomicUsize::new(0));
+        let starts = worker_starts.clone();
+        thread
+            .start(move |_, cancellation| async move {
+                starts.fetch_add(1, Ordering::SeqCst);
+                cancellation.cancelled().await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+        wait_for_state(&handle, ThreadState::Running).await;
+        handle.stop().await.unwrap();
+        wait_for_state(&handle, ThreadState::Stopped).await;
+        assert_eq!(worker_starts.load(Ordering::SeqCst), 1);
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
 }
