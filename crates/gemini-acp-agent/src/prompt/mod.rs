@@ -2,19 +2,21 @@
 //! d'une requête Gemini vers les notifications ACP.
 //!
 //! Architecture modulaire :
-//! - [`build`]    — construction du prompt (système + historique + fenêtre glissante).
-//! - [`content`]  — conversion `ContentBlock` ACP → texte + images.
-//! - [`error`]    — messages d'erreur actionnables.
-//! - [`follow_up`] — parsing et normalisation du composant Gemini `<FollowUp>`.
-//! - [`notify`]   — notifications ACP (chunks texte, usage tokens).
-//! - [`title`]    — dérivation automatique du titre de session.
-//! - [`turn`]     — orchestration du tour complet.
+//! - [`build`]          — construction du prompt (système + historique + fenêtre glissante).
+//! - [`content`]        — conversion `ContentBlock` ACP → texte + images.
+//! - [`error`]          — messages d'erreur actionnables.
+//! - [`follow_up`]      — parsing et normalisation du composant Gemini `<FollowUp>`.
+//! - [`notify`]         — notifications ACP (chunks texte, usage tokens).
+//! - [`output_filter`]  — filtrage streaming des marqueurs ACP échappés par Gemini.
+//! - [`title`]          — dérivation automatique du titre de session.
+//! - [`turn`]           — orchestration du tour complet.
 
 pub mod build;
 pub mod content;
 pub mod error;
 pub mod follow_up;
 pub mod notify;
+pub mod output_filter;
 pub mod title;
 pub mod turn;
 
