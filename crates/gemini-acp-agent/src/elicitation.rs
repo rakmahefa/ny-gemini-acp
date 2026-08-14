@@ -5,9 +5,9 @@
 use std::collections::BTreeMap;
 
 use agent_client_protocol::schema::v1::{
-    CreateElicitationRequest, CreateElicitationResponse, ElicitationAction,
-    ElicitationContentValue, ElicitationFormMode, ElicitationPropertySchema, ElicitationSchema,
-    ElicitationSessionScope, SessionId,
+    CreateElicitationRequest, CreateElicitationResponse, ElicitationAcceptAction,
+    ElicitationAction, ElicitationContentValue, ElicitationFormMode, ElicitationPropertySchema,
+    ElicitationSchema, ElicitationSessionScope, SessionId,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use serde::{Deserialize, Serialize};
@@ -18,7 +18,7 @@ pub struct ElicitationSupport {
     pub url: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ElicitationRequestSpec {
     pub session_id: SessionId,
     pub message: String,
@@ -53,7 +53,8 @@ impl ElicitationRequestSpec {
     fn into_acp_request(self) -> CreateElicitationRequest {
         let mut schema = ElicitationSchema::new();
         for (name, property) in self.properties {
-            schema = schema.property(name, property, self.required.contains(&name));
+            let required = self.required.contains(&name);
+            schema = schema.property(name, property, required);
         }
         let mode = ElicitationFormMode::new(ElicitationSessionScope::new(self.session_id), schema);
         CreateElicitationRequest::new(mode, self.message)
@@ -326,7 +327,9 @@ mod tests {
             custom_answer_key(0),
             ElicitationContentValue::String("  Go  ".into()),
         )]);
-        let response = CreateElicitationResponse::accept(content);
+        let response = CreateElicitationResponse::new(ElicitationAction::Accept(
+            ElicitationAcceptAction::new(content),
+        ));
         match apply_ask_user_response(&response, &input, &questions) {
             AskUserQuestionOutcome::Answered(updated) => {
                 assert_eq!(updated["answers"]["Quel langage ?"], "Go")
@@ -338,7 +341,7 @@ mod tests {
     #[test]
     fn decline_produces_empty_answers() {
         let input = serde_json::json!({"questions": []});
-        let response = CreateElicitationResponse::decline();
+        let response = CreateElicitationResponse::new(ElicitationAction::Decline);
         match apply_ask_user_response(&response, &input, &[question(false)]) {
             AskUserQuestionOutcome::Answered(updated) => {
                 assert_eq!(updated["answers"], serde_json::json!({}))
