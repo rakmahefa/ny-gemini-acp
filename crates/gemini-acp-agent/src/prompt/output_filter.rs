@@ -14,12 +14,7 @@ const THINKING_OPEN: &str = "<thinking>";
 const THINKING_CLOSE: &str = "</thinking>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DropMode {
-    None,
-    ToolResultLine,
-    ToolCallBlock,
-    ThinkingBlock,
-}
+enum DropMode { None, ToolResultLine, ToolCallBlock, ThinkingBlock }
 
 #[derive(Debug)]
 pub struct OutputFilter {
@@ -31,20 +26,13 @@ pub struct OutputFilter {
 
 impl Default for OutputFilter {
     fn default() -> Self {
-        Self {
-            candidate: String::new(),
-            at_line_start: true,
-            drop_mode: DropMode::None,
-            skipping_marker_spacing: false,
-        }
+        Self { candidate: String::new(), at_line_start: true, drop_mode: DropMode::None, skipping_marker_spacing: false }
     }
 }
 
 impl OutputFilter {
     pub fn new() -> Self { Self::default() }
-
     pub fn push(&mut self, chunk: &str) -> String { self.process(chunk, false) }
-
     pub fn finish(&mut self) -> String { self.process("", true) }
 
     fn process(&mut self, chunk: &str, final_chunk: bool) -> String {
@@ -56,10 +44,7 @@ impl OutputFilter {
         while i < input.len() {
             match self.drop_mode {
                 DropMode::ToolResultLine => {
-                    if input.as_bytes()[i] == b'\n' {
-                        self.drop_mode = DropMode::None;
-                        self.at_line_start = true;
-                    }
+                    if input.as_bytes()[i] == b'\n' { self.drop_mode = DropMode::None; self.at_line_start = true; }
                     i += 1;
                     continue;
                 }
@@ -70,7 +55,7 @@ impl OutputFilter {
                         self.at_line_start = false;
                         continue;
                     }
-                    let ch = input[i..].chars().expect("index UTF-8 valide").next().unwrap();
+                    let ch = input[i..].chars().next().expect("index UTF-8 valide");
                     i += ch.len_utf8();
                     self.at_line_start = ch == '\n';
                     continue;
@@ -85,9 +70,7 @@ impl OutputFilter {
                     let keep = partial_suffix_len(&input[i..], THINKING_CLOSE);
                     let end = input.len() - keep;
                     if end > i { i = end; }
-                    if !final_chunk && i < input.len() {
-                        self.candidate.push_str(&input[i..]);
-                    }
+                    if !final_chunk && i < input.len() { self.candidate.push_str(&input[i..]); }
                     break;
                 }
                 DropMode::None => {}
@@ -104,37 +87,14 @@ impl OutputFilter {
 
             if self.at_line_start {
                 let rest = &input[i..];
-                if rest.starts_with(TOOL_RESULT_PREFIX) {
-                    self.drop_mode = DropMode::ToolResultLine;
-                    i += TOOL_RESULT_PREFIX.len();
-                    continue;
-                }
-                if rest.starts_with(TOOL_CALL_FENCE) {
-                    self.drop_mode = DropMode::ToolCallBlock;
-                    i += TOOL_CALL_FENCE.len();
-                    continue;
-                }
-                if rest.starts_with(THINKING_OPEN) {
-                    self.drop_mode = DropMode::ThinkingBlock;
-                    i += THINKING_OPEN.len();
-                    continue;
-                }
-                if rest.starts_with(ASSISTANT_MARKER) {
-                    i += ASSISTANT_MARKER.len();
-                    self.skipping_marker_spacing = true;
-                    continue;
-                }
-                if rest.starts_with(USER_MARKER) {
-                    i += USER_MARKER.len();
-                    self.skipping_marker_spacing = true;
-                    continue;
-                }
+                if rest.starts_with(TOOL_RESULT_PREFIX) { self.drop_mode = DropMode::ToolResultLine; i += TOOL_RESULT_PREFIX.len(); continue; }
+                if rest.starts_with(TOOL_CALL_FENCE) { self.drop_mode = DropMode::ToolCallBlock; i += TOOL_CALL_FENCE.len(); continue; }
+                if rest.starts_with(THINKING_OPEN) { self.drop_mode = DropMode::ThinkingBlock; i += THINKING_OPEN.len(); continue; }
+                if rest.starts_with(ASSISTANT_MARKER) { i += ASSISTANT_MARKER.len(); self.skipping_marker_spacing = true; continue; }
+                if rest.starts_with(USER_MARKER) { i += USER_MARKER.len(); self.skipping_marker_spacing = true; continue; }
 
                 let prefixes = [TOOL_RESULT_PREFIX, TOOL_CALL_FENCE, THINKING_OPEN, ASSISTANT_MARKER, USER_MARKER];
-                if !final_chunk && prefixes.iter().any(|prefix| prefix.starts_with(rest)) {
-                    self.candidate.push_str(rest);
-                    break;
-                }
+                if !final_chunk && prefixes.iter().any(|prefix| prefix.starts_with(rest)) { self.candidate.push_str(rest); break; }
             }
 
             let ch = input[i..].chars().next().expect("index UTF-8 valide");
@@ -144,19 +104,14 @@ impl OutputFilter {
             i += len;
         }
 
-        if final_chunk && !self.candidate.is_empty() {
-            out.push_str(&self.candidate);
-            self.candidate.clear();
-        }
+        if final_chunk && !self.candidate.is_empty() { out.push_str(&self.candidate); self.candidate.clear(); }
         out
     }
 }
 
 fn partial_suffix_len(text: &str, needle: &str) -> usize {
     let max = text.len().min(needle.len().saturating_sub(1));
-    for len in (1..=max).rev() {
-        if text.ends_with(&needle[..len]) { return len; }
-    }
+    for len in (1..=max).rev() { if text.ends_with(&needle[..len]) { return len; } }
     0
 }
 
@@ -172,9 +127,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removes_tool_result_line() {
-        assert_eq!(sanitize_text("[Tool result for shell_exec]: Finished `dev` profile"), "");
-    }
+    fn removes_tool_result_line() { assert_eq!(sanitize_text("[Tool result for shell_exec]: Finished `dev` profile"), ""); }
 
     #[test]
     fn removes_role_marker_but_preserves_content() {
