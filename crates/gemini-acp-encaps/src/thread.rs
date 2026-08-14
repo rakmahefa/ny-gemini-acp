@@ -138,3 +138,49 @@ impl AcpThreadHandle {
         self.state_rx.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn starts_worker_and_reaches_stopped() {
+        let (thread, handle) = AcpThread::new();
+        thread
+            .start(|mut commands, cancellation| async move {
+                tokio::select! {
+                    _ = cancellation.subscribe().changed() => Ok(()),
+                    Some(ThreadCommand::Stop) = commands.recv() => Ok(()),
+                }
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(handle.state().await, ThreadState::Starting);
+        tokio::task::yield_now().await;
+        assert_eq!(handle.state().await, ThreadState::Running);
+
+        handle.stop().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert_eq!(handle.state().await, ThreadState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn start_is_single_use() {
+        let (thread, _) = AcpThread::new();
+        thread
+            .start(|_, _| async { Ok(()) })
+            .await
+            .unwrap();
+        assert_eq!(thread.start(|_, _| async { Ok(()) }).await, Err(EncapsError::AlreadyRunning));
+    }
+
+    #[tokio::test]
+    async fn cancellation_is_shared() {
+        let (thread, handle) = AcpThread::new();
+        assert!(!thread.cancellation().is_cancelled());
+        handle.cancellation().cancel();
+        assert!(thread.cancellation().is_cancelled());
+    }
+}
