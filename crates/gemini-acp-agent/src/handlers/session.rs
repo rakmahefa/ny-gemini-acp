@@ -466,10 +466,7 @@ mod tests {
     fn all_modes_have_stable_acp_ids() {
         let modes = build_available_modes();
         let ids: Vec<&str> = modes.iter().map(|mode| mode.id.0.as_ref()).collect();
-        assert_eq!(
-            ids,
-            vec!["default", "accept_edits", "bypass_permissions"]
-        );
+        assert_eq!(ids, vec!["default", "accept_edits", "bypass_permissions"]);
     }
 
     #[test]
