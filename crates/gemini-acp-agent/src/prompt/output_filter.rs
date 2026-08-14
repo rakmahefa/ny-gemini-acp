@@ -60,7 +60,6 @@ impl OutputFilter {
                 if bytes[i] == b'\n' {
                     self.dropping_tool_result = false;
                     self.at_line_start = true;
-                    out.push('\n');
                 }
                 i += 1;
                 continue;
@@ -176,7 +175,7 @@ mod tests {
     fn preserves_newlines_around_filtered_lines() {
         assert_eq!(
             sanitize_text("Avant\n[Tool result for shell_exec]: done\nAprès"),
-            "Avant\n\nAprès"
+            "Avant\nAprès"
         );
     }
 }
