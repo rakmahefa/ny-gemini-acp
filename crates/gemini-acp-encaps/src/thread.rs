@@ -8,7 +8,7 @@ use crate::{Cancellation, EncapsError, ThreadCommand, ThreadState};
 const COMMAND_CAPACITY: usize = 32;
 
 struct CommandBus {
-    sender: Mutex<mpsc::Sender<ThreadCommand>>,
+    sender: mpsc::Sender<ThreadCommand>,
     receiver: Mutex<Option<mpsc::Receiver<ThreadCommand>>>,
 }
 
@@ -27,7 +27,6 @@ pub struct AcpThread {
 #[derive(Clone)]
 pub struct AcpThreadHandle {
     inner: Arc<Mutex<Inner>>,
-    commands: Arc<CommandBus>,
     cancellation: Cancellation,
     state_rx: watch::Receiver<ThreadState>,
 }
@@ -41,7 +40,7 @@ impl AcpThread {
     pub fn new() -> (Self, AcpThreadHandle) {
         let (sender, receiver) = mpsc::channel(COMMAND_CAPACITY);
         let commands = Arc::new(CommandBus {
-            sender: Mutex::new(sender),
+            sender,
             receiver: Mutex::new(Some(receiver)),
         });
         let (state_tx, state_rx) = watch::channel(ThreadState::Created);
@@ -58,7 +57,6 @@ impl AcpThread {
         };
         let handle = AcpThreadHandle {
             inner,
-            commands,
             cancellation,
             state_rx,
         };
@@ -86,12 +84,17 @@ impl AcpThread {
             .await
             .take()
             .ok_or(EncapsError::ChannelClosed)?;
+        // Keep the command channel alive for the whole worker lifetime. The
+        // sender is intentionally owned by the worker task even though the
+        // current shutdown path uses cancellation as its source of truth.
+        let command_tx = self.commands.sender.clone();
 
         inner.state = ThreadState::Starting;
         let _ = inner.state_tx.send(ThreadState::Starting);
         let cancellation = self.cancellation.clone();
         let inner_ref = self.inner.clone();
         let task = tokio::spawn(async move {
+            let _command_tx = command_tx;
             {
                 let mut guard = inner_ref.lock().await;
                 guard.state = ThreadState::Running;
