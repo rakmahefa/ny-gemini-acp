@@ -34,6 +34,25 @@ fn prompt_contient_systeme_et_tour_courant() {
 }
 
 #[test]
+fn tool_result_est_injecte_sans_double_enveloppe() {
+    let mut s = Session::new("s".into(), "/tmp".into(), vec![], "m");
+    s.messages.push((Role::User, "Lis Cargo.toml".into()));
+    s.messages.push((
+        Role::Assistant,
+        "```tool_call\n{\"name\":\"file_read\",\"arguments\":{}}\n```".into(),
+    ));
+    s.messages.push((
+        Role::Tool,
+        "[Tool result for file_read]: [workspace]\nmembers = [\"crates/gemini-acp-config\"]".into(),
+    ));
+
+    let p = build_prompt(&s, None);
+
+    assert!(p.contains("[Tool result for file_read]: [workspace]"));
+    assert!(!p.contains("[Tool result]: [Tool result for file_read]"));
+}
+
+#[test]
 fn fenetre_glissante_12_max() {
     let mut s = session(&[]);
     for i in 0..40 {
