@@ -115,6 +115,13 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Notify;
 
+    async fn wait_for_terminal(handle: &AcpTurnHandle) {
+        let mut rx = handle.subscribe_state();
+        while !rx.borrow().is_terminal() {
+            rx.changed().await.unwrap();
+        }
+    }
+
     #[tokio::test]
     async fn concurrent_starts_have_exactly_one_winner() {
         let manager = TurnManager::new();
@@ -168,9 +175,11 @@ mod tests {
 
         if let Ok(handle) = first {
             handle.cancel().await.unwrap();
+            wait_for_terminal(&handle).await;
         }
         if let Ok(handle) = second {
             handle.cancel().await.unwrap();
+            wait_for_terminal(&handle).await;
         }
         barrier.notify_waiters();
     }
@@ -182,14 +191,13 @@ mod tests {
             .start("session", |_cancellation| async { Ok(()) })
             .await
             .unwrap();
-        tokio::task::yield_now().await;
-        first.wait().await.unwrap();
+        wait_for_terminal(&first).await;
         assert!(manager.state("session").await.is_none());
 
         let second = manager
             .start("session", |_cancellation| async { Ok(()) })
             .await
             .unwrap();
-        second.wait().await.unwrap();
+        wait_for_terminal(&second).await;
     }
 }
