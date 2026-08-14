@@ -32,9 +32,18 @@ impl Store {
     }
 
     pub async fn get(&self, id: &str) -> Option<Session> {
-        let live = self.live.read().await;
-        match live.get(id) { Some(entry) => Some(entry.session.clone()), None => drop(live), }
-        if let Some(session) = self.read(id).await { self.live.write().await.insert(id.to_string(), Live { session: session.clone(), cancel: tokio::sync::watch::channel(false).0, busy: false, generation: 0 }); return Some(session); }
+        {
+            let live = self.live.read().await;
+            if let Some(entry) = live.get(id) {
+                return Some(entry.session.clone());
+            }
+        }
+
+        if let Some(session) = self.read(id).await {
+            self.live.write().await.insert(id.to_string(), Live { session: session.clone(), cancel: tokio::sync::watch::channel(false).0, busy: false, generation: 0 });
+            return Some(session);
+        }
+
         None
     }
 
@@ -56,8 +65,8 @@ impl Store {
     }
 
     pub async fn delete(&self, id: &str) -> bool {
-        let removed = tokio::fs::remove_file(self.path(id)).await.is_ok();
-        self.live.write().await.remove(id);
-        removed
+        let existed = self.live.write().await.remove(id).is_some() || self.path(id).exists();
+        let _ = tokio::fs::remove_file(self.path(id)).await;
+        existed
     }
 }
