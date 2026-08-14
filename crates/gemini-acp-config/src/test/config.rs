@@ -19,6 +19,7 @@ fn config_is_cloneable_and_preserves_values() {
 
 #[test]
 fn from_env_defaults_sans_variables() {
+    let _env_lock = TEST_ENV_LOCK.lock().unwrap();
     for key in [
         "GEMINI_ACP_COOKIES",
         "GEMINI_ACP_MODEL",
@@ -38,6 +39,7 @@ fn from_env_defaults_sans_variables() {
 
 #[test]
 fn from_env_lit_les_variables() {
+    let _env_lock = TEST_ENV_LOCK.lock().unwrap();
     std::env::set_var("GEMINI_ACP_COOKIES", "/tmp/cookies.json");
     std::env::set_var("GEMINI_ACP_MODEL", "gemini-3.6-flash");
     std::env::set_var("GEMINI_ACP_AUTH_USER", "3");
