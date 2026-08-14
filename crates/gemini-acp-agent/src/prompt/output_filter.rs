@@ -1,22 +1,31 @@
 //! Filtrage de la sortie Gemini avant émission ACP.
 //!
-//! Ce module sépare explicitement deux responsabilités :
-//! - `OutputFilter` traite les chunks du stream sans supposer que les marqueurs
-//!   arrivent complets dans un seul chunk ;
-//! - `sanitize_text` nettoie un texte déjà assemblé (historique / réponse finale).
+//! `OutputFilter` est volontairement indépendant de l'ACP : il transforme un
+//! flux de texte Gemini en texte visible sûr. Il gère les marqueurs coupés
+//! entre plusieurs chunks sans attendre la fin de la réponse normale.
 //!
-//! Les marqueurs ACP (`[Tool result for ...]`, `[Assistant]:`, `[User]:`) sont
-//! des détails du protocole interne et ne doivent jamais atteindre
-//! `AgentMessageChunk`.
+//! `sanitize_text` utilise le même moteur pour les textes déjà assemblés.
 
 const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 const ASSISTANT_MARKER: &str = "[Assistant]:";
 const USER_MARKER: &str = "[User]:";
 
 /// Filtre incrémental pour la sortie visible de Gemini.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub struct OutputFilter {
-    pending: String,
+    candidate: String,
+    at_line_start: bool,
+    dropping_tool_result: bool,
+}
+
+impl Default for OutputFilter {
+    fn default() -> Self {
+        Self {
+            candidate: String::new(),
+            at_line_start: true,
+            dropping_tool_result: false,
+        }
+    }
 }
 
 impl OutputFilter {
@@ -24,72 +33,89 @@ impl OutputFilter {
         Self::default()
     }
 
-    /// Consume un chunk et retourne uniquement le texte sûr à afficher.
+    /// Consume un chunk et retourne immédiatement le texte sûr à afficher.
     ///
-    /// Le filtre conserve la partie ambiguë en fin de chunk afin de gérer les
-    /// marqueurs coupés entre deux événements réseau.
+    /// Seule une petite séquence potentiellement ambiguë est retenue lorsqu'un
+    /// marqueur commence à la frontière du chunk. Le texte normal n'est donc
+    /// pas bloqué jusqu'à la fin du stream.
     pub fn push(&mut self, chunk: &str) -> String {
-        self.pending.push_str(chunk);
-        self.drain(false)
+        self.process(chunk, false)
     }
 
-    /// Termine le stream et libère tout texte restant.
+    /// Termine le stream et libère tout candidat partiellement reconnu.
     pub fn finish(&mut self) -> String {
-        self.drain(true)
+        self.process("", true)
     }
 
-    fn drain(&mut self, final_chunk: bool) -> String {
+    fn process(&mut self, chunk: &str, final_chunk: bool) -> String {
+        let mut input = self.candidate.clone();
+        self.candidate.clear();
+        input.push_str(chunk);
         let mut out = String::new();
+        let bytes = input.as_bytes();
+        let mut i = 0;
 
-        loop {
-            let Some(newline) = self.pending.find('\n') else {
-                if final_chunk {
-                    let line = std::mem::take(&mut self.pending);
-                    out.push_str(&sanitize_line(&line));
+        while i < bytes.len() {
+            if self.dropping_tool_result {
+                if bytes[i] == b'\n' {
+                    self.dropping_tool_result = false;
+                    self.at_line_start = true;
+                    out.push('\n');
                 }
-                break;
-            };
-
-            let line = self.pending[..newline].to_owned();
-            self.pending.drain(..=newline);
-            let sanitized = sanitize_line(&line);
-            if !sanitized.is_empty() {
-                out.push_str(&sanitized);
-                out.push('\n');
+                i += 1;
+                continue;
             }
+
+            if self.at_line_start {
+                let rest = &input[i..];
+                if rest.starts_with(TOOL_RESULT_PREFIX) {
+                    self.dropping_tool_result = true;
+                    i += TOOL_RESULT_PREFIX.len();
+                    continue;
+                }
+                if rest.starts_with(ASSISTANT_MARKER) {
+                    i += ASSISTANT_MARKER.len();
+                    self.at_line_start = false;
+                    continue;
+                }
+                if rest.starts_with(USER_MARKER) {
+                    i += USER_MARKER.len();
+                    self.at_line_start = false;
+                    continue;
+                }
+
+                // Si le chunk peut encore devenir un protocole marker, on
+                // attend le prochain chunk au lieu de l'émettre partiellement.
+                let prefixes = [TOOL_RESULT_PREFIX, ASSISTANT_MARKER, USER_MARKER];
+                if !final_chunk && prefixes.iter().any(|prefix| prefix.starts_with(rest)) {
+                    self.candidate.push_str(rest);
+                    break;
+                }
+            }
+
+            let ch = input[i..].chars().next().expect("index UTF-8 valide");
+            let len = ch.len_utf8();
+            out.push(ch);
+            self.at_line_start = ch == '\n';
+            i += len;
+        }
+
+        if final_chunk && !self.candidate.is_empty() {
+            out.push_str(&self.candidate);
+            self.candidate.clear();
         }
 
         out
     }
 }
 
-/// Sanitize un texte déjà complet.
+/// Nettoie un texte déjà assemblé avec exactement les mêmes règles que le
+/// filtre streaming.
 pub fn sanitize_text(text: &str) -> String {
     let mut filter = OutputFilter::new();
     let mut out = filter.push(text);
     out.push_str(&filter.finish());
     out.trim().to_owned()
-}
-
-fn sanitize_line(line: &str) -> String {
-    let trimmed = line.trim_start();
-
-    // Un résultat d'outil est toujours un bloc interne : toute la ligne est
-    // supprimée, même si son contenu ressemble à du texte utilisateur.
-    if trimmed.starts_with(TOOL_RESULT_PREFIX) {
-        return String::new();
-    }
-
-    // Gemini peut recopier les rôles de l'historique. On retire uniquement le
-    // marqueur et conservons le contenu utile qui suit.
-    if let Some(rest) = trimmed.strip_prefix(ASSISTANT_MARKER) {
-        return rest.trim_start().to_owned();
-    }
-    if let Some(rest) = trimmed.strip_prefix(USER_MARKER) {
-        return rest.trim_start().to_owned();
-    }
-
-    line.to_owned()
 }
 
 #[cfg(test)]
@@ -108,32 +134,49 @@ mod tests {
     }
 
     #[test]
-    fn preserves_normal_text() {
-        assert_eq!(sanitize_text("Compilation terminée."), "Compilation terminée.");
-    }
-
-    #[test]
-    fn filters_stream_across_chunks() {
+    fn preserves_normal_text_immediately() {
         let mut filter = OutputFilter::new();
-        assert_eq!(filter.push("[Tool result for shell_"), "");
-        assert_eq!(filter.push("exec]: Finished `dev` profile\n"), "");
-        assert_eq!(filter.push("[Assistant]: Je lance cargo check\n"), "Je lance cargo check\n");
+        assert_eq!(filter.push("Je lance "), "Je lance ");
+        assert_eq!(filter.push("cargo check"), "cargo check");
         assert_eq!(filter.finish(), "");
     }
 
     #[test]
-    fn preserves_text_after_marker_on_same_line() {
-        assert_eq!(
-            sanitize_text("[Assistant]: J'exécute cargo check"),
-            "J'exécute cargo check"
-        );
+    fn filters_marker_split_across_chunks() {
+        let mut filter = OutputFilter::new();
+        assert_eq!(filter.push("[Tool result for shell_"), "");
+        assert_eq!(filter.push("exec]: Finished `dev` profile\n"), "");
+        assert_eq!(filter.push("[Assistant]: Je lance cargo check"), "Je lance cargo check");
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn filters_marker_split_at_every_boundary() {
+        let marker = "[Assistant]:";
+        for split in 1..marker.len() {
+            let mut filter = OutputFilter::new();
+            assert_eq!(filter.push(&marker[..split]), "");
+            assert_eq!(filter.push(&marker[split..]), "");
+            assert_eq!(filter.push(" suite"), " suite");
+            assert_eq!(filter.finish(), "");
+        }
     }
 
     #[test]
     fn removes_tool_result_before_assistant_in_same_stream() {
+        let mut filter = OutputFilter::new();
         assert_eq!(
-            sanitize_text("[Tool result for shell_exec]: done\n[Assistant]: Suite de l'analyse"),
-            "Suite de l'analyse"
+            filter.push("[Tool result for shell_exec]: done\n[Assistant]: Suite"),
+            "Suite"
+        );
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
+    fn preserves_newlines_around_filtered_lines() {
+        assert_eq!(
+            sanitize_text("Avant\n[Tool result for shell_exec]: done\nAprès"),
+            "Avant\n\nAprès"
         );
     }
 }
