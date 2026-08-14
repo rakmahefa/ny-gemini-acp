@@ -6,8 +6,8 @@ members = ["crates/gemini-acp-config", "crates/gemini-acp-runtime", "crates/gemi
 version = "0.2.2"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/ny-gemini-acp/ny-gemini-acp"
-homepage = "https://github.com/ny-gemini-acp/ny-gemini-acp"
+repository = "https://github.com/rakmahefa/ny-workspace"
+homepage = "https://github.com/rakmahefa/ny-workspace"
 authors = ["gemini-acp contributors"]
 rust-version = "1.82"
 
