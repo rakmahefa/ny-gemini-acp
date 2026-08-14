@@ -31,10 +31,11 @@ impl TurnManager {
         let session_id = session_id.into();
         let lock = self.session_lock(&session_id).await;
         let (turn, handle) = AcpTurn::new();
+        self.active.lock().await.insert(session_id.clone(), handle.clone());
+
         let active = self.active.clone();
         let key = session_id.clone();
-
-        turn.start(move |cancellation| async move {
+        let start_result = turn.start(move |cancellation| async move {
             let guard = tokio::select! {
                 guard = lock.lock() => guard,
                 _ = cancellation.subscribe().changed() => return Ok(()),
@@ -42,6 +43,7 @@ impl TurnManager {
 
             if cancellation.is_cancelled() {
                 drop(guard);
+                active.lock().await.remove(&key);
                 return Ok(());
             }
 
@@ -49,10 +51,12 @@ impl TurnManager {
             drop(guard);
             active.lock().await.remove(&key);
             result
-        }).await?;
+        }).await;
 
-        self.active.lock().await.insert(session_id, handle.clone());
-        Ok(handle)
+        if start_result.is_err() {
+            self.active.lock().await.remove(&session_id);
+        }
+        start_result.map(|()| handle)
     }
 
     pub async fn cancel(&self, session_id: &str) -> Result<bool, EncapsError> {
