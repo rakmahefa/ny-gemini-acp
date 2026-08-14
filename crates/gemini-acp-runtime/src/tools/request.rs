@@ -18,9 +18,10 @@ pub enum ToolCallKind {
 }
 
 /// The internal lifecycle state of a tool call request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallState {
+    #[default]
     Pending,
     WaitingForUser,
     Executing,
@@ -61,34 +62,18 @@ impl ToolCallRequest {
         arguments: Value,
         kind: ToolCallKind,
     ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            arguments,
-            kind,
-            state: ToolCallState::Pending,
-        }
+        Self { id: id.into(), name: name.into(), arguments, kind, state: ToolCallState::Pending }
     }
 
-    pub fn tool(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        arguments: Value,
-    ) -> Self {
+    pub fn tool(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self::new(id, name, arguments, ToolCallKind::Tool)
     }
 
-    pub fn elicitation(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        arguments: Value,
-    ) -> Self {
+    pub fn elicitation(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self::new(id, name, arguments, ToolCallKind::Elicitation)
     }
 
-    pub const fn is_terminal(&self) -> bool {
-        self.state.is_terminal()
-    }
+    pub const fn is_terminal(&self) -> bool { self.state.is_terminal() }
 
     pub fn transition(&mut self, next: ToolCallState) -> Result<(), ToolCallRequestError> {
         if self.state.is_terminal() {
@@ -109,10 +94,7 @@ impl ToolCallRequest {
         );
 
         if !allowed {
-            return Err(ToolCallRequestError::InvalidTransition {
-                from: self.state,
-                to: next,
-            });
+            return Err(ToolCallRequestError::InvalidTransition { from: self.state, to: next });
         }
 
         self.state = next;
@@ -121,12 +103,6 @@ impl ToolCallRequest {
 
     pub fn cancel(&mut self) -> Result<(), ToolCallRequestError> {
         self.transition(ToolCallState::Cancelled)
-    }
-}
-
-impl Default for ToolCallState {
-    fn default() -> Self {
-        Self::Pending
     }
 }
 
@@ -158,13 +134,7 @@ mod tests {
     fn invalid_backtracking_is_rejected() {
         let mut request = ToolCallRequest::tool("call-2", "file_read", json!({}));
         request.transition(ToolCallState::Executing).unwrap();
-        assert!(matches!(
-            request.transition(ToolCallState::Pending),
-            Err(ToolCallRequestError::InvalidTransition {
-                from: ToolCallState::Executing,
-                to: ToolCallState::Pending
-            })
-        ));
+        assert!(matches!(request.transition(ToolCallState::Pending), Err(ToolCallRequestError::InvalidTransition { from: ToolCallState::Executing, to: ToolCallState::Pending })));
     }
 
     #[test]
@@ -172,10 +142,7 @@ mod tests {
         let mut request = ToolCallRequest::tool("call-3", "file_write", json!({}));
         request.cancel().unwrap();
         assert_eq!(request.state, ToolCallState::Cancelled);
-        assert!(matches!(
-            request.transition(ToolCallState::Executing),
-            Err(ToolCallRequestError::AlreadyTerminal(ToolCallState::Cancelled))
-        ));
+        assert!(matches!(request.transition(ToolCallState::Executing), Err(ToolCallRequestError::AlreadyTerminal(ToolCallState::Cancelled))));
     }
 
     #[test]
