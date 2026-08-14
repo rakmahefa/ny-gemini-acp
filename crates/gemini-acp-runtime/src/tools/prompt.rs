@@ -1,18 +1,10 @@
 //! Injection de la section outils dans le prompt et formatage
 //! de l'historique avec les blocs tool_call / tool_result.
-//!
-//! Responsabilités :
-//! - `tools_section` : construit la section `# Tool Use` injectée après
-//!   l'instruction système quand des outils sont disponibles (composition
-//!   déléguée à `gemini-acp_config::core::tool_prompt`).
-//! - `format_tool_result` : compatibilité historique ; délègue à la
-//!   sérialisation sûre côté agent.
 
 use crate::tools::registry::ToolRegistry;
 use gemini_acp_config::core::tool_prompt::{tool_use_section, BlockKind, INSTRUCTION_TOOL_CALL};
 
 /// Construit la section `# Tool Use` à injecter dans le prompt.
-/// Retourne `None` si le registre est vide.
 pub fn tools_section(registry: &ToolRegistry) -> Option<String> {
     let defs = registry.definitions();
     if defs.is_empty() {
@@ -26,18 +18,10 @@ pub fn tools_section(registry: &ToolRegistry) -> Option<String> {
     ))
 }
 
-/// Formate un résultat d'outil pour l'historique.
-///
-/// Le runtime ne dépend pas du crate agent : on conserve ici le format public
-/// attendu par les consommateurs, mais l'implémentation encode le contenu en
-/// JSON pour empêcher un résultat arbitraire de créer une nouvelle ligne ou un
-/// faux marqueur de protocole.
+/// Formate un résultat d'outil pour l'historique avec la sérialisation sûre
+/// commune au runtime.
 pub fn format_tool_result(tool: &str, content: &str) -> String {
-    let json = serde_json::json!({
-        "tool": tool,
-        "content": content,
-    });
-    format!("[Tool result]: {json}")
+    super::tool_history::encode(tool, content)
 }
 
 #[cfg(test)]
@@ -95,7 +79,10 @@ mod tests {
     #[test]
     fn format_tool_result_text() {
         let r = format_tool_result("file_read", "contenu du fichier");
-        assert_eq!(r, "[Tool result]: {\"content\":\"contenu du fichier\",\"tool\":\"file_read\"}");
+        assert_eq!(
+            r,
+            "[Tool result]: {\"tool\":\"file_read\",\"content\":\"contenu du fichier\"}"
+        );
     }
 
     #[test]
