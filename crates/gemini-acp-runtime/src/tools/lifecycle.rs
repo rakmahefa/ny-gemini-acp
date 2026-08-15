@@ -174,6 +174,61 @@ pub async fn wait_for_session_cancel(session_id: &str) {
     cancellation.cancelled().await;
 }
 
+// Partial assistant output belongs to the active ACP turn, not to the tool
+// executor. Keeping it here lets cancellation unwind through `TurnGuard` and
+// persist exactly the text that was already exposed to the client without
+// making the ACP stream itself the source of truth for session history.
+type PartialOutputMap = HashMap<String, String>;
+static PARTIAL_OUTPUT: OnceLock<Mutex<PartialOutputMap>> = OnceLock::new();
+
+fn partial_output_map() -> &'static Mutex<PartialOutputMap> {
+    PARTIAL_OUTPUT.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Start a fresh partial-output window for a new ACP turn.
+pub fn begin_partial_output(session_id: &str) {
+    partial_output_map()
+        .lock()
+        .expect("partial output mutex poisoned")
+        .insert(session_id.to_owned(), String::new());
+}
+
+/// Clear the current partial-output window before tool execution.
+///
+/// The model text preceding a tool call is already represented in session
+/// history at that point. Resetting here prevents a later cancellation during
+/// tool execution from replaying that earlier text into the session history.
+pub fn clear_partial_output(session_id: &str) {
+    if let Some(output) = partial_output_map()
+        .lock()
+        .expect("partial output mutex poisoned")
+        .get_mut(session_id)
+    {
+        output.clear();
+    }
+}
+
+/// Record assistant text only after it has passed the ACP output filter.
+pub fn record_partial_output(session_id: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    let mut map = partial_output_map()
+        .lock()
+        .expect("partial output mutex poisoned");
+    let output = map.entry(session_id.to_owned()).or_default();
+    output.push_str(text);
+}
+
+/// Take and remove the active turn's partial assistant output.
+pub fn take_partial_output(session_id: &str) -> String {
+    partial_output_map()
+        .lock()
+        .expect("partial output mutex poisoned")
+        .remove(session_id)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,5 +299,23 @@ mod tests {
         assert!(session_cancelled("sess-test"));
         unbind_session_cancellation("sess-test");
         assert!(!session_cancelled("sess-test"));
+    }
+
+    #[test]
+    fn partial_output_is_bounded_by_turn_boundaries() {
+        begin_partial_output("sess-partial");
+        record_partial_output("sess-partial", "Hello ");
+        record_partial_output("sess-partial", "world");
+        assert_eq!(take_partial_output("sess-partial"), "Hello world");
+        assert_eq!(take_partial_output("sess-partial"), "");
+    }
+
+    #[test]
+    fn partial_output_can_be_reset_before_tool_execution() {
+        begin_partial_output("sess-tool");
+        record_partial_output("sess-tool", "before tool");
+        clear_partial_output("sess-tool");
+        record_partial_output("sess-tool", "after tool");
+        assert_eq!(take_partial_output("sess-tool"), "after tool");
     }
 }
