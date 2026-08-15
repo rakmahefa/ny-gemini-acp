@@ -1,5 +1,6 @@
 //! Types du module state : rôles, modes de session, données persistées, erreurs.
 
+use gemini_acp_encaps::Cancellation;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -135,9 +136,13 @@ pub enum TurnError {
     AlreadyRunning,
 }
 
+/// Runtime-owned session state plus the shared cancellation primitive.
+///
+/// The cancellation primitive itself is owned by `gemini-acp-encaps`; runtime
+/// only owns the association between a session and its current turn.
 pub struct Live {
     pub session: Session,
-    pub cancel: tokio::sync::watch::Sender<bool>,
+    pub cancel: Cancellation,
     pub busy: bool,
     pub generation: u64,
 }
