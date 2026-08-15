@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use agent_client_protocol::schema::v1::{
     ContentBlock, CreateTerminalRequest, PermissionOption, PermissionOptionKind,
     ReleaseTerminalRequest, RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    SessionNotification, SessionUpdate, Terminal, TerminalOutputRequest, TextContent,
+    SessionNotification, SessionUpdate, Terminal, TerminalId, TerminalOutputRequest, TextContent,
     ToolCall as AcpToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
     ToolCallUpdateFields, ToolKind, WaitForTerminalExitRequest,
 };
@@ -76,8 +76,7 @@ impl PermissionRequest {
                 let command = args.get("command").and_then(Value::as_str).unwrap_or("");
                 let analysis = ShellAnalysis::analyze(command);
                 if analysis.has_dangerous_pipe_chain {
-                    warnings
-                        .push("Chaîne de commandes potentiellement dangereuse détectée.".into());
+                    warnings.push("Chaîne de commandes potentiellement dangereuse détectée.".into());
                 }
                 if analysis.has_env_injection {
                     warnings.push("Injection de variables d'environnement détectée.".into());
@@ -187,9 +186,7 @@ impl<'a> ToolExecutor<'a> {
         self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
 
         if session_cancelled(self.session_id.0.as_ref()) {
-            lifecycle
-                .cancel()
-                .expect("pending -> cancelled must be legal");
+            lifecycle.cancel().expect("pending -> cancelled must be legal");
             let message = "outil annulé avant son démarrage";
             let meta = lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
             self.emit_failed(&call_id, message, arguments, tool_name, Some(meta));
@@ -217,6 +214,21 @@ impl<'a> ToolExecutor<'a> {
             let request = PermissionRequest::from_tool_call(tool_name, arguments, self.cwd);
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
+                    // Permission approval and session/cancel can race. Cancellation
+                    // wins even when the client answered allow at the same time.
+                    if session_cancelled(self.session_id.0.as_ref()) {
+                        lifecycle
+                            .transition(ToolLifecycleState::Cancelled)
+                            .expect("permission -> cancelled must be legal");
+                        let message = format!(
+                            "{} ({}) annulé avant le démarrage de l'exécution.",
+                            request.kind.label(),
+                            request.summary
+                        );
+                        let meta = lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
+                        self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
+                        return ToolResult::err(message);
+                    }
                     lifecycle
                         .transition(ToolLifecycleState::Executing)
                         .expect("permission -> executing must be legal");
@@ -253,13 +265,19 @@ impl<'a> ToolExecutor<'a> {
                         .transition(ToolLifecycleState::Failed)
                         .expect("permission -> failed must be legal");
                     let message = format!("Échec de la demande de permission ACP : {error}");
-                    let meta =
-                        lifecycle_meta(tool_name, &lifecycle, Some("permission-error"), None);
+                    let meta = lifecycle_meta(tool_name, &lifecycle, Some("permission-error"), None);
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                     return ToolResult::err(message);
                 }
             }
         } else {
+            if session_cancelled(self.session_id.0.as_ref()) {
+                lifecycle.cancel().expect("pending -> cancelled must be legal");
+                let message = "outil annulé avant son exécution";
+                let meta = lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
+                self.emit_failed(&call_id, message, arguments, tool_name, Some(meta));
+                return ToolResult::err(message);
+            }
             lifecycle
                 .transition(ToolLifecycleState::Executing)
                 .expect("pending -> executing must be legal");
@@ -326,18 +344,19 @@ impl<'a> ToolExecutor<'a> {
                 return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true };
             }
         };
+        let cancelled = session_cancelled(self.session_id.0.as_ref());
         match result {
             Some(result) => ExecutionOutcome {
                 result: registry_result(result),
                 terminal_id: None,
                 terminal_meta: None,
-                cancelled: false,
+                cancelled,
             },
             None => ExecutionOutcome {
                 result: ToolResult::err(format!("Outil inconnu : {tool_name}")),
                 terminal_id: None,
                 terminal_meta: None,
-                cancelled: false,
+                cancelled,
             },
         }
     }
@@ -371,9 +390,7 @@ impl<'a> ToolExecutor<'a> {
         self.emit_update(
             call_id,
             ToolCallStatus::InProgress,
-            vec![ToolCallContent::Terminal(Terminal::new(
-                terminal_id.clone(),
-            ))],
+            vec![ToolCallContent::Terminal(Terminal::new(terminal_id.clone()))],
             vec![],
             Some(terminal_lifecycle_meta(&terminal_id.0, None, None)),
         );
@@ -382,16 +399,33 @@ impl<'a> ToolExecutor<'a> {
         let wait_result = tokio::select! {
             result = tokio::time::timeout(std::time::Duration::from_secs(timeout + 5), self.cx.send_request(wait).block_task()) => result,
             _ = wait_for_session_cancel(self.session_id.0.as_ref()) => {
-                let _ = self.cx.send_request(ReleaseTerminalRequest::new(self.session_id.clone(), terminal_id.clone())).block_task().await;
+                // A terminal may already have produced useful output. Fetch it
+                // before release; cancellation must not erase the partial result.
+                let partial = self.fetch_terminal_output(&terminal_id).await;
+                let _ = self.cx.send_request(ReleaseTerminalRequest::new(
+                    self.session_id.clone(),
+                    terminal_id.clone(),
+                )).block_task().await;
+                let terminal_text = terminal_output_text(partial);
+                let content = if terminal_text.is_empty() {
+                    "terminal annulé par session/cancel".to_owned()
+                } else {
+                    terminal_text.clone()
+                };
                 return Ok(ExecutionOutcome {
-                    result: ToolResult::err("terminal annulé par session/cancel"),
+                    result: ToolResult::err(content),
                     terminal_id: Some(terminal_id.0.to_string()),
-                    terminal_meta: Some(terminal_lifecycle_meta(&terminal_id.0, None, None)),
+                    terminal_meta: Some(terminal_lifecycle_meta(
+                        &terminal_id.0,
+                        (!terminal_text.is_empty()).then_some(terminal_text.as_str()),
+                        None,
+                    )),
                     cancelled: true,
                 });
             }
         };
 
+        let cancelled_after_wait = session_cancelled(self.session_id.0.as_ref());
         let (exit_code, signal, wait_error) = match wait_result {
             Ok(Ok(response)) => (
                 response.exit_status.exit_code,
@@ -406,18 +440,7 @@ impl<'a> ToolExecutor<'a> {
             ),
         };
 
-        let output_response = self
-            .cx
-            .send_request(TerminalOutputRequest::new(
-                self.session_id.clone(),
-                terminal_id.clone(),
-            ))
-            .block_task()
-            .await;
-        let (output, truncated) = match output_response {
-            Ok(response) => (response.output, response.truncated),
-            Err(error) => (format!("terminal output indisponible: {error}"), false),
-        };
+        let (output, truncated) = self.fetch_terminal_output(&terminal_id).await;
         let _ = self
             .cx
             .send_request(ReleaseTerminalRequest::new(
@@ -436,7 +459,11 @@ impl<'a> ToolExecutor<'a> {
             _ if truncated => format!("{output}\n… (sortie tronquée par le client ACP)"),
             _ => output,
         };
-        let is_ok = wait_error.is_none() && signal.is_none() && exit_code.unwrap_or(0) == 0;
+        let cancelled = cancelled_after_wait || session_cancelled(self.session_id.0.as_ref());
+        let is_ok = !cancelled
+            && wait_error.is_none()
+            && signal.is_none()
+            && exit_code.unwrap_or(0) == 0;
         Ok(ExecutionOutcome {
             result: ToolResult {
                 content: terminal_text.clone(),
@@ -448,8 +475,23 @@ impl<'a> ToolExecutor<'a> {
                 Some(&terminal_text),
                 Some((exit_code, signal.as_deref())),
             )),
-            cancelled: false,
+            cancelled,
         })
+    }
+
+    async fn fetch_terminal_output(&self, terminal_id: &TerminalId) -> (String, bool) {
+        match self
+            .cx
+            .send_request(TerminalOutputRequest::new(
+                self.session_id.clone(),
+                terminal_id.clone(),
+            ))
+            .block_task()
+            .await
+        {
+            Ok(response) => (response.output, response.truncated),
+            Err(error) => (format!("terminal output indisponible: {error}"), false),
+        }
     }
 
     pub async fn request_permission(
@@ -595,7 +637,10 @@ fn registry_result(result: RegistryToolResult) -> ToolResult {
 
 fn permission_meta(request: &PermissionRequest) -> Map<String, Value> {
     let mut meta = Map::new();
-    meta.insert("claudeCode".into(), json!({ "toolName": request.tool_name, "permission": { "kind": request.kind.label(), "risk": request.risk.label(), "warnings": request.warnings } }));
+    meta.insert(
+        "claudeCode".into(),
+        json!({ "toolName": request.tool_name, "permission": { "kind": request.kind.label(), "risk": request.risk.label(), "warnings": request.warnings } }),
+    );
     meta
 }
 
@@ -606,7 +651,10 @@ fn lifecycle_meta(
     terminal_meta: Option<Map<String, Value>>,
 ) -> Map<String, Value> {
     let mut meta = terminal_meta.unwrap_or_default();
-    meta.insert("geminiAcp".into(), json!({ "lifecycle": { "state": lifecycle_state_label(lifecycle.state()), "sequence": lifecycle.sequence() } }));
+    meta.insert(
+        "geminiAcp".into(),
+        json!({ "lifecycle": { "state": lifecycle_state_label(lifecycle.state()), "sequence": lifecycle.sequence() } }),
+    );
     let claude = meta.entry("claudeCode").or_insert_with(|| json!({}));
     if let Some(object) = claude.as_object_mut() {
         if !tool_name.is_empty() {
@@ -630,6 +678,17 @@ fn lifecycle_state_label(state: ToolLifecycleState) -> &'static str {
     }
 }
 
+fn terminal_output_text((output, truncated): (String, bool)) -> String {
+    if output.trim().is_empty() {
+        return String::new();
+    }
+    if truncated {
+        format!("{output}\n… (sortie tronquée par le client ACP)")
+    } else {
+        output
+    }
+}
+
 fn terminal_lifecycle_meta(
     terminal_id: &str,
     output: Option<&str>,
@@ -648,7 +707,10 @@ fn terminal_lifecycle_meta(
         );
     }
     if let Some((exit_code, signal)) = exit {
-        meta.insert("terminal_exit".into(), json!({ "terminal_id": terminal_id, "exit_code": exit_code.map(i64::from).unwrap_or(-1), "signal": signal }));
+        meta.insert(
+            "terminal_exit".into(),
+            json!({ "terminal_id": terminal_id, "exit_code": exit_code.map(i64::from).unwrap_or(-1), "signal": signal }),
+        );
     }
     meta
 }
@@ -708,11 +770,13 @@ pub fn map_stop_reason(
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn permission_kind_mapping() {
         assert_eq!(PermissionKind::Write.label(), "write");
         assert_eq!(PermissionKind::Execute.label(), "execute");
     }
+
     #[test]
     fn stop_reason_mapping() {
         use agent_client_protocol::schema::v1::StopReason;
@@ -720,6 +784,24 @@ mod tests {
         assert_eq!(map_stop_reason(Some("content_filter")), StopReason::Refusal);
         assert_eq!(map_stop_reason(None), StopReason::EndTurn);
     }
+
+    #[test]
+    fn cancelled_terminal_preserves_partial_output() {
+        assert_eq!(
+            terminal_output_text(("partial output".into(), false)),
+            "partial output"
+        );
+        assert_eq!(
+            terminal_output_text(("partial output".into(), true)),
+            "partial output\n… (sortie tronquée par le client ACP)"
+        );
+    }
+
+    #[test]
+    fn empty_cancelled_terminal_output_stays_empty() {
+        assert!(terminal_output_text(("   ".into(), false)).is_empty());
+    }
+
     #[test]
     fn terminal_metadata_shape() {
         let meta = terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));

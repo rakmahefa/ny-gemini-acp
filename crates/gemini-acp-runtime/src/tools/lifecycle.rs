@@ -84,15 +84,9 @@ impl ToolLifecycle {
             (ToolLifecycleState::Pending, ToolLifecycleState::Permission)
                 | (ToolLifecycleState::Pending, ToolLifecycleState::Executing)
                 | (ToolLifecycleState::Pending, ToolLifecycleState::Cancelled)
-                | (
-                    ToolLifecycleState::Permission,
-                    ToolLifecycleState::Executing
-                )
+                | (ToolLifecycleState::Permission, ToolLifecycleState::Executing)
                 | (ToolLifecycleState::Permission, ToolLifecycleState::Failed)
-                | (
-                    ToolLifecycleState::Permission,
-                    ToolLifecycleState::Cancelled
-                )
+                | (ToolLifecycleState::Permission, ToolLifecycleState::Cancelled)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Completed)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Failed)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Cancelled)
@@ -129,7 +123,6 @@ impl ToolLifecycle {
         self.transition(next)
     }
 
-    /// Return the protocol status represented by the current lifecycle state.
     pub const fn status(&self) -> ToolCallStatus {
         self.state.wire_status()
     }
@@ -142,7 +135,6 @@ fn cancellation_map() -> &'static Mutex<SessionCancellationMap> {
     SESSION_CANCELLATION.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Register the current turn's `encaps` cancellation primitive for the legacy executor adapter.
 pub fn bind_session_cancellation(session_id: &str, cancellation: Cancellation) {
     cancellation_map()
         .lock()
@@ -165,7 +157,6 @@ pub fn session_cancelled(session_id: &str) -> bool {
         .is_some_and(Cancellation::is_cancelled)
 }
 
-/// Wait for the cancellation source owned by `encaps` to become cancelled.
 pub async fn wait_for_session_cancel(session_id: &str) {
     let cancellation = {
         let map = cancellation_map()
@@ -180,10 +171,6 @@ pub async fn wait_for_session_cancel(session_id: &str) {
     cancellation.cancelled().await;
 }
 
-// Partial assistant output belongs to the active ACP turn, not to the tool
-// executor. Keeping it here lets cancellation unwind through `TurnGuard` and
-// persist exactly the text that was already exposed to the client without
-// making the ACP stream itself the source of truth for session history.
 type PartialOutputMap = HashMap<String, String>;
 static PARTIAL_OUTPUT: OnceLock<Mutex<PartialOutputMap>> = OnceLock::new();
 
@@ -191,7 +178,6 @@ fn partial_output_map() -> &'static Mutex<PartialOutputMap> {
     PARTIAL_OUTPUT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Start a fresh partial-output window for a new ACP turn.
 pub fn begin_partial_output(session_id: &str) {
     partial_output_map()
         .lock()
@@ -199,11 +185,6 @@ pub fn begin_partial_output(session_id: &str) {
         .insert(session_id.to_owned(), String::new());
 }
 
-/// Clear the current partial-output window before tool execution.
-///
-/// The model text preceding a tool call is already represented in session
-/// history at that point. Resetting here prevents a later cancellation during
-/// tool execution from replaying that earlier text into the session history.
 pub fn clear_partial_output(session_id: &str) {
     if let Some(output) = partial_output_map()
         .lock()
@@ -214,7 +195,6 @@ pub fn clear_partial_output(session_id: &str) {
     }
 }
 
-/// Record assistant text only after it has passed the ACP output filter.
 pub fn record_partial_output(session_id: &str, text: &str) {
     if text.is_empty() {
         return;
@@ -226,7 +206,6 @@ pub fn record_partial_output(session_id: &str, text: &str) {
     output.push_str(text);
 }
 
-/// Take and remove the active turn's partial assistant output.
 pub fn take_partial_output(session_id: &str) -> String {
     partial_output_map()
         .lock()
@@ -240,11 +219,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pending_permission_cancelled_is_terminal_and_ordered() {
+        let mut lifecycle = ToolLifecycle::new();
+        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
+        lifecycle.cancel().unwrap();
+        assert_eq!(lifecycle.state(), ToolLifecycleState::Cancelled);
+        assert_eq!(lifecycle.sequence(), 2);
+        assert_eq!(lifecycle.status(), ToolCallStatus::Failed);
+    }
+
+    #[test]
+    fn permission_executing_cancelled_is_terminal_and_ordered() {
+        let mut lifecycle = ToolLifecycle::new();
+        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
+        lifecycle.transition(ToolLifecycleState::Executing).unwrap();
+        lifecycle.cancel().unwrap();
+        assert_eq!(lifecycle.state(), ToolLifecycleState::Cancelled);
+        assert_eq!(lifecycle.sequence(), 3);
+        assert_eq!(lifecycle.status(), ToolCallStatus::Failed);
+    }
+
+    #[test]
+    fn executing_cancelled_cannot_be_reopened() {
+        let mut lifecycle = ToolLifecycle::new();
+        lifecycle.transition(ToolLifecycleState::Executing).unwrap();
+        lifecycle.cancel().unwrap();
+        assert!(matches!(
+            lifecycle.transition(ToolLifecycleState::Completed),
+            Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Cancelled))
+        ));
+    }
+
+    #[test]
     fn lifecycle_is_strict() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle
-            .transition(ToolLifecycleState::Permission)
-            .unwrap();
+        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
         lifecycle.transition(ToolLifecycleState::Executing).unwrap();
         lifecycle.finish(true, false).unwrap();
         assert_eq!(lifecycle.sequence(), 3);
@@ -262,9 +271,7 @@ mod tests {
     #[test]
     fn cancellation_is_wire_compatible() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle
-            .transition(ToolLifecycleState::Permission)
-            .unwrap();
+        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
         lifecycle.cancel().unwrap();
         assert_eq!(lifecycle.status(), ToolCallStatus::Failed);
     }
