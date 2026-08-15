@@ -3,9 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
-use tokio::sync::{watch, RwLock};
+use tokio::sync::RwLock;
 
-use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
 use gemini_acp_encaps::Cancellation;
 
 mod busy;
@@ -26,50 +25,41 @@ impl Store {
     pub async fn begin_turn(
         &self,
         id: &str,
-    ) -> Result<(Session, watch::Receiver<bool>, u64), TurnError> {
+    ) -> Result<(Session, Cancellation, u64), TurnError> {
         let mut live = self.live.write().await;
-
         if let Some(entry) = live.get_mut(id) {
             if entry.busy {
                 return Err(TurnError::AlreadyRunning);
             }
-
             self.acquire_busy(id)
                 .await
                 .map_err(|_| TurnError::AlreadyRunning)?;
-
             entry.busy = true;
             entry.generation += 1;
             let gen = entry.generation;
             entry.cancel = Cancellation::new();
-            let rx = entry.cancel.subscribe();
-            bind_session_cancellation(id, rx.clone());
-            return Ok((entry.session.clone(), rx, gen));
+            return Ok((entry.session.clone(), entry.cancel.clone(), gen));
         }
 
         let session = self
             .read(id)
             .await
             .ok_or_else(|| TurnError::NotFound(id.to_string()))?;
-
         self.acquire_busy(id)
             .await
             .map_err(|_| TurnError::AlreadyRunning)?;
-
         let gen = 1u64;
         let cancellation = Cancellation::new();
-        let rx = cancellation.subscribe();
-        bind_session_cancellation(id, rx.clone());
         live.insert(
             id.to_string(),
             Live {
                 session: session.clone(),
-                cancel: cancellation,
+                cancel: cancellation.clone(),
                 busy: true,
                 generation: gen,
             },
         );
-        Ok((session, rx, gen))
+        Ok((session, cancellation, gen))
     }
 
     pub async fn update_session<F>(&self, id: &str, f: F) -> Result<()>
@@ -97,10 +87,7 @@ impl Store {
             if let Some(entry) = live.get(id) {
                 if entry.generation != expected_gen {
                     tracing::warn!(session = %id, expected_gen, current_gen = entry.generation, "end_turn: tour obsolète ignoré");
-                    bail!(
-                        "tour obsolète: génération attendue {expected_gen}, courante {}",
-                        entry.generation
-                    );
+                    bail!("tour obsolète: génération attendue {expected_gen}, courante {}", entry.generation);
                 }
             }
         }
@@ -120,7 +107,6 @@ impl Store {
             entry.session = session.clone();
             entry.busy = false;
         }
-        unbind_session_cancellation(id);
         self.release_busy(id).await;
         persist_result
     }
@@ -148,7 +134,6 @@ impl Store {
         }
         live.remove(id);
         drop(live);
-        unbind_session_cancellation(id);
         self.release_busy(id).await;
         existed
     }
