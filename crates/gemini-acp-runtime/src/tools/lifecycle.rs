@@ -129,6 +129,16 @@ pub fn bind_session_cancellation(session_id: &str, receiver: watch::Receiver<boo
     map.insert(session_id.to_owned(), receiver);
 }
 
+/// Remove the receiver when the turn reaches a terminal state. Keeping the
+/// bridge bounded to active turns avoids retaining one receiver per session
+/// for the lifetime of the process.
+pub fn unbind_session_cancellation(session_id: &str) {
+    let mut map = cancellation_map()
+        .lock()
+        .expect("session cancellation mutex poisoned");
+    map.remove(session_id);
+}
+
 pub fn session_cancelled(session_id: &str) -> bool {
     let map = cancellation_map()
         .lock()
@@ -218,5 +228,7 @@ mod tests {
         tx.send(true).unwrap();
         wait_for_session_cancel("sess-test").await;
         assert!(session_cancelled("sess-test"));
+        unbind_session_cancellation("sess-test");
+        assert!(!session_cancelled("sess-test"));
     }
 }
