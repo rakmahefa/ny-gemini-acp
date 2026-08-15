@@ -85,11 +85,7 @@ pub async fn wait_for_session_cancel(session_id: &str) {
         map.get(session_id).cloned()
     };
     let Some(cancellation) = cancellation else { std::future::pending::<()>().await; return; };
-    let mut receiver = cancellation.subscribe();
-    loop {
-        if *receiver.borrow() { return; }
-        if receiver.changed().await.is_err() { return; }
-    }
+    cancellation.cancelled().await;
 }
 
 #[cfg(test)]
