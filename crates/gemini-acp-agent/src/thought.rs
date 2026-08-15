@@ -67,7 +67,21 @@ impl ThoughtStream {
         self.consume_open_marker();
 
         if let Some((idx, marker_len, keep_marker)) = find_thought_end(&self.pending) {
-            let thought = self.pending[..idx].to_owned();
+            // `pending` intentionally retains a marker lookbehind so that a
+            // marker split across deltas can be detected. That lookbehind may
+            // already have been emitted as a thought chunk on a previous feed;
+            // never emit it twice when the actual boundary is found.
+            let thought_start = if self.emitted_thought {
+                self.pending
+                    .char_indices()
+                    .nth(MARKER_LOOKBEHIND)
+                    .map(|(byte_idx, _)| byte_idx)
+                    .unwrap_or(0)
+                    .min(idx)
+            } else {
+                0
+            };
+            let thought = self.pending[thought_start..idx].to_owned();
             let message_start = if keep_marker { idx } else { idx + marker_len };
             let message = self.pending[message_start..].to_owned();
             self.pending.clear();

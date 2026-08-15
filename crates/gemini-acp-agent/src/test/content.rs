@@ -12,5 +12,8 @@ fn blocs_vers_texte_et_images() {
     assert!(text.contains("bonjour"));
     assert!(text.contains("file:///etc/hosts"));
     assert!(text.contains("image jointe"));
-    assert_eq!(images, vec![("aGVsbG8=".to_string(), "image/png".to_string())]);
+    assert_eq!(
+        images,
+        vec![("aGVsbG8=".to_string(), "image/png".to_string())]
+    );
 }

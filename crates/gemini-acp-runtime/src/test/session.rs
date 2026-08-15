@@ -9,7 +9,10 @@ fn valide_id_session() {
 
 #[test]
 fn sanitize_title_collabse_et_tronque() {
-    assert_eq!(SessionManager::sanitize_title("  hello\n   world  ").as_deref(), Some("hello world"));
+    assert_eq!(
+        SessionManager::sanitize_title("  hello\n   world  ").as_deref(),
+        Some("hello world")
+    );
     let long = "a".repeat(MAX_TITLE_LENGTH + 40);
     let title = SessionManager::sanitize_title(&long).unwrap();
     assert_eq!(title.chars().count(), MAX_TITLE_LENGTH);

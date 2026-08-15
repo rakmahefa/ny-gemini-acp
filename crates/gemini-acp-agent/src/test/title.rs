@@ -3,7 +3,10 @@ use super::*;
 #[test]
 fn derive_title_court_reste_telquel() {
     assert_eq!(derive_title("Bonjour"), "Bonjour");
-    assert_eq!(derive_title("Refactor la fonction main"), "Refactor la fonction main");
+    assert_eq!(
+        derive_title("Refactor la fonction main"),
+        "Refactor la fonction main"
+    );
 }
 
 #[test]
@@ -15,7 +18,10 @@ fn derive_title_long_est_tronque() {
 
 #[test]
 fn derive_title_multiligne_prend_premiere_ligne() {
-    assert_eq!(derive_title("Première ligne\nDeuxième ligne"), "Première ligne");
+    assert_eq!(
+        derive_title("Première ligne\nDeuxième ligne"),
+        "Première ligne"
+    );
 }
 
 #[test]

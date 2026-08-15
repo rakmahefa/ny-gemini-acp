@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::{Map, Value};
-use tokio::sync::{Notify, watch};
+use tokio::sync::{watch, Notify};
 
 const DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -50,14 +50,21 @@ impl SettingsManager {
     }
 
     pub fn settings(&self) -> Value {
-        self.effective.lock().expect("settings mutex poisoned").clone()
+        self.effective
+            .lock()
+            .expect("settings mutex poisoned")
+            .clone()
     }
 
-    pub fn cwd(&self) -> &Path { &self.cwd }
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
 
     pub async fn set_cwd(&mut self, cwd: impl Into<PathBuf>) -> Result<()> {
         let cwd = cwd.into();
-        if self.cwd == cwd { return Ok(()); }
+        if self.cwd == cwd {
+            return Ok(());
+        }
         self.dispose().await;
         self.cwd = cwd;
         self.initialize().await
@@ -70,7 +77,9 @@ impl SettingsManager {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(true);
         }
-        if let Some(task) = self.reload_task.take() { let _ = task.await; }
+        if let Some(task) = self.reload_task.take() {
+            let _ = task.await;
+        }
         let _ = self.shutdown_rx.take();
     }
 
@@ -80,7 +89,9 @@ impl SettingsManager {
             .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
             .map(|dir| dir.join("gemini-acp/settings.json"));
         let mut paths = Vec::new();
-        if let Some(path) = user_config { paths.push(path); }
+        if let Some(path) = user_config {
+            paths.push(path);
+        }
         paths.push(self.cwd.join(".gemini/settings.json"));
         paths.push(self.cwd.join(".gemini/settings.local.json"));
         paths.push(PathBuf::from("/etc/gemini-acp/managed-settings.json"));
@@ -92,7 +103,9 @@ impl SettingsManager {
         let mut current = self.effective.lock().expect("settings mutex poisoned");
         if *current != effective {
             *current = effective;
-            if let Some(callback) = &self.on_change { callback(); }
+            if let Some(callback) = &self.on_change {
+                callback();
+            }
         }
         Ok(())
     }
@@ -103,19 +116,32 @@ impl SettingsManager {
         let signal = Arc::clone(&self.reload_signal);
         let mut watcher = RecommendedWatcher::new(
             move |result: notify::Result<Event>| {
-                let Ok(event) = result else { return; };
-                if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)) { return; }
-                if event.paths.iter().any(|path| watched_names.contains(path)) { signal.notify_one(); }
+                let Ok(event) = result else {
+                    return;
+                };
+                if !matches!(
+                    event.kind,
+                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                ) {
+                    return;
+                }
+                if event.paths.iter().any(|path| watched_names.contains(path)) {
+                    signal.notify_one();
+                }
             },
             Config::default(),
         )?;
 
         let mut directories = HashSet::new();
         for path in watched {
-            if let Some(parent) = path.parent() { directories.insert(parent.to_path_buf()); }
+            if let Some(parent) = path.parent() {
+                directories.insert(parent.to_path_buf());
+            }
         }
         for directory in directories {
-            if directory.exists() { watcher.watch(&directory, RecursiveMode::NonRecursive)?; }
+            if directory.exists() {
+                watcher.watch(&directory, RecursiveMode::NonRecursive)?;
+            }
         }
         self.watcher = Some(watcher);
         Ok(())
@@ -164,7 +190,9 @@ async fn load_settings(paths: &[PathBuf]) -> Result<Value> {
                 merge_json(&mut effective, value);
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => tracing::warn!(path = %path.display(), %error, "lecture des settings impossible"),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "lecture des settings impossible")
+            }
         }
     }
     Ok(effective)
@@ -176,7 +204,9 @@ fn merge_json(base: &mut Value, overlay: Value) {
             for (key, value) in overlay {
                 match base.get_mut(&key) {
                     Some(existing) => merge_json(existing, value),
-                    None => { base.insert(key, value); }
+                    None => {
+                        base.insert(key, value);
+                    }
                 }
             }
         }
@@ -190,8 +220,12 @@ mod tests {
 
     #[test]
     fn merge_is_recursive_and_overlay_wins() {
-        let mut base = serde_json::json!({"model":"flash","permissions":{"read":true,"write":false}});
-        merge_json(&mut base, serde_json::json!({"permissions":{"write":true},"tools":true}));
+        let mut base =
+            serde_json::json!({"model":"flash","permissions":{"read":true,"write":false}});
+        merge_json(
+            &mut base,
+            serde_json::json!({"permissions":{"write":true},"tools":true}),
+        );
         assert_eq!(base["model"], "flash");
         assert_eq!(base["permissions"]["read"], true);
         assert_eq!(base["permissions"]["write"], true);
@@ -200,7 +234,10 @@ mod tests {
 
     #[tokio::test]
     async fn manager_can_initialize_without_config_files() {
-        let mut manager = SettingsManager::new("/definitely/nonexistent/gemini-acp-test", SettingsManagerOptions::default());
+        let mut manager = SettingsManager::new(
+            "/definitely/nonexistent/gemini-acp-test",
+            SettingsManagerOptions::default(),
+        );
         manager.initialize().await.expect("initialize");
         assert_eq!(manager.settings(), serde_json::json!({}));
         manager.dispose().await;

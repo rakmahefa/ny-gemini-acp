@@ -1,43 +1,28 @@
 //! Construction de l'agent ACP et câblage du transport stdio.
 //!
 //! Refactor R1 — inspiré de `glm-acp-agent/src/protocol/agent.ts` :
-//!
-//! - **Fork session** : ajout du handler `session/fork` (inspiré de
-//!   `GlmAcpAgent.unstable_forkSession`).
-//! - **Set session mode** : ajout du handler `session/set_mode` (inspiré de
-//!   `GlmAcpAgent.setSessionMode` avec les 3 modes : default, accept_edits,
-//!   bypass_permissions).
-//! - **Capabilities enrichies** : annonce `fork` et `mcpCapabilities`.
-//! - **Prompt serialization** : le handler prompt attend le prompt précédent
-//!   via `store.wait_prompt_done` avant de s'enregistrer (bug de concurrence C
-//!   — spec §4).
-//! - **Interactive tool context** : chaque tour reçoit un contexte ACP task-local
-//!   pour les outils comme `AskUserQuestion`, isolé par tâche/session.
-//!
-//! Refactor 3-crates (spec §5.2) : ce crate ne possède plus son propre
-//! `AppState` — il réutilise directement `gemini_acp_runtime::AppState`,
-//! construit par `gemini_acp_runtime::AgentRuntime::from_config`.
+//! - Fork session et set mode.
+//! - Prompt serialization via `gemini-acp-encaps::TurnManager`.
+//! - Interactive tool context isolé par tour.
+//! - AppState fourni par `gemini-acp-runtime`.
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
-
+use gemini_acp_encaps::TurnManager;
 use gemini_acp_runtime::AppState;
 
 use crate::handlers;
 use crate::prompt;
 
-/// Construit l'agent ACP et le lance sur le transport stdio.
-///
-/// Refactor R1 : ajout des handlers fork et set_mode.
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_store = state.store.clone();
     let h_client = state.client.clone();
     let h_tools = state.tools.clone();
+    let turn_manager = TurnManager::new();
 
     Agent
         .builder()
         .name("gemini-acp")
-        // initialize -------------------------------------------------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -47,7 +32,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/new ------------------------------------------------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -57,55 +41,45 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/prompt (délégué à une tâche, spec §3.1) ------------------
-        // Sérialisation des prompts (bug de concurrence C — spec §4) :
-        // 1) attendre la fin du tour précédent AVANT de s'enregistrer ;
-        // 2) enregistrer le handle AVANT le spawn (c'est le signal que le
-        //    PROCHAIN prompt attendra) — le `busy` de `begin_turn` reste le
-        //    filet de sécurité pour les prompts réellement simultanés.
+        // session/prompt : TurnManager remplace wait_prompt_done + prompt_handle.
         .on_receive_request(
             {
                 let store = h_store.clone();
                 let client = h_client.clone();
                 let tools = h_tools.clone();
+                let turn_manager = turn_manager.clone();
                 async move |req: PromptRequest, responder, cx| {
-                    let turn_cx = cx.clone();
                     let store = store.clone();
                     let client = client.clone();
                     let tools = tools.clone();
-                    let sid = req.session_id.0.clone();
+                    let turn_manager = turn_manager.clone();
+                    let turn_cx = cx.clone();
+                    let sid = req.session_id.0.to_string();
                     let session_id = req.session_id.clone();
-                    let store_for_handle = store.clone();
 
-                    // 1) Attendre la fin du tour précédent AVANT de s'enregistrer.
-                    store_for_handle.wait_prompt_done(&sid).await;
-
-                    // 2) Enregistrer le handle du tour courant AVANT le spawn :
-                    //    c'est le signal que le PROCHAIN prompt attendra.
-                    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
-                    store_for_handle.set_prompt_handle(&sid, done_rx).await;
-
-                    let _ = cx.spawn(async move {
-                        let interactive = gemini_acp_runtime::tools::interactive::InteractiveContext {
-                            cx: turn_cx.clone(),
-                            session_id,
-                        };
-                        let result = gemini_acp_runtime::tools::interactive::scope(
-                            interactive,
-                            async move {
-                                prompt::run_turn(store, tools, client, req, responder, turn_cx).await
-                            },
-                        )
-                        .await;
-                        let _ = done_tx.send(());
-                        result
-                    });
+                    turn_manager
+                        .start(sid, move |_cancellation| async move {
+                            let interactive =
+                                gemini_acp_runtime::tools::interactive::InteractiveContext {
+                                    cx: turn_cx.clone(),
+                                    session_id,
+                                };
+                            gemini_acp_runtime::tools::interactive::scope(interactive, async move {
+                                prompt::run_turn(store, tools, client, req, responder, turn_cx)
+                                    .await
+                                    .map_err(|e| {
+                                        gemini_acp_encaps::EncapsError::Task(e.to_string())
+                                    })
+                            })
+                            .await
+                        })
+                        .await
+                        .map_err(|error| anyhow::anyhow!("failed to enqueue ACP turn: {error}"))?;
                     Ok(())
                 }
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/list -----------------------------------------------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -115,7 +89,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/load (rejeu de l'historique AVANT la réponse) ------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -125,7 +98,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/resume (restauration sans rejeu) -------------------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -135,7 +107,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/delete ---------------------------------------------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -145,7 +116,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/close (annule + libère, fichier conservé) ----------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -155,7 +125,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/set_config_option (émets ConfigOptionUpdate) -------------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -165,7 +134,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/set_mode (R1: inspiré de GlmAcpAgent.setSessionMode) -----
         .on_receive_request(
             {
                 let state = state.clone();
@@ -175,7 +143,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/fork (R1: inspiré de GlmAcpAgent.unstable_forkSession) -------
         .on_receive_request(
             {
                 let state = state.clone();
@@ -185,12 +152,12 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // notification session/cancel --------------------------------------
         .on_receive_notification(
             {
                 let state = state.clone();
+                let turn_manager = turn_manager.clone();
                 async move |notif: CancelNotification, _cx| {
-                    handlers::cancel::handle(notif, &state).await
+                    handlers::cancel::handle(notif, &state, &turn_manager).await
                 }
             },
             agent_client_protocol::on_receive_notification!(),

@@ -73,13 +73,19 @@ impl CookieJar {
     fn parse_etc(input: &str) -> Result<Self> {
         let etc: Vec<EtcCookie> = serde_json::from_str(input)
             .context("cookie.json n'est pas un export EditThisCookie valide")?;
-        Ok(Self { cookies: etc.into_iter().map(Cookie::from).collect(), sapisid: None })
+        Ok(Self {
+            cookies: etc.into_iter().map(Cookie::from).collect(),
+            sapisid: None,
+        })
     }
 
     fn parse_object(input: &str) -> Result<Self> {
         let obj: ObjectCookie = serde_json::from_str(input)
             .context("format objet cookie invalide (attendu {\"cookie\", \"sapisid\"})")?;
-        Ok(Self { cookies: Self::parse_raw(&obj.cookie).cookies, sapisid: obj.sapisid })
+        Ok(Self {
+            cookies: Self::parse_raw(&obj.cookie).cookies,
+            sapisid: obj.sapisid,
+        })
     }
 
     fn parse_raw(input: &str) -> Self {
@@ -87,10 +93,18 @@ impl CookieJar {
             .split(';')
             .filter_map(|pair| {
                 let (name, value) = pair.trim().split_once('=')?;
-                Some(Cookie { name: name.trim().to_string(), value: value.trim().to_string(), domain: None, expires_at: None })
+                Some(Cookie {
+                    name: name.trim().to_string(),
+                    value: value.trim().to_string(),
+                    domain: None,
+                    expires_at: None,
+                })
             })
             .collect();
-        Self { cookies, sapisid: None }
+        Self {
+            cookies,
+            sapisid: None,
+        }
     }
 
     pub fn header(&self) -> Option<String> {
@@ -98,12 +112,23 @@ impl CookieJar {
     }
 
     fn header_at(&self, now: i64) -> Option<String> {
-        let joined = self.cookies.iter().filter(|c| c.valid(now)).map(|c| format!("{}={}", c.name, c.value)).collect::<Vec<_>>().join("; ");
+        let joined = self
+            .cookies
+            .iter()
+            .filter(|c| c.valid(now))
+            .map(|c| format!("{}={}", c.name, c.value))
+            .collect::<Vec<_>>()
+            .join("; ");
         (!joined.is_empty()).then_some(joined)
     }
 
     pub fn sapisid(&self) -> Option<&str> {
-        self.sapisid.as_deref().or_else(|| self.cookies.iter().find(|c| c.name == "SAPISID").map(|c| c.value.as_str()))
+        self.sapisid.as_deref().or_else(|| {
+            self.cookies
+                .iter()
+                .find(|c| c.name == "SAPISID")
+                .map(|c| c.value.as_str())
+        })
     }
 }
 

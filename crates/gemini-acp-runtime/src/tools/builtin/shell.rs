@@ -52,12 +52,7 @@ impl Tool for ShellExecTool {
         DEF.get_or_init(shell_def)
     }
 
-    async fn execute(
-        &self,
-        args: &Value,
-        cwd: &Path,
-        _allowed_dirs: &[PathBuf],
-    ) -> ToolResult {
+    async fn execute(&self, args: &Value, cwd: &Path, _allowed_dirs: &[PathBuf]) -> ToolResult {
         let command = match args.get("command").and_then(Value::as_str) {
             Some(value) if !value.trim().is_empty() => value,
             _ => return ToolResult::Err("paramètre 'command' manquant ou vide".into()),
@@ -98,10 +93,8 @@ impl Tool for ShellExecTool {
             Err(error) => return ToolResult::Err(format!("échec du démarrage du shell: {error}")),
         };
 
-        let execution = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            child.wait_with_output(),
-        );
+        let execution =
+            tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output());
 
         match execution.await {
             Ok(Ok(output)) => format_shell_output(&output, &analysis),
@@ -179,7 +172,9 @@ mod tests {
             .execute(&json!({"command": "echo hello"}), Path::new("/tmp"), &[])
             .await;
 
-        assert!(matches!(result, ToolResult::Ok(output) if output.contains("hello") && output.contains("exit code 0")));
+        assert!(
+            matches!(result, ToolResult::Ok(output) if output.contains("hello") && output.contains("exit code 0"))
+        );
     }
 
     #[tokio::test]

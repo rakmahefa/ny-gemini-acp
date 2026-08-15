@@ -732,6 +732,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "gemini-acp-config",
+ "gemini-acp-encaps",
  "gemini-acp-runtime",
  "regex",
  "serde",
@@ -765,6 +766,15 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "gemini-acp-encaps"
+version = "0.2.2"
+dependencies = [
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

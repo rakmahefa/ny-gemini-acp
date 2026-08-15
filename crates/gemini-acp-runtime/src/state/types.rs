@@ -1,8 +1,7 @@
 //! Types du module state : rôles, modes de session, données persistées, erreurs.
 
-use std::path::PathBuf;
-
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 use thiserror::Error;
 
 pub const MAX_SNAPSHOTS: usize = 10;
@@ -17,11 +16,6 @@ pub enum Role {
     Tool,
 }
 
-/// Mode de permission de la session.
-///
-/// En mode `default`, les outils mutatifs déclenchent une vraie requête ACP
-/// `session/request_permission` vers le client. `accept_edits` autorise les
-/// écritures et conserve une confirmation pour les commandes à risque élevé.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SessionMode {
     #[default]
@@ -35,9 +29,12 @@ pub enum SessionMode {
 
 impl SessionMode {
     pub fn all() -> &'static [SessionMode] {
-        &[SessionMode::Default, SessionMode::AcceptEdits, SessionMode::BypassPermissions]
+        &[
+            SessionMode::Default,
+            SessionMode::AcceptEdits,
+            SessionMode::BypassPermissions,
+        ]
     }
-
     pub fn from_str_lossy(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "default" => Some(Self::Default),
@@ -46,7 +43,6 @@ impl SessionMode {
             _ => None,
         }
     }
-
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Default => "Ask for permission",
@@ -54,17 +50,21 @@ impl SessionMode {
             Self::BypassPermissions => "Bypass all permissions",
         }
     }
-
     pub fn description(&self) -> &'static str {
         match self {
             Self::Default => "Ask the ACP client before edits and commands.",
-            Self::AcceptEdits => "Edits run without prompting. High-risk commands still require ACP permission.",
+            Self::AcceptEdits => {
+                "Edits run without prompting. High-risk commands still require ACP permission."
+            }
             Self::BypassPermissions => "Edits and commands run without prompting.",
         }
     }
-
-    pub fn requires_write_permission(&self) -> bool { matches!(self, Self::Default) }
-    pub fn requires_execute_permission(&self) -> bool { !matches!(self, Self::BypassPermissions) }
+    pub fn requires_write_permission(&self) -> bool {
+        matches!(self, Self::Default)
+    }
+    pub fn requires_execute_permission(&self) -> bool {
+        !matches!(self, Self::BypassPermissions)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +86,12 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(id: String, cwd: PathBuf, additional_directories: Vec<PathBuf>, model: &str) -> Self {
+    pub fn new(
+        id: String,
+        cwd: PathBuf,
+        additional_directories: Vec<PathBuf>,
+        model: &str,
+    ) -> Self {
         let now = gemini_acp_config::core::time::now_iso();
         Self {
             id,
@@ -103,7 +108,6 @@ impl Session {
             messages: Vec::new(),
         }
     }
-
     pub fn fork(&self, new_id: String) -> Self {
         let now = gemini_acp_config::core::time::now_iso();
         Self {
@@ -135,6 +139,5 @@ pub struct Live {
     pub session: Session,
     pub cancel: tokio::sync::watch::Sender<bool>,
     pub busy: bool,
-    pub prompt_handle: Option<tokio::sync::oneshot::Receiver<()>>,
     pub generation: u64,
 }

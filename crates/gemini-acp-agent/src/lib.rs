@@ -7,12 +7,12 @@
 //! consommateur de stream et primitives utilitaires).
 
 pub mod agent;
+#[cfg(feature = "elicitation")]
+pub mod elicitation;
 pub mod handlers;
 pub mod prompt;
 pub mod thought;
 pub mod utils;
-#[cfg(feature = "elicitation")]
-pub mod elicitation;
 
 pub use agent::run_agent;
 pub use utils::{sleep, Pushable};

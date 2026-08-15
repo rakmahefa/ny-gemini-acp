@@ -7,6 +7,18 @@ use gemini_acp_runtime::tools::ToolRegistry;
 pub const MAX_MESSAGES: usize = 12;
 pub const MAX_PROMPT_CHARS: usize = 32_000;
 
+fn history_prefix(role: &Role) -> &'static str {
+    match role {
+        Role::User => "[User]: ",
+        Role::Assistant => "[Assistant]: ",
+        // Tool results already carry their protocol-visible identity, e.g.
+        // `[Tool result for file_read]: ...`. Adding a generic `[Tool result]`
+        // wrapper here produces the ambiguous form `[Tool result]: [Tool result for ...]`
+        // and can cause Gemini to echo the internal representation as assistant text.
+        Role::Tool => "",
+    }
+}
+
 pub fn build_prompt(session: &Session, registry: Option<&ToolRegistry>) -> String {
     let system = persona::system_prompt(session, None);
     let tools_section = if session.tools_enabled {
@@ -19,20 +31,29 @@ pub fn build_prompt(session: &Session, registry: Option<&ToolRegistry>) -> Strin
         None => system,
     };
     let n = session.messages.len();
-    if n == 0 { return system; }
-    let lens: Vec<usize> = session.messages.iter().map(|(role, text)| {
-        let tag = match role { Role::User => "[User]", Role::Assistant => "[Assistant]", Role::Tool => "[Tool result]" };
-        tag.len() + 2 + text.chars().count() + 2
-    }).collect();
+    if n == 0 {
+        return system;
+    }
+    let lens: Vec<usize> = session
+        .messages
+        .iter()
+        .map(|(role, text)| history_prefix(role).len() + text.chars().count() + 2)
+        .collect();
     let mut prefix = vec![0usize; n + 1];
-    for i in 0..n { prefix[i + 1] = prefix[i] + lens[i]; }
+    for i in 0..n {
+        prefix[i + 1] = prefix[i] + lens[i];
+    }
     let min_start_msg = n.saturating_sub(MAX_MESSAGES);
     let budget_ok = |start: usize| prefix[n] - prefix[start] <= MAX_PROMPT_CHARS;
     let mut lo = min_start_msg;
     let mut hi = n - 1;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if budget_ok(mid) { hi = mid; } else { lo = mid + 1; }
+        if budget_ok(mid) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
     }
     format!("{system}{}", format_history(session, lo))
 }
@@ -40,9 +61,7 @@ pub fn build_prompt(session: &Session, registry: Option<&ToolRegistry>) -> Strin
 fn format_history(session: &Session, start: usize) -> String {
     let mut out = String::new();
     for (role, text) in session.messages.iter().skip(start) {
-        let tag = match role { Role::User => "[User]", Role::Assistant => "[Assistant]", Role::Tool => "[Tool result]" };
-        out.push_str(tag);
-        out.push_str(": ");
+        out.push_str(history_prefix(role));
         out.push_str(text);
         out.push_str("\n\n");
     }

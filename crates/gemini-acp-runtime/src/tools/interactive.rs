@@ -118,7 +118,9 @@ impl Tool for AskUserQuestionTool {
     async fn execute(&self, args: &Value, _cwd: &Path, _allowed_dirs: &[PathBuf]) -> ToolResult {
         let input: AskUserInput = match serde_json::from_value(args.clone()) {
             Ok(input) => input,
-            Err(error) => return ToolResult::Err(format!("invalid AskUserQuestion input: {error}")),
+            Err(error) => {
+                return ToolResult::Err(format!("invalid AskUserQuestion input: {error}"))
+            }
         };
 
         if input.questions.is_empty() {
@@ -126,7 +128,9 @@ impl Tool for AskUserQuestionTool {
         }
 
         let Some(context) = current_context() else {
-            return ToolResult::Err("AskUserQuestion is unavailable outside an ACP prompt turn.".to_string());
+            return ToolResult::Err(
+                "AskUserQuestion is unavailable outside an ACP prompt turn.".to_string(),
+            );
         };
 
         match request_user_input(&context.cx, &context.session_id, input.questions).await {
@@ -226,8 +230,10 @@ fn build_question_properties(
             })
         };
 
-        let property: ElicitationPropertySchema = serde_json::from_value(property_json)
-            .map_err(|error| format!("invalid ACP elicitation schema for question {index}: {error}"))?;
+        let property: ElicitationPropertySchema =
+            serde_json::from_value(property_json).map_err(|error| {
+                format!("invalid ACP elicitation schema for question {index}: {error}")
+            })?;
         properties.insert(format!("question_{index}"), property);
 
         let custom: ElicitationPropertySchema = serde_json::from_value(json!({
@@ -258,7 +264,10 @@ fn fold_answers(
         if let Some(ElicitationContentValue::String(custom)) = content.get(&custom_key) {
             let trimmed = custom.trim();
             if !trimmed.is_empty() {
-                answers.insert(question.question.clone(), Value::String(trimmed.to_string()));
+                answers.insert(
+                    question.question.clone(),
+                    Value::String(trimmed.to_string()),
+                );
                 continue;
             }
         }

@@ -3,7 +3,15 @@ use super::*;
 #[test]
 fn resolution_normale() {
     let r = resolve("gemini-3.6-flash", DEFAULT_MODEL).unwrap();
-    assert_eq!(r, Resolved { name: "gemini-3.6-flash".into(), mode: 1, think: 4, extra: None });
+    assert_eq!(
+        r,
+        Resolved {
+            name: "gemini-3.6-flash".into(),
+            mode: 1,
+            think: 4,
+            extra: None
+        }
+    );
 }
 
 #[test]

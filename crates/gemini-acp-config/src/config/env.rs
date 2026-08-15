@@ -44,6 +44,7 @@ mod tests {
 
     #[test]
     fn data_dir_default_avec_env_var() {
+        let _env_lock = super::super::TEST_ENV_LOCK.lock().unwrap();
         // Q14 : test réellement la variable d'environnement cette fois.
         // On sauvegarde la valeur précédente pour ne pas polluer les autres
         // tests, puis on définit GEMINI_ACP_DATA_DIR, on appelle la fonction,
@@ -52,7 +53,6 @@ mod tests {
         std::env::set_var("GEMINI_ACP_DATA_DIR", "/tmp/test-data-dir-q14");
         let dir = data_dir_default();
         assert_eq!(dir, PathBuf::from("/tmp/test-data-dir-q14"));
-        // Restaure l'état précédent.
         match prev {
             Some(v) => std::env::set_var("GEMINI_ACP_DATA_DIR", v),
             None => std::env::remove_var("GEMINI_ACP_DATA_DIR"),

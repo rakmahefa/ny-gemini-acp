@@ -3,16 +3,14 @@
 //! Décode l'image base64, initie l'upload, pousse les octets et retourne
 //! la référence (`/generated/…`) à placer dans `inner[0][3]` du payload.
 
-use anyhow::{bail, Context};
-use base64::Engine;
 use crate::core::auth::sapisid_hash;
 use crate::core::cookies::CookieJar;
+use anyhow::{bail, Context};
+use base64::Engine;
 use reqwest::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use tracing::debug;
 
-use super::config::{
-    DEFAULT_PCTX, DEFAULT_PUSH_ID, MAX_IMAGE_B64, UPLOAD_ENDPOINT, UPLOAD_HOST,
-};
+use super::config::{DEFAULT_PCTX, DEFAULT_PUSH_ID, MAX_IMAGE_B64, UPLOAD_ENDPOINT, UPLOAD_HOST};
 use super::Client;
 
 impl Client {

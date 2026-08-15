@@ -7,10 +7,9 @@
 //! like a completed tool execution.
 
 use agent_client_protocol::schema::v1::{
-    Content, ContentBlock, PermissionOption, PermissionOptionKind,
-    RequestPermissionOutcome, RequestPermissionRequest, SessionId,
-    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus,
-    ToolCallUpdate, ToolKind,
+    Content, ContentBlock, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionRequest, SessionId, TextContent, ToolCall, ToolCallContent, ToolCallId,
+    ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::json;
@@ -30,45 +29,60 @@ pub async fn request_action(
     query: &str,
 ) -> Result<Option<String>, String> {
     let call_id = ToolCallId::from(format!("followup_{}", uuid::Uuid::new_v4().simple()));
-    let body = format!("**{}**\n\n{}\n\nChoisissez cette action pour envoyer la proposition au modèle.", label, query);
-    let content = vec![ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(body))))];
+    let body = format!(
+        "**{}**\n\n{}\n\nChoisissez cette action pour envoyer la proposition au modèle.",
+        label, query
+    );
+    let content = vec![ToolCallContent::Content(Content::new(ContentBlock::Text(
+        TextContent::new(body),
+    )))];
 
-    let tool_call = ToolCall::new(call_id.clone(), format!("Follow-up · {}", truncate(label, 80)))
-        .kind(ToolKind::Other)
-        .status(ToolCallStatus::Pending)
-        .content(content)
-        .raw_input(json!({
-            "label": label,
-            "query": query,
-        }))
-        .meta(json!({
+    let tool_call = ToolCall::new(
+        call_id.clone(),
+        format!("Follow-up · {}", truncate(label, 80)),
+    )
+    .kind(ToolKind::Other)
+    .status(ToolCallStatus::Pending)
+    .content(content)
+    .raw_input(json!({
+        "label": label,
+        "query": query,
+    }))
+    .meta(
+        json!({
             "geminiAcp": {
                 "nonExecutionKind": "follow_up_action",
                 "ui": "choice",
                 "label": label,
                 "query": query,
             }
-        }).as_object().cloned().unwrap());
+        })
+        .as_object()
+        .cloned()
+        .unwrap(),
+    );
 
     let options = vec![
         PermissionOption::new(SELECT_ID, label, PermissionOptionKind::AllowOnce),
         PermissionOption::new(SKIP_ID, "Ignorer", PermissionOptionKind::RejectOnce),
     ];
 
-    let request = RequestPermissionRequest::new(
-        session_id.clone(),
-        ToolCallUpdate::from(tool_call),
-        options,
-    )
-    .meta(json!({
-        "geminiAcp": {
-            "kind": "follow_up",
-            "action": "prompt",
-            "label": label,
-            "query": query,
-            "singleUse": true,
-        }
-    }).as_object().cloned().unwrap());
+    let request =
+        RequestPermissionRequest::new(session_id.clone(), ToolCallUpdate::from(tool_call), options)
+            .meta(
+                json!({
+                    "geminiAcp": {
+                        "kind": "follow_up",
+                        "action": "prompt",
+                        "label": label,
+                        "query": query,
+                        "singleUse": true,
+                    }
+                })
+                .as_object()
+                .cloned()
+                .unwrap(),
+            );
 
     let response = cx
         .send_request(request)
@@ -77,10 +91,14 @@ pub async fn request_action(
         .map_err(|error| format!("ACP FollowUp action failed: {error}"))?;
 
     match response.outcome {
-        RequestPermissionOutcome::Selected(selected) if selected.option_id.0 == SELECT_ID.into() => {
+        RequestPermissionOutcome::Selected(selected)
+            if selected.option_id.0 == SELECT_ID.into() =>
+        {
             Ok(Some(query.to_owned()))
         }
-        RequestPermissionOutcome::Selected(selected) if selected.option_id.0 == SKIP_ID.into() => Ok(None),
+        RequestPermissionOutcome::Selected(selected) if selected.option_id.0 == SKIP_ID.into() => {
+            Ok(None)
+        }
         RequestPermissionOutcome::Cancelled => Ok(None),
         other => Err(format!("unexpected FollowUp permission outcome: {other:?}")),
     }
@@ -97,7 +115,9 @@ impl StreamNormalizer {
         self.drain(false)
     }
 
-    pub fn finish(&mut self) -> String { self.drain(true) }
+    pub fn finish(&mut self) -> String {
+        self.drain(true)
+    }
 
     fn drain(&mut self, final_flush: bool) -> String {
         let mut out = String::new();
@@ -137,7 +157,9 @@ impl StreamNormalizer {
 
 /// FollowUp is parsed by the runtime parser. Keep this helper for the existing
 /// turn orchestration API; it intentionally performs no UI transformation.
-pub fn replace_components(input: &str) -> String { input.to_owned() }
+pub fn replace_components(input: &str) -> String {
+    input.to_owned()
+}
 
 fn partial_marker_len(input: &str) -> usize {
     let marker = FOLLOW_UP_MARKER.as_bytes();
@@ -166,7 +188,9 @@ fn find_tag_end(input: &str) -> Option<usize> {
 }
 
 fn truncate(value: &str, max: usize) -> String {
-    if value.chars().count() <= max { return value.to_owned(); }
+    if value.chars().count() <= max {
+        return value.to_owned();
+    }
     format!("{}…", value.chars().take(max).collect::<String>())
 }
 
@@ -183,7 +207,10 @@ mod tests {
     #[test]
     fn removes_complete_follow_up_from_stream() {
         let mut normalizer = StreamNormalizer::default();
-        assert_eq!(normalizer.push("hello <FollowUp label=\"Run tests\" query=\"cargo test\" />"), "hello ");
+        assert_eq!(
+            normalizer.push("hello <FollowUp label=\"Run tests\" query=\"cargo test\" />"),
+            "hello "
+        );
         assert_eq!(normalizer.finish(), "");
     }
 
@@ -201,7 +228,10 @@ mod tests {
     #[test]
     fn does_not_stop_at_gt_inside_quotes() {
         let mut normalizer = StreamNormalizer::default();
-        assert_eq!(normalizer.push("hello <FollowUp label=\"A > B\" query=\"cargo test\" /> world"), "hello  world");
+        assert_eq!(
+            normalizer.push("hello <FollowUp label=\"A > B\" query=\"cargo test\" /> world"),
+            "hello  world"
+        );
     }
 
     #[test]

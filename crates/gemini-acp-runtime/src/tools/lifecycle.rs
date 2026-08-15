@@ -6,13 +6,23 @@
 //! reason in `_meta`.
 
 use std::collections::HashMap;
-use std::sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex, OnceLock,
+};
 
 use agent_client_protocol::schema::v1::ToolCallStatus;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolLifecycleState { Pending, Permission, Executing, Completed, Failed, Cancelled }
+pub enum ToolLifecycleState {
+    Pending,
+    Permission,
+    Executing,
+    Completed,
+    Failed,
+    Cancelled,
+}
 
 impl ToolLifecycleState {
     pub const fn wire_status(self) -> ToolCallStatus {
@@ -31,38 +41,74 @@ impl ToolLifecycleState {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum LifecycleError {
     #[error("invalid tool lifecycle transition: {from:?} -> {to:?}")]
-    InvalidTransition { from: ToolLifecycleState, to: ToolLifecycleState },
+    InvalidTransition {
+        from: ToolLifecycleState,
+        to: ToolLifecycleState,
+    },
     #[error("tool lifecycle is already terminal: {0:?}")]
     AlreadyTerminal(ToolLifecycleState),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolLifecycle { state: ToolLifecycleState, sequence: u64 }
+pub struct ToolLifecycle {
+    state: ToolLifecycleState,
+    sequence: u64,
+}
 
-impl Default for ToolLifecycle { fn default() -> Self { Self::new() } }
+impl Default for ToolLifecycle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ToolLifecycle {
-    pub const fn new() -> Self { Self { state: ToolLifecycleState::Pending, sequence: 0 } }
-    pub const fn state(&self) -> ToolLifecycleState { self.state }
-    pub const fn sequence(&self) -> u64 { self.sequence }
+    pub const fn new() -> Self {
+        Self {
+            state: ToolLifecycleState::Pending,
+            sequence: 0,
+        }
+    }
+    pub const fn state(&self) -> ToolLifecycleState {
+        self.state
+    }
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
     pub fn transition(&mut self, next: ToolLifecycleState) -> Result<(), LifecycleError> {
-        if self.state.is_terminal() { return Err(LifecycleError::AlreadyTerminal(self.state)); }
-        let allowed = matches!((self.state, next),
+        if self.state.is_terminal() {
+            return Err(LifecycleError::AlreadyTerminal(self.state));
+        }
+        let allowed = matches!(
+            (self.state, next),
             (ToolLifecycleState::Pending, ToolLifecycleState::Permission)
-            | (ToolLifecycleState::Pending, ToolLifecycleState::Executing)
-            | (ToolLifecycleState::Pending, ToolLifecycleState::Cancelled)
-            | (ToolLifecycleState::Permission, ToolLifecycleState::Executing)
-            | (ToolLifecycleState::Permission, ToolLifecycleState::Failed)
-            | (ToolLifecycleState::Permission, ToolLifecycleState::Cancelled)
-            | (ToolLifecycleState::Executing, ToolLifecycleState::Completed)
-            | (ToolLifecycleState::Executing, ToolLifecycleState::Failed)
-            | (ToolLifecycleState::Executing, ToolLifecycleState::Cancelled));
-        if !allowed { return Err(LifecycleError::InvalidTransition { from: self.state, to: next }); }
+                | (ToolLifecycleState::Pending, ToolLifecycleState::Executing)
+                | (ToolLifecycleState::Pending, ToolLifecycleState::Cancelled)
+                | (
+                    ToolLifecycleState::Permission,
+                    ToolLifecycleState::Executing
+                )
+                | (ToolLifecycleState::Permission, ToolLifecycleState::Failed)
+                | (
+                    ToolLifecycleState::Permission,
+                    ToolLifecycleState::Cancelled
+                )
+                | (ToolLifecycleState::Executing, ToolLifecycleState::Completed)
+                | (ToolLifecycleState::Executing, ToolLifecycleState::Failed)
+                | (ToolLifecycleState::Executing, ToolLifecycleState::Cancelled)
+        );
+        if !allowed {
+            return Err(LifecycleError::InvalidTransition {
+                from: self.state,
+                to: next,
+            });
+        }
         self.state = next;
         self.sequence = self.sequence.saturating_add(1);
         Ok(())
     }
-    pub fn cancel(&mut self) -> Result<(), LifecycleError> { self.transition(ToolLifecycleState::Cancelled) }
+    pub fn cancel(&mut self) -> Result<(), LifecycleError> {
+        self.transition(ToolLifecycleState::Cancelled)
+    }
 }
 
 type SessionCancellationMap = HashMap<String, Arc<AtomicBool>>;
@@ -74,28 +120,42 @@ fn cancellation_map() -> &'static Mutex<SessionCancellationMap> {
 
 pub fn reset_session_cancellation(session_id: &str) {
     let flag = {
-        let mut map = cancellation_map().lock().expect("session cancellation mutex poisoned");
-        map.entry(session_id.to_owned()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone()
+        let mut map = cancellation_map()
+            .lock()
+            .expect("session cancellation mutex poisoned");
+        map.entry(session_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
     };
     flag.store(false, Ordering::Release);
 }
 
 pub fn cancel_session(session_id: &str) {
     let flag = {
-        let mut map = cancellation_map().lock().expect("session cancellation mutex poisoned");
-        map.entry(session_id.to_owned()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone()
+        let mut map = cancellation_map()
+            .lock()
+            .expect("session cancellation mutex poisoned");
+        map.entry(session_id.to_owned())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
     };
     flag.store(true, Ordering::Release);
 }
 
 pub fn session_cancelled(session_id: &str) -> bool {
-    let map = cancellation_map().lock().expect("session cancellation mutex poisoned");
-    map.get(session_id).map(|flag| flag.load(Ordering::Acquire)).unwrap_or(false)
+    let map = cancellation_map()
+        .lock()
+        .expect("session cancellation mutex poisoned");
+    map.get(session_id)
+        .map(|flag| flag.load(Ordering::Acquire))
+        .unwrap_or(false)
 }
 
 pub async fn wait_for_session_cancel(session_id: &str) {
     loop {
-        if session_cancelled(session_id) { return; }
+        if session_cancelled(session_id) {
+            return;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
@@ -106,7 +166,9 @@ mod tests {
     #[test]
     fn lifecycle_is_strict() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
+        lifecycle
+            .transition(ToolLifecycleState::Permission)
+            .unwrap();
         lifecycle.transition(ToolLifecycleState::Executing).unwrap();
         lifecycle.transition(ToolLifecycleState::Completed).unwrap();
         assert_eq!(lifecycle.sequence(), 3);
@@ -122,7 +184,9 @@ mod tests {
     #[test]
     fn cancellation_is_wire_compatible() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
+        lifecycle
+            .transition(ToolLifecycleState::Permission)
+            .unwrap();
         lifecycle.cancel().unwrap();
         assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
     }
@@ -130,9 +194,15 @@ mod tests {
     fn illegal_backtracking_is_rejected() {
         let mut lifecycle = ToolLifecycle::new();
         lifecycle.transition(ToolLifecycleState::Executing).unwrap();
-        assert!(matches!(lifecycle.transition(ToolLifecycleState::Pending), Err(LifecycleError::InvalidTransition { .. })));
+        assert!(matches!(
+            lifecycle.transition(ToolLifecycleState::Pending),
+            Err(LifecycleError::InvalidTransition { .. })
+        ));
         lifecycle.transition(ToolLifecycleState::Failed).unwrap();
-        assert!(matches!(lifecycle.transition(ToolLifecycleState::Completed), Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Failed))));
+        assert!(matches!(
+            lifecycle.transition(ToolLifecycleState::Completed),
+            Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Failed))
+        ));
     }
     #[test]
     fn session_cancellation_is_resettable() {

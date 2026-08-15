@@ -50,25 +50,51 @@ impl Persona {
     }
 
     fn constraints(&self) -> &'static [&'static str] {
-        const CODING: &[&str] = &["Ne jamais inventer de fichiers ou de chemins qui n'existent pas.", "Vérifie les erreurs de compilation si possible.", "Préfère les bibliothèques standards du langage."];
-        const CREATIVE: &[&str] = &["Structure les réponses longues avec des titres et sections.", "Inclus des exemples concrets et des cas d'usage."];
-        const CONCISE: &[&str] = &["Pas de salutations, pas de conclusions.", "Code commenté uniquement pour les parties non évidentes."];
-        match self { Persona::Coding => CODING, Persona::Creative => CREATIVE, Persona::Concise => CONCISE }
+        const CODING: &[&str] = &[
+            "Ne jamais inventer de fichiers ou de chemins qui n'existent pas.",
+            "Vérifie les erreurs de compilation si possible.",
+            "Préfère les bibliothèques standards du langage.",
+        ];
+        const CREATIVE: &[&str] = &[
+            "Structure les réponses longues avec des titres et sections.",
+            "Inclus des exemples concrets et des cas d'usage.",
+        ];
+        const CONCISE: &[&str] = &[
+            "Pas de salutations, pas de conclusions.",
+            "Code commenté uniquement pour les parties non évidentes.",
+        ];
+        match self {
+            Persona::Coding => CODING,
+            Persona::Creative => CREATIVE,
+            Persona::Concise => CONCISE,
+        }
     }
 }
 
 pub fn system_prompt(session: &Session, persona: Option<Persona>) -> String {
     let p = persona.unwrap_or_default();
     let mut system = String::with_capacity(1800);
-    system.push_str(&format!("[System instruction]: tu es un assistant {} intégré à Zed.\n", p.display_name().to_ascii_lowercase()));
+    system.push_str(&format!(
+        "[System instruction]: tu es un assistant {} intégré à Zed.\n",
+        p.display_name().to_ascii_lowercase()
+    ));
     system.push_str(&format!("CWD: {}\n", session.cwd.display()));
     if !session.additional_directories.is_empty() {
-        let roots = session.additional_directories.iter().map(|d| d.display().to_string()).collect::<Vec<_>>().join(", ");
+        let roots = session
+            .additional_directories
+            .iter()
+            .map(|d| d.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         system.push_str(&format!("Racines additionnelles: {roots}\n"));
     }
     system.push_str(p.core_instruction());
     system.push_str("\n\n");
-    for constraint in p.constraints() { system.push_str("- "); system.push_str(constraint); system.push('\n'); }
+    for constraint in p.constraints() {
+        system.push_str("- ");
+        system.push_str(constraint);
+        system.push('\n');
+    }
     system.push_str("\
 - Le code doit être complet et exécutable.\n\
 - Utilise les outils (file_read, file_write, shell_exec, search, glob, list_directory) pour explorer le projet.\n\

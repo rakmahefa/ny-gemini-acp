@@ -25,13 +25,41 @@ pub struct Model {
 
 fn table(key: &str) -> Option<Model> {
     Some(match key {
-        "gemini-3.6-flash" | "gemini-3.5-flash" => Model { mode: 1, think: 4, extra: None },
-        "gemini-3.5-flash-thinking" => Model { mode: 2, think: 0, extra: None },
-        "gemini-3.1-pro" => Model { mode: 3, think: 4, extra: None },
-        "gemini-3.1-pro-enhanced" => Model { mode: 3, think: 4, extra: Some(vec![(31, 2), (80, 3)]) },
-        "gemini-auto" => Model { mode: 4, think: 4, extra: None },
-        "gemini-3.5-flash-thinking-lite" => Model { mode: 5, think: 0, extra: None },
-        "gemini-flash-lite" => Model { mode: 6, think: 4, extra: None },
+        "gemini-3.6-flash" | "gemini-3.5-flash" => Model {
+            mode: 1,
+            think: 4,
+            extra: None,
+        },
+        "gemini-3.5-flash-thinking" => Model {
+            mode: 2,
+            think: 0,
+            extra: None,
+        },
+        "gemini-3.1-pro" => Model {
+            mode: 3,
+            think: 4,
+            extra: None,
+        },
+        "gemini-3.1-pro-enhanced" => Model {
+            mode: 3,
+            think: 4,
+            extra: Some(vec![(31, 2), (80, 3)]),
+        },
+        "gemini-auto" => Model {
+            mode: 4,
+            think: 4,
+            extra: None,
+        },
+        "gemini-3.5-flash-thinking-lite" => Model {
+            mode: 5,
+            think: 0,
+            extra: None,
+        },
+        "gemini-flash-lite" => Model {
+            mode: 6,
+            think: 4,
+            extra: None,
+        },
         _ => return None,
     })
 }
@@ -49,13 +77,20 @@ pub fn resolve(model: &str, default: &str) -> Result<Resolved, String> {
     let mut think_override = None;
     let count = name.matches("@think=").count();
     if count > 1 {
-        return Err(format!("Multiple @think= suffixes in model name '{name}' (expected at most one)"));
+        return Err(format!(
+            "Multiple @think= suffixes in model name '{name}' (expected at most one)"
+        ));
     }
     if let Some(idx) = name.find("@think=") {
         let level = &name[idx + "@think=".len()..];
-        let parsed = level.parse::<u32>().map_err(|_| format!("Invalid think level: {level}"))?;
+        let parsed = level
+            .parse::<u32>()
+            .map_err(|_| format!("Invalid think level: {level}"))?;
         if parsed > 4 {
-            tracing::warn!(requested = parsed, "@think={level} depasse le max (4), borne a 4");
+            tracing::warn!(
+                requested = parsed,
+                "@think={level} depasse le max (4), borne a 4"
+            );
         }
         think_override = Some(parsed.min(4));
         name = &name[..idx];
@@ -68,7 +103,12 @@ pub fn resolve(model: &str, default: &str) -> Result<Resolved, String> {
             table(default).expect("default model doit exister dans la table")
         }
     };
-    Ok(Resolved { name: name.to_string(), mode: cfg.mode, think: think_override.unwrap_or(cfg.think), extra: cfg.extra })
+    Ok(Resolved {
+        name: name.to_string(),
+        mode: cfg.mode,
+        think: think_override.unwrap_or(cfg.think),
+        extra: cfg.extra,
+    })
 }
 
 pub fn is_thinking_mode(mode: u32) -> bool {

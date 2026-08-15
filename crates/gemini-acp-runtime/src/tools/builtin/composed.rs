@@ -7,7 +7,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::{file::{FileEditTool, FileReadTool}, search::SearchTool};
+use super::{
+    file::{FileEditTool, FileReadTool},
+    search::SearchTool,
+};
 use crate::tools::registry::{Tool, ToolDef, ToolResult};
 
 fn search_and_read_params() -> Value {
@@ -38,12 +41,24 @@ impl Tool for SearchAndReadTool {
     }
 
     async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
-        let pattern = match args.get("pattern").and_then(Value::as_str).filter(|v| !v.is_empty()) {
+        let pattern = match args
+            .get("pattern")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+        {
             Some(value) => value,
             None => return ToolResult::Err("paramètre 'pattern' manquant ou vide".into()),
         };
-        let context = args.get("context").and_then(Value::as_u64).unwrap_or(2).min(20) as usize;
-        let max_matches = args.get("max_matches").and_then(Value::as_u64).unwrap_or(20).clamp(1, 100) as usize;
+        let context = args
+            .get("context")
+            .and_then(Value::as_u64)
+            .unwrap_or(2)
+            .min(20) as usize;
+        let max_matches = args
+            .get("max_matches")
+            .and_then(Value::as_u64)
+            .unwrap_or(20)
+            .clamp(1, 100) as usize;
         let search_args = json!({
             "pattern": pattern,
             "path": args.get("path").and_then(Value::as_str).unwrap_or(""),
@@ -57,10 +72,18 @@ impl Tool for SearchAndReadTool {
         let mut output = String::new();
         let mut count = 0usize;
         for line in matches.lines() {
-            if line.starts_with('(') || line.starts_with('…') || line.trim().is_empty() { continue; }
-            let Some((path, rest)) = line.split_once(':') else { continue };
-            let Ok(line_no) = rest.split(':').next().unwrap_or("").parse::<usize>() else { continue };
-            if count >= max_matches { break; }
+            if line.starts_with('(') || line.starts_with('…') || line.trim().is_empty() {
+                continue;
+            }
+            let Some((path, rest)) = line.split_once(':') else {
+                continue;
+            };
+            let Ok(line_no) = rest.split(':').next().unwrap_or("").parse::<usize>() else {
+                continue;
+            };
+            if count >= max_matches {
+                break;
+            }
             let read_args = json!({"path": path, "offset": line_no.saturating_sub(context).max(1), "limit": context * 2 + 1});
             let excerpt = match FileReadTool.execute(&read_args, cwd, allowed_dirs).await {
                 ToolResult::Ok(value) => value,
@@ -69,7 +92,11 @@ impl Tool for SearchAndReadTool {
             output.push_str(&format!("## {path}:{line_no}\n{excerpt}\n\n"));
             count += 1;
         }
-        if output.is_empty() { ToolResult::Ok("Aucun extrait correspondant.".into()) } else { ToolResult::Ok(output) }
+        if output.is_empty() {
+            ToolResult::Ok("Aucun extrait correspondant.".into())
+        } else {
+            ToolResult::Ok(output)
+        }
     }
 }
 
@@ -87,7 +114,12 @@ fn replace_in_file_params() -> Value {
 }
 
 fn replace_in_file_def() -> ToolDef {
-    ToolDef { name: "replace_in_file", description: "Composeur d'édition: délègue à file_edit sans dupliquer sa logique de sécurité.", parameters_fn: replace_in_file_params }
+    ToolDef {
+        name: "replace_in_file",
+        description:
+            "Composeur d'édition: délègue à file_edit sans dupliquer sa logique de sécurité.",
+        parameters_fn: replace_in_file_params,
+    }
 }
 
 pub struct ReplaceInFileTool;
@@ -110,11 +142,18 @@ mod tests {
 
     #[tokio::test]
     async fn replace_delegates_to_file_edit() {
-        let dir = std::env::temp_dir().join(format!("acp-composed-{}", uuid::Uuid::new_v4().simple()));
+        let dir =
+            std::env::temp_dir().join(format!("acp-composed-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let path = dir.join("test.txt");
         tokio::fs::write(&path, "hello world").await.unwrap();
-        let result = ReplaceInFileTool.execute(&json!({"path":"test.txt","old_string":"world","new_string":"rust"}), &dir, &[]).await;
+        let result = ReplaceInFileTool
+            .execute(
+                &json!({"path":"test.txt","old_string":"world","new_string":"rust"}),
+                &dir,
+                &[],
+            )
+            .await;
         assert!(result.is_ok());
         assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "hello rust");
         let _ = tokio::fs::remove_dir_all(dir).await;

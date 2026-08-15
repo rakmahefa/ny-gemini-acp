@@ -20,6 +20,7 @@ path = "src/bin/snapshot.rs"
 [dependencies]
 gemini-acp-config = { path = "../gemini-acp-config" }
 gemini-acp-runtime = { path = "../gemini-acp-runtime" }
+gemini-acp-encaps = { path = "../gemini-acp-encaps" }
 agent-client-protocol = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

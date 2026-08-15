@@ -18,9 +18,10 @@ pub enum ToolCallKind {
 }
 
 /// The internal lifecycle state of a tool call request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallState {
+    #[default]
     Pending,
     WaitingForUser,
     Executing,
@@ -38,7 +39,10 @@ impl ToolCallState {
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum ToolCallRequestError {
     #[error("invalid tool call state transition: {from:?} -> {to:?}")]
-    InvalidTransition { from: ToolCallState, to: ToolCallState },
+    InvalidTransition {
+        from: ToolCallState,
+        to: ToolCallState,
+    },
     #[error("tool call request is already terminal: {0:?}")]
     AlreadyTerminal(ToolCallState),
 }
@@ -70,19 +74,11 @@ impl ToolCallRequest {
         }
     }
 
-    pub fn tool(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        arguments: Value,
-    ) -> Self {
+    pub fn tool(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self::new(id, name, arguments, ToolCallKind::Tool)
     }
 
-    pub fn elicitation(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        arguments: Value,
-    ) -> Self {
+    pub fn elicitation(id: impl Into<String>, name: impl Into<String>, arguments: Value) -> Self {
         Self::new(id, name, arguments, ToolCallKind::Elicitation)
     }
 
@@ -124,12 +120,6 @@ impl ToolCallRequest {
     }
 }
 
-impl Default for ToolCallState {
-    fn default() -> Self {
-        Self::Pending
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,7 +137,11 @@ mod tests {
 
     #[test]
     fn elicitation_can_wait_for_user_before_execution() {
-        let mut request = ToolCallRequest::elicitation("ask-1", "AskUserQuestion", json!({"question": "Continue?"}));
+        let mut request = ToolCallRequest::elicitation(
+            "ask-1",
+            "AskUserQuestion",
+            json!({"question": "Continue?"}),
+        );
         request.transition(ToolCallState::WaitingForUser).unwrap();
         request.transition(ToolCallState::Executing).unwrap();
         request.transition(ToolCallState::Completed).unwrap();
@@ -174,7 +168,9 @@ mod tests {
         assert_eq!(request.state, ToolCallState::Cancelled);
         assert!(matches!(
             request.transition(ToolCallState::Executing),
-            Err(ToolCallRequestError::AlreadyTerminal(ToolCallState::Cancelled))
+            Err(ToolCallRequestError::AlreadyTerminal(
+                ToolCallState::Cancelled
+            ))
         ));
     }
 

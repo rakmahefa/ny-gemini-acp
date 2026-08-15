@@ -8,6 +8,7 @@
 //! - [`registry`]  : trait `Tool`, `ToolDef`, `ToolRegistry`, `ToolResult`.
 //! - [`parse`]     : extraction des blocs `tool_call` depuis la réponse Gemini.
 //! - [`prompt`]    : injection `# Tool Use` dans le prompt + formatage historique.
+//! - [`tool_history`] : sérialisation sûre des résultats arbitraires d'outils.
 //! - [`sandbox`]   : validation de sécurité (path traversal, shell sandbox).
 //! - [`builtin`]   : outils intégrés.
 //! - [`interactive`] : outils qui utilisent directement les capacités interactives ACP.
@@ -21,6 +22,7 @@ pub mod prompt;
 pub mod registry;
 pub mod request;
 pub mod sandbox;
+pub mod tool_history;
 pub mod tool_ux;
 
 pub use lifecycle::{LifecycleError, ToolLifecycle, ToolLifecycleState};
