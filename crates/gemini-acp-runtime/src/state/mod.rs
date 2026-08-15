@@ -55,17 +55,21 @@ impl Store {
     pub async fn end_turn(&self, id: &str, mut session: Session, expected_gen: u64) -> Result<()> {
         if expected_gen != 0 {
             let live = self.live.read().await;
-            if let Some(entry) = live.get(id) && entry.generation != expected_gen {
-                tracing::warn!(session = %id, expected_gen, current_gen = entry.generation, "end_turn: tour obsolète ignoré");
-                bail!("tour obsolète: génération attendue {expected_gen}, courante {}", entry.generation);
+            if let Some(entry) = live.get(id) {
+                if entry.generation != expected_gen {
+                    tracing::warn!(session = %id, expected_gen, current_gen = entry.generation, "end_turn: tour obsolète ignoré");
+                    bail!("tour obsolète: génération attendue {expected_gen}, courante {}", entry.generation);
+                }
             }
         }
         session.updated_at = gemini_acp_config::core::time::now_iso();
         session.turn_count += 1;
-        if let Some(current) = self.get(id).await && !current.messages.is_empty() {
-            let snap_n = current.messages.len();
-            if let Ok(raw) = serde_json::to_string_pretty(&current) { let _ = tokio::fs::write(self.snapshot_path(id, snap_n), &raw).await; }
-            self.prune_snapshots(id, MAX_SNAPSHOTS).await;
+        if let Some(current) = self.get(id).await {
+            if !current.messages.is_empty() {
+                let snap_n = current.messages.len();
+                if let Ok(raw) = serde_json::to_string_pretty(&current) { let _ = tokio::fs::write(self.snapshot_path(id, snap_n), &raw).await; }
+                self.prune_snapshots(id, MAX_SNAPSHOTS).await;
+            }
         }
         let persist_result = self.persist(&session).await;
         if let Some(entry) = self.live.write().await.get_mut(id) { entry.session = session.clone(); entry.busy = false; }
