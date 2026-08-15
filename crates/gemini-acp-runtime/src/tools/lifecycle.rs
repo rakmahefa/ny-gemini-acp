@@ -4,15 +4,17 @@
 //! We therefore keep `Permission` and `Cancelled` as internal states and
 //! project them onto the stable ACP statuses while carrying the semantic
 //! reason in `_meta`.
+//!
+//! Session cancellation is owned by `gemini-acp-encaps::Cancellation`.
+//! This module only keeps a short-lived receiver bridge for the existing tool
+//! executor API; it does not create or mutate a second cancellation source.
 
 use std::collections::HashMap;
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc, Mutex, OnceLock,
-};
+use std::sync::{Mutex, OnceLock};
 
 use agent_client_protocol::schema::v1::ToolCallStatus;
 use thiserror::Error;
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolLifecycleState {
@@ -111,58 +113,58 @@ impl ToolLifecycle {
     }
 }
 
-type SessionCancellationMap = HashMap<String, Arc<AtomicBool>>;
+type SessionCancellationMap = HashMap<String, watch::Receiver<bool>>;
 static SESSION_CANCELLATION: OnceLock<Mutex<SessionCancellationMap>> = OnceLock::new();
 
 fn cancellation_map() -> &'static Mutex<SessionCancellationMap> {
     SESSION_CANCELLATION.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn reset_session_cancellation(session_id: &str) {
-    let flag = {
-        let mut map = cancellation_map()
-            .lock()
-            .expect("session cancellation mutex poisoned");
-        map.entry(session_id.to_owned())
-            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-            .clone()
-    };
-    flag.store(false, Ordering::Release);
-}
-
-pub fn cancel_session(session_id: &str) {
-    let flag = {
-        let mut map = cancellation_map()
-            .lock()
-            .expect("session cancellation mutex poisoned");
-        map.entry(session_id.to_owned())
-            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-            .clone()
-    };
-    flag.store(true, Ordering::Release);
+/// Bind the current turn's cancellation receiver to the legacy tool executor
+/// bridge. The receiver is derived from the runtime's `encaps::Cancellation`.
+pub fn bind_session_cancellation(session_id: &str, receiver: watch::Receiver<bool>) {
+    let mut map = cancellation_map()
+        .lock()
+        .expect("session cancellation mutex poisoned");
+    map.insert(session_id.to_owned(), receiver);
 }
 
 pub fn session_cancelled(session_id: &str) -> bool {
     let map = cancellation_map()
         .lock()
         .expect("session cancellation mutex poisoned");
-    map.get(session_id)
-        .map(|flag| flag.load(Ordering::Acquire))
-        .unwrap_or(false)
+    map.get(session_id).map(|rx| *rx.borrow()).unwrap_or(false)
 }
 
+/// Wait for the cancellation source owned by `encaps` to become cancelled.
+/// Unlike the previous implementation, this is event-driven and performs no
+/// periodic polling.
 pub async fn wait_for_session_cancel(session_id: &str) {
-    loop {
-        if session_cancelled(session_id) {
+    let Some(mut receiver) = ({
+        let map = cancellation_map()
+            .lock()
+            .expect("session cancellation mutex poisoned");
+        map.get(session_id).cloned()
+    }) else {
+        std::future::pending::<()>().await;
+        return;
+    };
+
+    if *receiver.borrow() {
+        return;
+    }
+
+    while receiver.changed().await.is_ok() {
+        if *receiver.borrow() {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn lifecycle_is_strict() {
         let mut lifecycle = ToolLifecycle::new();
@@ -174,6 +176,7 @@ mod tests {
         assert_eq!(lifecycle.sequence(), 3);
         assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Completed);
     }
+
     #[test]
     fn pending_can_be_cancelled_before_execution() {
         let mut lifecycle = ToolLifecycle::new();
@@ -181,6 +184,7 @@ mod tests {
         assert_eq!(lifecycle.state(), ToolLifecycleState::Cancelled);
         assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
     }
+
     #[test]
     fn cancellation_is_wire_compatible() {
         let mut lifecycle = ToolLifecycle::new();
@@ -190,6 +194,7 @@ mod tests {
         lifecycle.cancel().unwrap();
         assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
     }
+
     #[test]
     fn illegal_backtracking_is_rejected() {
         let mut lifecycle = ToolLifecycle::new();
@@ -204,13 +209,14 @@ mod tests {
             Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Failed))
         ));
     }
-    #[test]
-    fn session_cancellation_is_resettable() {
-        reset_session_cancellation("sess-test");
+
+    #[tokio::test]
+    async fn cancellation_bridge_is_event_driven() {
+        let (tx, rx) = watch::channel(false);
+        bind_session_cancellation("sess-test", rx);
         assert!(!session_cancelled("sess-test"));
-        cancel_session("sess-test");
+        tx.send(true).unwrap();
+        wait_for_session_cancel("sess-test").await;
         assert!(session_cancelled("sess-test"));
-        reset_session_cancellation("sess-test");
-        assert!(!session_cancelled("sess-test"));
     }
 }
