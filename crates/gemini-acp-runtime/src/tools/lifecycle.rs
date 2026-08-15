@@ -110,6 +110,13 @@ mod tests {
     }
     #[tokio::test]
     async fn cancellation_bridge_uses_encaps_source() {
-        let cancellation = Cancellation::new(); bind_session_cancellation("sess-test", cancellation.clone()); assert!(!session_cancelled("sess-test")); cancellation.cancel(); wait_for_session_cancel("sess-test").await; assert!(session_cancelled("sess-test")); unbind_session_cancellation("sess-test"); assert!(!session_cancelled("sess-test"));
+        let cancellation = Cancellation::new();
+        bind_session_cancellation("sess-test", cancellation.clone());
+        assert!(!session_cancelled("sess-test"));
+        cancellation.cancel();
+        wait_for_session_cancel("sess-test").await;
+        assert!(session_cancelled("sess-test"));
+        unbind_session_cancellation("sess-test");
+        assert!(!session_cancelled("sess-test"));
     }
 }
