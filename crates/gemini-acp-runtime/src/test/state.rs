@@ -162,10 +162,7 @@ async fn partial_output_est_persiste_sur_annulation() {
             (Role::Assistant, "Réponse partielle".into()),
         ]
     );
-    assert_eq!(
-        crate::tools::lifecycle::take_partial_output(&s.id),
-        ""
-    );
+    assert_eq!(crate::tools::lifecycle::take_partial_output(&s.id), "");
     std::fs::remove_dir_all(&dir).ok();
 }
 

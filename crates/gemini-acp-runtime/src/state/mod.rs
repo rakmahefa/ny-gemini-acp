@@ -89,12 +89,7 @@ impl Store {
         Ok(())
     }
 
-    pub async fn end_turn(
-        &self,
-        id: &str,
-        mut session: Session,
-        expected_gen: u64,
-    ) -> Result<()> {
+    pub async fn end_turn(&self, id: &str, mut session: Session, expected_gen: u64) -> Result<()> {
         if expected_gen != 0 {
             let live = self.live.read().await;
             if let Some(entry) = live.get(id) {
@@ -119,9 +114,7 @@ impl Store {
         // ends at the user message: this proves the streamed answer has not
         // already been committed by the normal completion path.
         let partial = take_partial_output(id);
-        if !partial.trim().is_empty()
-            && matches!(session.messages.last(), Some((Role::User, _)))
-        {
+        if !partial.trim().is_empty() && matches!(session.messages.last(), Some((Role::User, _))) {
             session.messages.push((Role::Assistant, partial));
         }
 

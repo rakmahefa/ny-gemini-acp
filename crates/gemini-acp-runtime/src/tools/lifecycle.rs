@@ -84,9 +84,15 @@ impl ToolLifecycle {
             (ToolLifecycleState::Pending, ToolLifecycleState::Permission)
                 | (ToolLifecycleState::Pending, ToolLifecycleState::Executing)
                 | (ToolLifecycleState::Pending, ToolLifecycleState::Cancelled)
-                | (ToolLifecycleState::Permission, ToolLifecycleState::Executing)
+                | (
+                    ToolLifecycleState::Permission,
+                    ToolLifecycleState::Executing
+                )
                 | (ToolLifecycleState::Permission, ToolLifecycleState::Failed)
-                | (ToolLifecycleState::Permission, ToolLifecycleState::Cancelled)
+                | (
+                    ToolLifecycleState::Permission,
+                    ToolLifecycleState::Cancelled
+                )
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Completed)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Failed)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Cancelled)
@@ -236,7 +242,9 @@ mod tests {
     #[test]
     fn lifecycle_is_strict() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
+        lifecycle
+            .transition(ToolLifecycleState::Permission)
+            .unwrap();
         lifecycle.transition(ToolLifecycleState::Executing).unwrap();
         lifecycle.finish(true, false).unwrap();
         assert_eq!(lifecycle.sequence(), 3);
@@ -264,9 +272,7 @@ mod tests {
     #[test]
     fn illegal_backtracking_is_rejected() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle
-            .transition(ToolLifecycleState::Executing)
-            .unwrap();
+        lifecycle.transition(ToolLifecycleState::Executing).unwrap();
         assert!(matches!(
             lifecycle.transition(ToolLifecycleState::Pending),
             Err(LifecycleError::InvalidTransition { .. })
@@ -281,9 +287,7 @@ mod tests {
     #[test]
     fn finish_cancellation_takes_precedence() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle
-            .transition(ToolLifecycleState::Executing)
-            .unwrap();
+        lifecycle.transition(ToolLifecycleState::Executing).unwrap();
         lifecycle.finish(true, true).unwrap();
         assert_eq!(lifecycle.state(), ToolLifecycleState::Cancelled);
         assert_eq!(lifecycle.status(), ToolCallStatus::Failed);
