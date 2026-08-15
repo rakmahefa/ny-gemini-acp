@@ -14,7 +14,7 @@ impl Cancellation {
     }
 
     pub fn cancel(&self) {
-        let _ = self.tx.send(true);
+        self.tx.send_replace(true);
     }
 
     pub fn is_cancelled(&self) -> bool {
