@@ -5,7 +5,7 @@ use std::sync::Arc;
 use anyhow::{bail, Result};
 use tokio::sync::{watch, RwLock};
 
-use crate::tools::lifecycle::bind_session_cancellation;
+use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
 use gemini_acp_encaps::Cancellation;
 
 mod busy;
@@ -28,23 +28,34 @@ impl Store {
         id: &str,
     ) -> Result<(Session, watch::Receiver<bool>, u64), TurnError> {
         let mut live = self.live.write().await;
+
         if let Some(entry) = live.get_mut(id) {
             if entry.busy {
                 return Err(TurnError::AlreadyRunning);
             }
+
+            self.acquire_busy(id)
+                .await
+                .map_err(|_| TurnError::AlreadyRunning)?;
+
             entry.busy = true;
             entry.generation += 1;
             let gen = entry.generation;
             entry.cancel = Cancellation::new();
             let rx = entry.cancel.subscribe();
             bind_session_cancellation(id, rx.clone());
-            let _ = self.acquire_busy(id).await;
             return Ok((entry.session.clone(), rx, gen));
         }
+
         let session = self
             .read(id)
             .await
             .ok_or_else(|| TurnError::NotFound(id.to_string()))?;
+
+        self.acquire_busy(id)
+            .await
+            .map_err(|_| TurnError::AlreadyRunning)?;
+
         let gen = 1u64;
         let cancellation = Cancellation::new();
         let rx = cancellation.subscribe();
@@ -58,7 +69,6 @@ impl Store {
                 generation: gen,
             },
         );
-        let _ = self.acquire_busy(id).await;
         Ok((session, rx, gen))
     }
 
@@ -110,6 +120,7 @@ impl Store {
             entry.session = session.clone();
             entry.busy = false;
         }
+        unbind_session_cancellation(id);
         self.release_busy(id).await;
         persist_result
     }
@@ -123,8 +134,9 @@ impl Store {
 
     pub async fn cancel_all(&self) {
         let live = self.live.read().await;
-        for entry in live.values() {
+        for (id, entry) in live.iter() {
             entry.cancel.cancel();
+            tracing::debug!(session = %id, "session cancellation requested");
         }
     }
 
@@ -136,6 +148,7 @@ impl Store {
         }
         live.remove(id);
         drop(live);
+        unbind_session_cancellation(id);
         self.release_busy(id).await;
         existed
     }
