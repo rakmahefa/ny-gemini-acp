@@ -141,6 +141,63 @@ async fn cancel_all_declenche_tous_les_jetons_sans_liberer_busy() {
 }
 
 #[tokio::test]
+async fn partial_output_est_persiste_sur_annulation() {
+    let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .await
+        .unwrap();
+    let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
+    session.messages.push((Role::User, "bonjour".into()));
+    crate::tools::lifecycle::record_partial_output(&s.id, "Réponse partielle");
+
+    store.end_turn(&s.id, session, generation).await.unwrap();
+
+    let persisted = store.get(&s.id).await.unwrap();
+    assert_eq!(
+        persisted.messages,
+        vec![
+            (Role::User, "bonjour".into()),
+            (Role::Assistant, "Réponse partielle".into()),
+        ]
+    );
+    assert_eq!(
+        crate::tools::lifecycle::take_partial_output(&s.id),
+        ""
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn partial_output_n_est_pas_duplique_sur_fin_normale() {
+    let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .await
+        .unwrap();
+    let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
+    session.messages.push((Role::User, "bonjour".into()));
+    session
+        .messages
+        .push((Role::Assistant, "Réponse complète".into()));
+    crate::tools::lifecycle::record_partial_output(&s.id, "Réponse complète");
+
+    store.end_turn(&s.id, session, generation).await.unwrap();
+
+    let persisted = store.get(&s.id).await.unwrap();
+    assert_eq!(
+        persisted.messages,
+        vec![
+            (Role::User, "bonjour".into()),
+            (Role::Assistant, "Réponse complète".into()),
+        ]
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn snapshot_cree_avant_chaque_tour() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
