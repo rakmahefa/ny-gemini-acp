@@ -13,11 +13,11 @@ impl Store {
         self.dir.join(format!("{id}.busy"))
     }
 
-    /// Crée atomiquement le sentinel `busy` (échoue si déjà présent).
+    /// Crée atomiquement le sentinel `busy`.
     ///
-    /// `create_new(true)` => atomicité POSIX : si le fichier existe déjà,
-    /// on obtient `AlreadyExists`. On le considère alors comme résidu d'un
-    /// crash passé et on l'écrase.
+    /// Un sentinel appartenant à un processus vivant est une vraie collision
+    /// inter-processus et doit être refusé. Un sentinel orphelin peut être
+    /// récupéré après un crash lorsque son PID n'existe plus.
     pub(crate) async fn acquire_busy(&self, id: &str) -> anyhow::Result<()> {
         let path = self.busy_path(id);
         let content = format!(
@@ -25,6 +25,7 @@ impl Store {
             std::process::id(),
             gemini_acp_config::core::time::now_unix()
         );
+
         match tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -32,35 +33,55 @@ impl Store {
             .await
         {
             Ok(_) => {
-                let _ = tokio::fs::write(&path, &content).await;
+                tokio::fs::write(&path, &content).await?;
+                Ok(())
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let _ = tokio::fs::write(&path, format!("{content}(re-acquired)\n")).await;
+                if stale_busy_sentinel(&path).await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    let file = tokio::fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&path)
+                        .await?;
+                    drop(file);
+                    tokio::fs::write(&path, &content).await?;
+                    return Ok(());
+                }
+                anyhow::bail!("session {id} already busy")
             }
-            Err(e) => {
-                tracing::warn!(
-                    "impossible de créer le sentinel busy {}: {e}",
-                    path.display()
-                );
-            }
+            Err(e) => Err(e.into()),
         }
-        Ok(())
     }
 
-    /// Supprime le sentinel `busy`. Appelée à `end_turn` / `cancel` / `TurnGuard::drop`.
+    /// Supprime le sentinel `busy`. Appelée à `end_turn` / `TurnGuard::drop`.
     pub async fn release_busy(&self, id: &str) {
         let _ = tokio::fs::remove_file(self.busy_path(id)).await;
     }
 
     /// Force la session à l'état inactif : libère le flag mémoire `busy` et
     /// le sentinel disque.
-    ///
-    /// Méthode publique car `live` est `pub(crate)` — inaccessible depuis
-    /// le binaire `gemini-acp` qui consomme le crate lib `acp`.
     pub async fn force_idle(&self, id: &str) {
         if let Some(entry) = self.live.write().await.get_mut(id) {
             entry.busy = false;
         }
         self.release_busy(id).await;
     }
+}
+
+async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
+    let Ok(raw) = tokio::fs::read_to_string(path).await else {
+        return false;
+    };
+    let Some(pid) = raw
+        .lines()
+        .find_map(|line| line.strip_prefix("pid=")?.split_whitespace().next())
+        .and_then(|value| value.parse::<u32>().ok())
+    else {
+        return false;
+    };
+
+    // Linux is the target runtime. `/proc/<pid>` lets us distinguish a stale
+    // sentinel left by a crashed process from a live owner without guessing.
+    tokio::fs::metadata(format!("/proc/{pid}")).await.is_err()
 }
