@@ -85,10 +85,10 @@ pub async fn wait_for_session_cancel(session_id: &str) {
         map.get(session_id).cloned()
     };
     let Some(cancellation) = cancellation else { std::future::pending::<()>().await; return; };
-    if cancellation.is_cancelled() { return; }
     let mut receiver = cancellation.subscribe();
-    while receiver.changed().await.is_ok() {
-        if cancellation.is_cancelled() { return; }
+    loop {
+        if *receiver.borrow() { return; }
+        if receiver.changed().await.is_err() { return; }
     }
 }
 
@@ -97,41 +97,23 @@ mod tests {
     use super::*;
     #[test]
     fn lifecycle_is_strict() {
-        let mut lifecycle = ToolLifecycle::new();
-        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
-        lifecycle.transition(ToolLifecycleState::Executing).unwrap();
-        lifecycle.transition(ToolLifecycleState::Completed).unwrap();
-        assert_eq!(lifecycle.sequence(), 3);
-        assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Completed);
+        let mut lifecycle = ToolLifecycle::new(); lifecycle.transition(ToolLifecycleState::Permission).unwrap(); lifecycle.transition(ToolLifecycleState::Executing).unwrap(); lifecycle.transition(ToolLifecycleState::Completed).unwrap();
+        assert_eq!(lifecycle.sequence(), 3); assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Completed);
     }
     #[test]
     fn pending_can_be_cancelled_before_execution() {
-        let mut lifecycle = ToolLifecycle::new(); lifecycle.cancel().unwrap();
-        assert_eq!(lifecycle.state(), ToolLifecycleState::Cancelled);
-        assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
+        let mut lifecycle = ToolLifecycle::new(); lifecycle.cancel().unwrap(); assert_eq!(lifecycle.state(), ToolLifecycleState::Cancelled); assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
     }
     #[test]
     fn cancellation_is_wire_compatible() {
-        let mut lifecycle = ToolLifecycle::new();
-        lifecycle.transition(ToolLifecycleState::Permission).unwrap(); lifecycle.cancel().unwrap();
-        assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
+        let mut lifecycle = ToolLifecycle::new(); lifecycle.transition(ToolLifecycleState::Permission).unwrap(); lifecycle.cancel().unwrap(); assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
     }
     #[test]
     fn illegal_backtracking_is_rejected() {
-        let mut lifecycle = ToolLifecycle::new(); lifecycle.transition(ToolLifecycleState::Executing).unwrap();
-        assert!(matches!(lifecycle.transition(ToolLifecycleState::Pending), Err(LifecycleError::InvalidTransition { .. })));
-        lifecycle.transition(ToolLifecycleState::Failed).unwrap();
-        assert!(matches!(lifecycle.transition(ToolLifecycleState::Completed), Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Failed))));
+        let mut lifecycle = ToolLifecycle::new(); lifecycle.transition(ToolLifecycleState::Executing).unwrap(); assert!(matches!(lifecycle.transition(ToolLifecycleState::Pending), Err(LifecycleError::InvalidTransition { .. }))); lifecycle.transition(ToolLifecycleState::Failed).unwrap(); assert!(matches!(lifecycle.transition(ToolLifecycleState::Completed), Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Failed))));
     }
     #[tokio::test]
     async fn cancellation_bridge_uses_encaps_source() {
-        let cancellation = Cancellation::new();
-        bind_session_cancellation("sess-test", cancellation.clone());
-        assert!(!session_cancelled("sess-test"));
-        cancellation.cancel();
-        wait_for_session_cancel("sess-test").await;
-        assert!(session_cancelled("sess-test"));
-        unbind_session_cancellation("sess-test");
-        assert!(!session_cancelled("sess-test"));
+        let cancellation = Cancellation::new(); bind_session_cancellation("sess-test", cancellation.clone()); assert!(!session_cancelled("sess-test")); cancellation.cancel(); wait_for_session_cancel("sess-test").await; assert!(session_cancelled("sess-test")); unbind_session_cancellation("sess-test"); assert!(!session_cancelled("sess-test"));
     }
 }
