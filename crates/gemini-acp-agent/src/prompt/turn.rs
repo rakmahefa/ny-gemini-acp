@@ -417,6 +417,8 @@ pub async fn run_turn(
         };
         session.messages.push((Role::Assistant, assistant_history));
 
+        gemini_acp_runtime::tools::lifecycle::clear_partial_output(sid);
+
         let executor = ToolExecutor::new(
             &cx,
             &session_id,

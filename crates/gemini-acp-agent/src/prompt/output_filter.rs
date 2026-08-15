@@ -13,16 +13,27 @@ const THINKING_OPEN: &str = "<thinking>";
 const THINKING_CLOSE: &str = "</thinking>";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolCallFence { Backtick, SingleQuote }
+enum ToolCallFence {
+    Backtick,
+    SingleQuote,
+}
 
 impl ToolCallFence {
     const fn closing(self) -> &'static str {
-        match self { Self::Backtick => "```", Self::SingleQuote => "'''" }
+        match self {
+            Self::Backtick => "```",
+            Self::SingleQuote => "'''",
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DropMode { None, ToolResultLine, ToolCallBlock(ToolCallFence), ThinkingBlock }
+enum DropMode {
+    None,
+    ToolResultLine,
+    ToolCallBlock(ToolCallFence),
+    ThinkingBlock,
+}
 
 #[derive(Debug)]
 pub struct OutputFilter {
@@ -35,15 +46,26 @@ pub struct OutputFilter {
 
 impl Default for OutputFilter {
     fn default() -> Self {
-        Self { candidate: String::new(), at_line_start: true, drop_mode: DropMode::None,
-            skipping_marker_spacing: false, suppress_protocol_newline: false }
+        Self {
+            candidate: String::new(),
+            at_line_start: true,
+            drop_mode: DropMode::None,
+            skipping_marker_spacing: false,
+            suppress_protocol_newline: false,
+        }
     }
 }
 
 impl OutputFilter {
-    pub fn new() -> Self { Self::default() }
-    pub fn push(&mut self, chunk: &str) -> String { self.process(chunk, false) }
-    pub fn finish(&mut self) -> String { self.process("", true) }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn push(&mut self, chunk: &str) -> String {
+        self.process(chunk, false)
+    }
+    pub fn finish(&mut self) -> String {
+        self.process("", true)
+    }
 
     fn process(&mut self, chunk: &str, final_chunk: bool) -> String {
         let mut input = std::mem::take(&mut self.candidate);
@@ -85,8 +107,12 @@ impl OutputFilter {
                     }
                     let keep = partial_suffix_len(&input[i..], THINKING_CLOSE);
                     let end = input.len() - keep;
-                    if end > i { i = end; }
-                    if !final_chunk && i < input.len() { self.candidate.push_str(&input[i..]); }
+                    if end > i {
+                        i = end;
+                    }
+                    if !final_chunk && i < input.len() {
+                        self.candidate.push_str(&input[i..]);
+                    }
                     break;
                 }
                 DropMode::None => {}
@@ -101,10 +127,14 @@ impl OutputFilter {
             self.suppress_protocol_newline = false;
 
             if self.skipping_marker_spacing {
-                while i < input.len() && matches!(input.as_bytes()[i], b' ' | b'\t') { i += 1; }
+                while i < input.len() && matches!(input.as_bytes()[i], b' ' | b'\t') {
+                    i += 1;
+                }
                 self.skipping_marker_spacing = false;
                 if i == input.len() {
-                    if !final_chunk { return out; }
+                    if !final_chunk {
+                        return out;
+                    }
                     break;
                 }
             }
@@ -112,7 +142,11 @@ impl OutputFilter {
             if self.at_line_start {
                 let rest = &input[i..];
                 if rest.starts_with(TOOL_RESULT_PREFIX) || rest.starts_with(TOOL_RESULT_ENVELOPE) {
-                    let prefix_len = if rest.starts_with(TOOL_RESULT_PREFIX) { TOOL_RESULT_PREFIX.len() } else { TOOL_RESULT_ENVELOPE.len() };
+                    let prefix_len = if rest.starts_with(TOOL_RESULT_PREFIX) {
+                        TOOL_RESULT_PREFIX.len()
+                    } else {
+                        TOOL_RESULT_ENVELOPE.len()
+                    };
                     self.drop_mode = DropMode::ToolResultLine;
                     i += prefix_len;
                     continue;
@@ -143,8 +177,15 @@ impl OutputFilter {
                     continue;
                 }
 
-                let prefixes = [TOOL_RESULT_PREFIX, TOOL_RESULT_ENVELOPE, TOOL_CALL_FENCE,
-                    TOOL_CALL_SINGLE_QUOTE_FENCE, THINKING_OPEN, ASSISTANT_MARKER, USER_MARKER];
+                let prefixes = [
+                    TOOL_RESULT_PREFIX,
+                    TOOL_RESULT_ENVELOPE,
+                    TOOL_CALL_FENCE,
+                    TOOL_CALL_SINGLE_QUOTE_FENCE,
+                    THINKING_OPEN,
+                    ASSISTANT_MARKER,
+                    USER_MARKER,
+                ];
                 if !final_chunk && prefixes.iter().any(|prefix| prefix.starts_with(rest)) {
                     self.candidate.push_str(rest);
                     break;
@@ -168,7 +209,9 @@ impl OutputFilter {
 fn partial_suffix_len(text: &str, needle: &str) -> usize {
     let max = text.len().min(needle.len().saturating_sub(1));
     for len in (1..=max).rev() {
-        if text.ends_with(&needle[..len]) { return len; }
+        if text.ends_with(&needle[..len]) {
+            return len;
+        }
     }
     0
 }
@@ -187,7 +230,10 @@ mod tests {
     #[test]
     fn removes_both_tool_result_protocol_forms() {
         assert_eq!(sanitize_text("[Tool result for shell_exec]: done"), "");
-        assert_eq!(sanitize_text("[Tool result]: {\"tool\":\"file_read\",\"content\":\"done\"}"), "");
+        assert_eq!(
+            sanitize_text("[Tool result]: {\"tool\":\"file_read\",\"content\":\"done\"}"),
+            ""
+        );
     }
 
     #[test]
@@ -198,8 +244,14 @@ mod tests {
 
     #[test]
     fn removes_role_markers() {
-        assert_eq!(sanitize_text("[Assistant]: J'exécute cargo check"), "J'exécute cargo check");
-        assert_eq!(sanitize_text("[User]: analyse le projet"), "analyse le projet");
+        assert_eq!(
+            sanitize_text("[Assistant]: J'exécute cargo check"),
+            "J'exécute cargo check"
+        );
+        assert_eq!(
+            sanitize_text("[User]: analyse le projet"),
+            "analyse le projet"
+        );
     }
 
     #[test]
@@ -266,12 +318,18 @@ mod tests {
     #[test]
     fn removes_tool_result_before_assistant_in_same_stream() {
         let mut filter = OutputFilter::new();
-        assert_eq!(filter.push("[Tool result for shell_exec]: done\n[Assistant]: Suite"), "Suite");
+        assert_eq!(
+            filter.push("[Tool result for shell_exec]: done\n[Assistant]: Suite"),
+            "Suite"
+        );
         assert_eq!(filter.finish(), "");
     }
 
     #[test]
     fn preserves_newlines_around_filtered_lines() {
-        assert_eq!(sanitize_text("Avant\n[Tool result for shell_exec]: done\nAprès"), "Avant\nAprès");
+        assert_eq!(
+            sanitize_text("Avant\n[Tool result for shell_exec]: done\nAprès"),
+            "Avant\nAprès"
+        );
     }
 }

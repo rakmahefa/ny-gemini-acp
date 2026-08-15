@@ -6,8 +6,10 @@ use anyhow::{bail, Result};
 use tokio::sync::{watch, RwLock};
 
 use crate::tools::lifecycle::{
-    cancel_session as cancel_tool_lifecycle, reset_session_cancellation,
+    begin_partial_output, bind_session_cancellation, take_partial_output,
+    unbind_session_cancellation,
 };
+use gemini_acp_encaps::Cancellation;
 
 mod busy;
 mod persistence;
@@ -33,33 +35,39 @@ impl Store {
             if entry.busy {
                 return Err(TurnError::AlreadyRunning);
             }
+            self.acquire_busy(id)
+                .await
+                .map_err(|_| TurnError::AlreadyRunning)?;
             entry.busy = true;
             entry.generation += 1;
             let gen = entry.generation;
-            let (tx, rx) = watch::channel(false);
-            entry.cancel = tx;
-            reset_session_cancellation(id);
-            let _ = self.acquire_busy(id).await;
+            entry.cancel = Cancellation::new();
+            let rx = entry.cancel.subscribe();
+            bind_session_cancellation(id, entry.cancel.clone());
+            begin_partial_output(id);
             return Ok((entry.session.clone(), rx, gen));
         }
         let session = self
             .read(id)
             .await
             .ok_or_else(|| TurnError::NotFound(id.to_string()))?;
-        let gen = 1u64;
-        let (tx, rx) = watch::channel(false);
+        self.acquire_busy(id)
+            .await
+            .map_err(|_| TurnError::AlreadyRunning)?;
+        let cancellation = Cancellation::new();
+        let rx = cancellation.subscribe();
+        bind_session_cancellation(id, cancellation.clone());
+        begin_partial_output(id);
         live.insert(
             id.to_string(),
             Live {
                 session: session.clone(),
-                cancel: tx,
+                cancel: cancellation,
                 busy: true,
-                generation: gen,
+                generation: 1,
             },
         );
-        reset_session_cancellation(id);
-        let _ = self.acquire_busy(id).await;
-        Ok((session, rx, gen))
+        Ok((session, rx, 1))
     }
 
     pub async fn update_session<F>(&self, id: &str, f: F) -> Result<()>
@@ -86,7 +94,12 @@ impl Store {
             let live = self.live.read().await;
             if let Some(entry) = live.get(id) {
                 if entry.generation != expected_gen {
-                    tracing::warn!(session = %id, expected_gen, current_gen = entry.generation, "end_turn: tour obsolète ignoré");
+                    tracing::warn!(
+                        session = %id,
+                        expected_gen,
+                        current_gen = entry.generation,
+                        "end_turn: tour obsolète ignoré"
+                    );
                     bail!(
                         "tour obsolète: génération attendue {expected_gen}, courante {}",
                         entry.generation
@@ -94,6 +107,17 @@ impl Store {
                 }
             }
         }
+
+        // A cancelled stream may have already emitted assistant chunks while
+        // never reaching the normal `total_output` finalization in prompt/turn.
+        // Persist that partial text only when the current session history still
+        // ends at the user message: this proves the streamed answer has not
+        // already been committed by the normal completion path.
+        let partial = take_partial_output(id);
+        if !partial.trim().is_empty() && matches!(session.messages.last(), Some((Role::User, _))) {
+            session.messages.push((Role::Assistant, partial));
+        }
+
         session.updated_at = gemini_acp_config::core::time::now_iso();
         session.turn_count += 1;
         if let Some(current) = self.get(id).await {
@@ -110,36 +134,40 @@ impl Store {
             entry.session = session.clone();
             entry.busy = false;
         }
+        unbind_session_cancellation(id);
         self.release_busy(id).await;
         persist_result
     }
 
     pub async fn cancel(&self, id: &str) {
-        let mut live = self.live.write().await;
-        if let Some(entry) = live.get_mut(id) {
-            let _ = entry.cancel.send(true);
+        let live = self.live.read().await;
+        if let Some(entry) = live.get(id) {
+            entry.cancel.cancel();
         }
-        cancel_tool_lifecycle(id);
     }
+
     pub async fn cancel_all(&self) {
         let live = self.live.read().await;
         for (id, entry) in live.iter() {
-            let _ = entry.cancel.send(true);
-            cancel_tool_lifecycle(id);
+            entry.cancel.cancel();
+            tracing::debug!(session = %id, "session cancellation requested");
         }
     }
+
     pub async fn close(&self, id: &str) -> bool {
         let mut live = self.live.write().await;
         let existed = live.contains_key(id) || self.path(id).exists();
         if let Some(entry) = live.get(id) {
-            let _ = entry.cancel.send(true);
+            entry.cancel.cancel();
         }
-        cancel_tool_lifecycle(id);
         live.remove(id);
         drop(live);
+        let _ = take_partial_output(id);
+        unbind_session_cancellation(id);
         self.release_busy(id).await;
         existed
     }
+
     pub async fn fork(&self, source_id: &str) -> Result<Session> {
         let source = self
             .get(source_id)
@@ -148,12 +176,11 @@ impl Store {
         let new_id = format!("sess_{}", uuid::Uuid::new_v4().simple());
         let forked = source.fork(new_id);
         self.persist(&forked).await?;
-        let (cancel, _) = watch::channel(false);
         self.live.write().await.insert(
             forked.id.clone(),
             Live {
                 session: forked.clone(),
-                cancel,
+                cancel: Cancellation::new(),
                 busy: false,
                 generation: 0,
             },

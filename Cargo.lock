@@ -785,6 +785,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "gemini-acp-config",
+ "gemini-acp-encaps",
  "regex",
  "serde",
  "serde_json",

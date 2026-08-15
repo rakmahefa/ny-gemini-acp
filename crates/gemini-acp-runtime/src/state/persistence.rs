@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use gemini_acp_encaps::Cancellation;
 
 use super::{Live, Session, Store};
 
@@ -42,7 +43,7 @@ impl Store {
     ) -> Result<Session> {
         let id = format!("sess_{}", uuid::Uuid::new_v4().simple());
         let session = Session::new(id.clone(), cwd, additional_directories, model);
-        let (cancel, _) = tokio::sync::watch::channel(false);
+        let cancel = Cancellation::new();
         self.persist(&session).await?;
         self.live.write().await.insert(
             id,
@@ -69,7 +70,7 @@ impl Store {
                 id.to_string(),
                 Live {
                     session: session.clone(),
-                    cancel: tokio::sync::watch::channel(false).0,
+                    cancel: Cancellation::new(),
                     busy: false,
                     generation: 0,
                 },
