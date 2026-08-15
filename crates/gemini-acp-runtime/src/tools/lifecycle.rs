@@ -1,20 +1,11 @@
-//! Deterministic tool-call lifecycle and session cancellation bridge.
+//! Deterministic tool-call lifecycle.
 //!
-//! ACP v1 only exposes Pending/InProgress/Completed/Failed on the wire.
-//! We therefore keep `Permission` and `Cancelled` as internal states and
-//! project them onto the stable ACP statuses while carrying the semantic
-//! reason in `_meta`.
-//!
-//! Session cancellation is owned by `gemini-acp-encaps::Cancellation`.
-//! This module only keeps a short-lived receiver bridge for the existing tool
-//! executor API; it does not create or mutate a second cancellation source.
-
-use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+//! Session/turn cancellation is owned by `gemini-acp-encaps::Cancellation`.
+//! Tool execution receives that primitive directly; this module deliberately
+//! does not maintain a second session cancellation registry.
 
 use agent_client_protocol::schema::v1::ToolCallStatus;
 use thiserror::Error;
-use tokio::sync::watch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolLifecycleState {
@@ -35,6 +26,7 @@ impl ToolLifecycleState {
             Self::Failed | Self::Cancelled => ToolCallStatus::Failed,
         }
     }
+
     pub const fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
@@ -70,12 +62,15 @@ impl ToolLifecycle {
             sequence: 0,
         }
     }
+
     pub const fn state(&self) -> ToolLifecycleState {
         self.state
     }
+
     pub const fn sequence(&self) -> u64 {
         self.sequence
     }
+
     pub fn transition(&mut self, next: ToolLifecycleState) -> Result<(), LifecycleError> {
         if self.state.is_terminal() {
             return Err(LifecycleError::AlreadyTerminal(self.state));
@@ -85,15 +80,9 @@ impl ToolLifecycle {
             (ToolLifecycleState::Pending, ToolLifecycleState::Permission)
                 | (ToolLifecycleState::Pending, ToolLifecycleState::Executing)
                 | (ToolLifecycleState::Pending, ToolLifecycleState::Cancelled)
-                | (
-                    ToolLifecycleState::Permission,
-                    ToolLifecycleState::Executing
-                )
+                | (ToolLifecycleState::Permission, ToolLifecycleState::Executing)
                 | (ToolLifecycleState::Permission, ToolLifecycleState::Failed)
-                | (
-                    ToolLifecycleState::Permission,
-                    ToolLifecycleState::Cancelled
-                )
+                | (ToolLifecycleState::Permission, ToolLifecycleState::Cancelled)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Completed)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Failed)
                 | (ToolLifecycleState::Executing, ToolLifecycleState::Cancelled)
@@ -108,66 +97,9 @@ impl ToolLifecycle {
         self.sequence = self.sequence.saturating_add(1);
         Ok(())
     }
+
     pub fn cancel(&mut self) -> Result<(), LifecycleError> {
         self.transition(ToolLifecycleState::Cancelled)
-    }
-}
-
-type SessionCancellationMap = HashMap<String, watch::Receiver<bool>>;
-static SESSION_CANCELLATION: OnceLock<Mutex<SessionCancellationMap>> = OnceLock::new();
-
-fn cancellation_map() -> &'static Mutex<SessionCancellationMap> {
-    SESSION_CANCELLATION.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// Bind the current turn's cancellation receiver to the legacy tool executor
-/// bridge. The receiver is derived from the runtime's `encaps::Cancellation`.
-pub fn bind_session_cancellation(session_id: &str, receiver: watch::Receiver<bool>) {
-    let mut map = cancellation_map()
-        .lock()
-        .expect("session cancellation mutex poisoned");
-    map.insert(session_id.to_owned(), receiver);
-}
-
-/// Remove the receiver when the turn reaches a terminal state. Keeping the
-/// bridge bounded to active turns avoids retaining one receiver per session
-/// for the lifetime of the process.
-pub fn unbind_session_cancellation(session_id: &str) {
-    let mut map = cancellation_map()
-        .lock()
-        .expect("session cancellation mutex poisoned");
-    map.remove(session_id);
-}
-
-pub fn session_cancelled(session_id: &str) -> bool {
-    let map = cancellation_map()
-        .lock()
-        .expect("session cancellation mutex poisoned");
-    map.get(session_id).map(|rx| *rx.borrow()).unwrap_or(false)
-}
-
-/// Wait for the cancellation source owned by `encaps` to become cancelled.
-/// Unlike the previous implementation, this is event-driven and performs no
-/// periodic polling.
-pub async fn wait_for_session_cancel(session_id: &str) {
-    let Some(mut receiver) = ({
-        let map = cancellation_map()
-            .lock()
-            .expect("session cancellation mutex poisoned");
-        map.get(session_id).cloned()
-    }) else {
-        std::future::pending::<()>().await;
-        return;
-    };
-
-    if *receiver.borrow() {
-        return;
-    }
-
-    while receiver.changed().await.is_ok() {
-        if *receiver.borrow() {
-            return;
-        }
     }
 }
 
@@ -178,9 +110,7 @@ mod tests {
     #[test]
     fn lifecycle_is_strict() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle
-            .transition(ToolLifecycleState::Permission)
-            .unwrap();
+        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
         lifecycle.transition(ToolLifecycleState::Executing).unwrap();
         lifecycle.transition(ToolLifecycleState::Completed).unwrap();
         assert_eq!(lifecycle.sequence(), 3);
@@ -198,9 +128,7 @@ mod tests {
     #[test]
     fn cancellation_is_wire_compatible() {
         let mut lifecycle = ToolLifecycle::new();
-        lifecycle
-            .transition(ToolLifecycleState::Permission)
-            .unwrap();
+        lifecycle.transition(ToolLifecycleState::Permission).unwrap();
         lifecycle.cancel().unwrap();
         assert_eq!(lifecycle.state().wire_status(), ToolCallStatus::Failed);
     }
@@ -218,17 +146,5 @@ mod tests {
             lifecycle.transition(ToolLifecycleState::Completed),
             Err(LifecycleError::AlreadyTerminal(ToolLifecycleState::Failed))
         ));
-    }
-
-    #[tokio::test]
-    async fn cancellation_bridge_is_event_driven() {
-        let (tx, rx) = watch::channel(false);
-        bind_session_cancellation("sess-test", rx);
-        assert!(!session_cancelled("sess-test"));
-        tx.send(true).unwrap();
-        wait_for_session_cancel("sess-test").await;
-        assert!(session_cancelled("sess-test"));
-        unbind_session_cancellation("sess-test");
-        assert!(!session_cancelled("sess-test"));
     }
 }
