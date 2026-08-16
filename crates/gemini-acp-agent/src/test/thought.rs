@@ -60,12 +60,15 @@ fn xml_open_marker_split_across_deltas_is_atomic() {
     let mut stream = ThoughtStream::new(true);
     assert!(stream.feed("<thi").is_empty());
     assert_eq!(
-        stream.feed("nking>Réflexion").first(),
-        Some(&ThoughtEvent::ThoughtStart)
+        stream.feed("nking>Réflexion"),
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("Réflexion".into()),
+        ]
     );
     let tail = stream.feed(" puis </thi");
     assert!(tail.iter().any(|event| match event {
-        ThoughtEvent::ThoughtChunk(text) => text.contains("Réflexion"),
+        ThoughtEvent::ThoughtChunk(text) => text == " puis ",
         _ => false,
     }));
     assert_eq!(
@@ -80,13 +83,16 @@ fn xml_open_marker_split_across_deltas_is_atomic() {
 #[test]
 fn opening_marker_is_never_exposed_to_consumers() {
     let mut stream = ThoughtStream::new(true);
-    assert_eq!(stream.feed("<thinking>raisonnement"), vec![ThoughtEvent::ThoughtStart]);
+    assert_eq!(
+        stream.feed("<thinking>raisonnement"),
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("raisonnement".into()),
+        ]
+    );
     assert_eq!(
         stream.finish(),
-        vec![
-            ThoughtEvent::ThoughtChunk("raisonnement".into()),
-            ThoughtEvent::ThoughtEnd,
-        ]
+        vec![ThoughtEvent::ThoughtEnd]
     );
 }
 
@@ -109,12 +115,20 @@ fn thought_start_marker_variants_are_supported() {
 #[test]
 fn closing_marker_split_across_deltas_is_atomic() {
     let mut stream = ThoughtStream::new(true);
-    assert_eq!(stream.feed("<thinking>pensée"), vec![ThoughtEvent::ThoughtStart]);
-    assert!(stream.feed(" utile </thi").is_empty());
+    assert_eq!(
+        stream.feed("<thinking>pensée"),
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("pensée".into()),
+        ]
+    );
+    assert_eq!(
+        stream.feed(" utile </thi"),
+        vec![ThoughtEvent::ThoughtChunk(" utile ".into())]
+    );
     assert_eq!(
         stream.feed("nking>Réponse"),
         vec![
-            ThoughtEvent::ThoughtChunk("pensée utile ".into()),
             ThoughtEvent::ThoughtEnd,
             ThoughtEvent::ResponseChunk("Réponse".into()),
         ]
@@ -139,10 +153,7 @@ fn finish_is_idempotent() {
     stream.feed("<thinking>pensée");
     assert_eq!(
         stream.finish(),
-        vec![
-            ThoughtEvent::ThoughtChunk("pensée".into()),
-            ThoughtEvent::ThoughtEnd,
-        ]
+        vec![ThoughtEvent::ThoughtEnd]
     );
     assert!(stream.finish().is_empty());
     assert_eq!(stream.phase(), ThoughtPhase::Completed);
