@@ -25,3 +25,13 @@ fn keeps_tool_call_context() {
         _ => unreachable!(),
     }
 }
+
+#[test]
+fn preserves_event_order_sequence() {
+    let first = EventContext::new("session", "turn", 1);
+    let second = EventContext::new("session", "turn", 2);
+
+    assert!(first.sequence < second.sequence);
+    assert_eq!(first.session_id, second.session_id);
+    assert_eq!(first.turn_id, second.turn_id);
+}
