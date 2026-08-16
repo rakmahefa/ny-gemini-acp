@@ -75,7 +75,7 @@ impl ThoughtStream {
         match self.phase {
             ThoughtPhase::Response => vec![ThoughtEvent::ResponseChunk(delta.to_owned())],
             ThoughtPhase::Detecting => self.feed_detecting(delta),
-            ThoughtPhase::Thinking => self.feed_thinking(delta, false),
+            ThoughtPhase::Thinking => self.feed_thinking(delta),
             ThoughtPhase::Completed => Vec::new(),
         }
     }
@@ -141,7 +141,7 @@ impl ThoughtStream {
         }
     }
 
-    fn feed_thinking(&mut self, delta: &str, _final_chunk: bool) -> Vec<ThoughtEvent> {
+    fn feed_thinking(&mut self, delta: &str) -> Vec<ThoughtEvent> {
         self.pending.push_str(delta);
 
         if let Some((idx, marker_len)) = find_thought_end(&self.pending) {
@@ -247,17 +247,6 @@ fn find_thought_end(buffer: &str) -> Option<(usize, usize)> {
         .iter()
         .filter_map(|marker| buffer.find(marker).map(|idx| (idx, marker.len())))
         .min_by_key(|(idx, _)| *idx)
-}
-
-/// Compat helper used by tests and by future marker implementations.
-fn partial_suffix_len(text: &str, needle: &str) -> usize {
-    let max = text.len().min(needle.len().saturating_sub(1));
-    for len in (1..=max).rev() {
-        if text.ends_with(&needle[..len]) {
-            return len;
-        }
-    }
-    0
 }
 
 pub async fn notify_thought(
