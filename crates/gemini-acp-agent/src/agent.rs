@@ -9,7 +9,7 @@
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use gemini_acp_encaps::TurnManager;
-use gemini_acp_runtime::AppState;
+use gemini_acp_runtime::{events::TurnEventEmitter, AppState};
 
 use crate::handlers;
 use crate::prompt;
@@ -18,6 +18,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_store = state.store.clone();
     let h_client = state.client.clone();
     let h_tools = state.tools.clone();
+    let h_events = state.events.clone();
     let turn_manager = TurnManager::new();
 
     Agent
@@ -47,30 +48,57 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                 let store = h_store.clone();
                 let client = h_client.clone();
                 let tools = h_tools.clone();
+                let events = h_events.clone();
                 let turn_manager = turn_manager.clone();
                 async move |req: PromptRequest, responder, cx| {
                     let store = store.clone();
                     let client = client.clone();
                     let tools = tools.clone();
+                    let events = events.clone();
                     let turn_manager = turn_manager.clone();
                     let turn_cx = cx.clone();
                     let sid = req.session_id.0.to_string();
                     let session_id = req.session_id.clone();
 
                     turn_manager
-                        .start(sid, move |_cancellation| async move {
+                        .start(sid.clone(), move |_cancellation| async move {
+                            let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
                             let interactive =
                                 gemini_acp_runtime::tools::interactive::InteractiveContext {
                                     cx: turn_cx.clone(),
                                     session_id,
                                 };
-                            gemini_acp_runtime::tools::interactive::scope(interactive, async move {
-                                prompt::run_turn(store, tools, client, req, responder, turn_cx)
+
+                            gemini_acp_runtime::tools::interactive::scope(
+                                interactive,
+                                async move {
+                                    let mut semantic =
+                                        TurnEventEmitter::new(events, sid.clone(), turn_id);
+                                    semantic.turn_started();
+
+                                    let result = prompt::run_turn(
+                                        store,
+                                        tools,
+                                        client,
+                                        req,
+                                        responder,
+                                        turn_cx,
+                                        &mut semantic,
+                                    )
                                     .await
                                     .map_err(|e| {
                                         gemini_acp_encaps::EncapsError::Task(e.to_string())
-                                    })
-                            })
+                                    });
+
+                                    if result.is_ok() {
+                                        semantic.turn_completed();
+                                    } else {
+                                        semantic.turn_cancelled();
+                                    }
+
+                                    result
+                                },
+                            )
                             .await
                         })
                         .await
