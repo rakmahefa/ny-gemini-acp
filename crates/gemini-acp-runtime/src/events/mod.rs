@@ -10,3 +10,6 @@ pub use stream::EventStream;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bus_tests;
