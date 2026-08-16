@@ -47,6 +47,19 @@ struct ExecutionOutcome {
     cancelled: bool,
 }
 
+struct TerminalFinish<'a> {
+    call_id: &'a ToolCallId,
+    lifecycle: &'a mut ToolLifecycle,
+    tool_name: &'a str,
+    arguments: &'a Value,
+    content: String,
+    is_ok: bool,
+    cancelled: bool,
+    reason: Option<&'a str>,
+    terminal_id: Option<&'a str>,
+    terminal_meta: Option<Map<String, Value>>,
+}
+
 pub struct ToolExecutor<'a> {
     pub(crate) cx: &'a ConnectionTo<Client>,
     pub(crate) session_id: &'a SessionId,
@@ -73,20 +86,20 @@ impl<'a> ToolExecutor<'a> {
     /// Every terminal path, including rejection and pre-execution cancellation,
     /// must use this helper. The lifecycle chooses the wire status and binds the
     /// result payload to the terminal sequence before ACP rendering happens.
-    fn finish_terminal(
-        &self,
-        call_id: &ToolCallId,
-        lifecycle: &mut ToolLifecycle,
-        tool_name: &str,
-        arguments: &Value,
-        content: impl Into<String>,
-        is_ok: bool,
-        cancelled: bool,
-        reason: Option<&str>,
-        terminal_id: Option<&str>,
-        terminal_meta: Option<Map<String, Value>>,
-    ) -> ToolResult {
-        let content = content.into();
+    fn finish_terminal(&self, request: TerminalFinish<'_>) -> ToolResult {
+        let TerminalFinish {
+            call_id,
+            lifecycle,
+            tool_name,
+            arguments,
+            content,
+            is_ok,
+            cancelled,
+            reason,
+            terminal_id,
+            terminal_meta,
+        } = request;
+
         let envelope = lifecycle
             .finish_with_result(tool_name, content.clone(), is_ok, cancelled)
             .expect("terminal tool path must finalize exactly once");
@@ -121,18 +134,18 @@ impl<'a> ToolExecutor<'a> {
 
         if session_cancelled(self.session_id.0.as_ref()) {
             let message = "outil annulé avant son démarrage";
-            return self.finish_terminal(
-                &call_id,
-                &mut lifecycle,
+            return self.finish_terminal(TerminalFinish {
+                call_id: &call_id,
+                lifecycle: &mut lifecycle,
                 tool_name,
                 arguments,
-                message,
-                false,
-                true,
-                Some("cancelled"),
-                None,
-                None,
-            );
+                content: message.into(),
+                is_ok: false,
+                cancelled: true,
+                reason: Some("cancelled"),
+                terminal_id: None,
+                terminal_meta: None,
+            });
         }
 
         let mode = (self.get_mode)();
@@ -163,18 +176,18 @@ impl<'a> ToolExecutor<'a> {
                             "{} ({}) annulé avant le démarrage de l'exécution.",
                             request.kind.label(), request.summary
                         );
-                        return self.finish_terminal(
-                            &call_id,
-                            &mut lifecycle,
+                        return self.finish_terminal(TerminalFinish {
+                            call_id: &call_id,
+                            lifecycle: &mut lifecycle,
                             tool_name,
                             arguments,
-                            message,
-                            false,
-                            true,
-                            Some("cancelled"),
-                            None,
-                            None,
-                        );
+                            content: message,
+                            is_ok: false,
+                            cancelled: true,
+                            reason: Some("cancelled"),
+                            terminal_id: None,
+                            terminal_meta: None,
+                        });
                     }
                     lifecycle
                         .transition(ToolLifecycleState::Executing)
@@ -186,68 +199,68 @@ impl<'a> ToolExecutor<'a> {
                         "{} ({}) refusé par l'utilisateur.",
                         request.kind.label(), request.summary
                     );
-                    return self.finish_terminal(
-                        &call_id,
-                        &mut lifecycle,
+                    return self.finish_terminal(TerminalFinish {
+                        call_id: &call_id,
+                        lifecycle: &mut lifecycle,
                         tool_name,
                         arguments,
-                        message,
-                        false,
-                        false,
-                        Some("user-rejected"),
-                        None,
-                        None,
-                    );
+                        content: message,
+                        is_ok: false,
+                        cancelled: false,
+                        reason: Some("user-rejected"),
+                        terminal_id: None,
+                        terminal_meta: None,
+                    });
                 }
                 PermissionResult::Cancelled => {
                     let message = format!(
                         "{} ({}) annulé pendant la demande d'autorisation.",
                         request.kind.label(), request.summary
                     );
-                    return self.finish_terminal(
-                        &call_id,
-                        &mut lifecycle,
+                    return self.finish_terminal(TerminalFinish {
+                        call_id: &call_id,
+                        lifecycle: &mut lifecycle,
                         tool_name,
                         arguments,
-                        message,
-                        false,
-                        true,
-                        Some("cancelled"),
-                        None,
-                        None,
-                    );
+                        content: message,
+                        is_ok: false,
+                        cancelled: true,
+                        reason: Some("cancelled"),
+                        terminal_id: None,
+                        terminal_meta: None,
+                    });
                 }
                 PermissionResult::TransportError(error) => {
                     let message = format!("Échec de la demande de permission ACP : {error}");
-                    return self.finish_terminal(
-                        &call_id,
-                        &mut lifecycle,
+                    return self.finish_terminal(TerminalFinish {
+                        call_id: &call_id,
+                        lifecycle: &mut lifecycle,
                         tool_name,
                         arguments,
-                        message,
-                        false,
-                        false,
-                        Some("permission-error"),
-                        None,
-                        None,
-                    );
+                        content: message,
+                        is_ok: false,
+                        cancelled: false,
+                        reason: Some("permission-error"),
+                        terminal_id: None,
+                        terminal_meta: None,
+                    });
                 }
             }
         } else {
             if session_cancelled(self.session_id.0.as_ref()) {
                 let message = "outil annulé avant son exécution";
-                return self.finish_terminal(
-                    &call_id,
-                    &mut lifecycle,
+                return self.finish_terminal(TerminalFinish {
+                    call_id: &call_id,
+                    lifecycle: &mut lifecycle,
                     tool_name,
                     arguments,
-                    message,
-                    false,
-                    true,
-                    Some("cancelled"),
-                    None,
-                    None,
-                );
+                    content: message.into(),
+                    is_ok: false,
+                    cancelled: true,
+                    reason: Some("cancelled"),
+                    terminal_id: None,
+                    terminal_meta: None,
+                });
             }
             lifecycle
                 .transition(ToolLifecycleState::Executing)
@@ -271,22 +284,18 @@ impl<'a> ToolExecutor<'a> {
             self.execute_registry(tool_name, arguments).await
         };
 
-        let result = self.finish_terminal(
-            &call_id,
-            &mut lifecycle,
+        self.finish_terminal(TerminalFinish {
+            call_id: &call_id,
+            lifecycle: &mut lifecycle,
             tool_name,
             arguments,
-            outcome.result.content.clone(),
-            outcome.result.is_ok,
-            outcome.cancelled,
-            if outcome.cancelled { Some("cancelled") } else { None },
-            outcome.terminal_id.as_deref(),
-            outcome.terminal_meta,
-        );
-
-        // Preserve the execution API's original semantics while ensuring the
-        // wire result is derived exclusively from the canonical envelope.
-        result
+            content: outcome.result.content,
+            is_ok: outcome.result.is_ok,
+            cancelled: outcome.cancelled,
+            reason: if outcome.cancelled { Some("cancelled") } else { None },
+            terminal_id: outcome.terminal_id.as_deref(),
+            terminal_meta: outcome.terminal_meta,
+        })
     }
 
     async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
