@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, watch};
 
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::tools::executor::emit_error_chunk;
-use super::{error::actionable_stream_error, follow_up::StreamNormalizer, notify::notify_text};
+use super::{error::actionable_stream_error, follow_up::StreamNormalizer, notify::notify_text, output_filter::OutputFilter};
 
 pub enum StreamOutcome { Complete, Cancelled, Failed(String) }
 pub struct StreamResult { pub outcome: StreamOutcome, pub assistant: String, pub tool_detection_text: String }
@@ -22,6 +22,7 @@ pub async fn consume<E: Display>(
     is_thinking_model: bool, semantic: &mut TurnEventEmitter,
 ) -> Result<StreamResult, AcpError> {
     let mut thought_stream = crate::thought::ThoughtStream::new(is_thinking_model);
+    let mut output_filter = OutputFilter::new();
     let mut follow_up_stream = StreamNormalizer::default();
     let mut assistant = String::new();
     let mut tool_detection_text = String::new();
@@ -36,14 +37,23 @@ pub async fn consume<E: Display>(
                     Ok(delta) => for event in thought_stream.feed(&delta) {
                         match event {
                             crate::thought::ThoughtEvent::ThoughtChunk(text) => {
-                                tool_detection_text.push_str(&text); semantic.thinking_delta(&text);
+                                semantic.thinking_delta(&text);
                                 crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
                             }
                             crate::thought::ThoughtEvent::ThoughtEnd => { if is_thinking_model { semantic.thinking_completed(); } }
                             crate::thought::ThoughtEvent::ResponseChunk(text) => {
-                                tool_detection_text.push_str(&text); assistant.push_str(&text); semantic.assistant_delta(&text);
-                                let safe_message = follow_up_stream.push(&text);
-                                if !safe_message.is_empty() { notify_text(cx, session_id, message_id, safe_message)?; }
+                                // Only response content is eligible for tool parsing.
+                                // Thinking content is never reinterpreted as a tool call.
+                                tool_detection_text.push_str(&text);
+                                let filtered = output_filter.push(&text);
+                                if !filtered.is_empty() {
+                                    assistant.push_str(&filtered);
+                                    let safe_message = follow_up_stream.push(&filtered);
+                                    if !safe_message.is_empty() {
+                                        semantic.assistant_delta(&safe_message);
+                                        notify_text(cx, session_id, message_id, safe_message)?;
+                                    }
+                                }
                             }
                         }
                     },
@@ -56,19 +66,39 @@ pub async fn consume<E: Display>(
     for event in thought_stream.finish() {
         match event {
             crate::thought::ThoughtEvent::ThoughtChunk(text) => {
-                tool_detection_text.push_str(&text); semantic.thinking_delta(&text);
+                semantic.thinking_delta(&text);
                 crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
             }
             crate::thought::ThoughtEvent::ThoughtEnd => { if is_thinking_model { semantic.thinking_completed(); } }
             crate::thought::ThoughtEvent::ResponseChunk(text) => {
-                tool_detection_text.push_str(&text); assistant.push_str(&text); semantic.assistant_delta(&text);
-                let safe_message = follow_up_stream.push(&text);
-                if !safe_message.is_empty() { notify_text(cx, session_id, message_id, safe_message)?; }
+                tool_detection_text.push_str(&text);
+                let filtered = output_filter.push(&text);
+                if !filtered.is_empty() {
+                    assistant.push_str(&filtered);
+                    let safe_message = follow_up_stream.push(&filtered);
+                    if !safe_message.is_empty() {
+                        semantic.assistant_delta(&safe_message);
+                        notify_text(cx, session_id, message_id, safe_message)?;
+                    }
+                }
             }
         }
     }
+    let filtered_tail = output_filter.finish();
+    if !filtered_tail.is_empty() {
+        assistant.push_str(&filtered_tail);
+        let safe_message = follow_up_stream.push(&filtered_tail);
+        if !safe_message.is_empty() {
+            semantic.assistant_delta(&safe_message);
+            notify_text(cx, session_id, message_id, safe_message)?;
+        }
+    }
     let follow_up_tail = follow_up_stream.finish();
-    if !follow_up_tail.is_empty() { notify_text(cx, session_id, message_id, follow_up_tail)?; }
+    if !follow_up_tail.is_empty() {
+        assistant.push_str(&follow_up_tail);
+        semantic.assistant_delta(&follow_up_tail);
+        notify_text(cx, session_id, message_id, follow_up_tail)?;
+    }
     if !matches!(outcome, StreamOutcome::Cancelled) { semantic.assistant_completed(); }
     if let StreamOutcome::Failed(error) = &outcome { emit_error_chunk(cx, session_id, message_id, &actionable_stream_error(error)); }
     Ok(StreamResult { outcome, assistant, tool_detection_text })
