@@ -11,18 +11,18 @@ mod terminal;
 
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::v1::{
-    SessionId, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolCallContent,
-};
+use agent_client_protocol::schema::v1::{SessionId, ToolCallId};
 use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::{Map, Value};
 
 use crate::state::SessionMode;
 
 use super::lifecycle::{session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolLifecycleState};
-use super::registry::{ToolRegistry, ToolResult as RegistryToolResult};
+use super::registry::ToolRegistry;
 use super::tool_ux::{classify_risk, result_update, ToolInfo};
 
+pub use mapping::map_stop_reason;
+pub use notifications::{emit_error_chunk, safe_session_update};
 pub use permission::{PermissionKind, PermissionRequest, PermissionResult};
 
 #[derive(Debug, Clone)]
@@ -33,10 +33,7 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub fn err(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            is_ok: false,
-        }
+        Self { content: content.into(), is_ok: false }
     }
 }
 
@@ -58,22 +55,8 @@ pub struct ToolExecutor<'a> {
 }
 
 impl<'a> ToolExecutor<'a> {
-    pub fn new(
-        cx: &'a ConnectionTo<Client>,
-        session_id: &'a SessionId,
-        registry: &'a ToolRegistry,
-        cwd: &'a Path,
-        additional_dirs: &'a [PathBuf],
-        get_mode: &'a (dyn Fn() -> SessionMode + Send + Sync),
-    ) -> Self {
-        Self {
-            cx,
-            session_id,
-            registry,
-            cwd,
-            additional_dirs,
-            get_mode,
-        }
+    pub fn new(cx: &'a ConnectionTo<Client>, session_id: &'a SessionId, registry: &'a ToolRegistry, cwd: &'a Path, additional_dirs: &'a [PathBuf], get_mode: &'a (dyn Fn() -> SessionMode + Send + Sync)) -> Self {
+        Self { cx, session_id, registry, cwd, additional_dirs, get_mode }
     }
 
     pub async fn execute(&self, tool_name: &str, arguments: &Value) -> ToolResult {
@@ -92,71 +75,46 @@ impl<'a> ToolExecutor<'a> {
 
         let mode = (self.get_mode)();
         let needs_permission = match info.kind {
-            agent_client_protocol::schema::v1::ToolKind::Edit
-            | agent_client_protocol::schema::v1::ToolKind::Execute => match mode {
+            agent_client_protocol::schema::v1::ToolKind::Edit | agent_client_protocol::schema::v1::ToolKind::Execute => match mode {
                 SessionMode::BypassPermissions => false,
-                SessionMode::AcceptEdits => {
-                    info.kind == agent_client_protocol::schema::v1::ToolKind::Execute
-                        && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High
-                }
+                SessionMode::AcceptEdits => info.kind == agent_client_protocol::schema::v1::ToolKind::Execute && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High,
                 SessionMode::Default => true,
             },
             _ => false,
         };
 
         if needs_permission {
-            lifecycle
-                .transition(ToolLifecycleState::Permission)
-                .expect("pending -> permission must be legal");
+            lifecycle.transition(ToolLifecycleState::Permission).expect("pending -> permission must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
             let request = PermissionRequest::from_tool_call(tool_name, arguments, self.cwd);
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
                     if session_cancelled(self.session_id.0.as_ref()) {
-                        lifecycle
-                            .transition(ToolLifecycleState::Cancelled)
-                            .expect("permission -> cancelled must be legal");
-                        let message = format!(
-                            "{} ({}) annulé avant le démarrage de l'exécution.",
-                            request.kind.label(), request.summary
-                        );
+                        lifecycle.transition(ToolLifecycleState::Cancelled).expect("permission -> cancelled must be legal");
+                        let message = format!("{} ({}) annulé avant le démarrage de l'exécution.", request.kind.label(), request.summary);
                         let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
                         self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                         return ToolResult::err(message);
                     }
-                    lifecycle
-                        .transition(ToolLifecycleState::Executing)
-                        .expect("permission -> executing must be legal");
+                    lifecycle.transition(ToolLifecycleState::Executing).expect("permission -> executing must be legal");
                     self.emit_lifecycle(&call_id, &lifecycle, tool_name);
                 }
                 PermissionResult::Reject => {
-                    lifecycle
-                        .transition(ToolLifecycleState::Failed)
-                        .expect("permission -> failed must be legal");
-                    let message = format!(
-                        "{} ({}) refusé par l'utilisateur.",
-                        request.kind.label(), request.summary
-                    );
+                    lifecycle.transition(ToolLifecycleState::Failed).expect("permission -> failed must be legal");
+                    let message = format!("{} ({}) refusé par l'utilisateur.", request.kind.label(), request.summary);
                     let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("user-rejected"), None);
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                     return ToolResult::err(message);
                 }
                 PermissionResult::Cancelled => {
-                    lifecycle
-                        .transition(ToolLifecycleState::Cancelled)
-                        .expect("permission -> cancelled must be legal");
-                    let message = format!(
-                        "{} ({}) annulé pendant la demande d'autorisation.",
-                        request.kind.label(), request.summary
-                    );
+                    lifecycle.transition(ToolLifecycleState::Cancelled).expect("permission -> cancelled must be legal");
+                    let message = format!("{} ({}) annulé pendant la demande d'autorisation.", request.kind.label(), request.summary);
                     let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                     return ToolResult::err(message);
                 }
                 PermissionResult::TransportError(error) => {
-                    lifecycle
-                        .transition(ToolLifecycleState::Failed)
-                        .expect("permission -> failed must be legal");
+                    lifecycle.transition(ToolLifecycleState::Failed).expect("permission -> failed must be legal");
                     let message = format!("Échec de la demande de permission ACP : {error}");
                     let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("permission-error"), None);
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
@@ -171,9 +129,7 @@ impl<'a> ToolExecutor<'a> {
                 self.emit_failed(&call_id, message, arguments, tool_name, Some(meta));
                 return ToolResult::err(message);
             }
-            lifecycle
-                .transition(ToolLifecycleState::Executing)
-                .expect("pending -> executing must be legal");
+            lifecycle.transition(ToolLifecycleState::Executing).expect("pending -> executing must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
         }
 
@@ -189,61 +145,23 @@ impl<'a> ToolExecutor<'a> {
             self.execute_registry(tool_name, arguments).await
         };
 
-        let next_state = if outcome.cancelled {
-            ToolLifecycleState::Cancelled
-        } else if outcome.result.is_ok {
-            ToolLifecycleState::Completed
-        } else {
-            ToolLifecycleState::Failed
-        };
-        lifecycle
-            .transition(next_state)
-            .expect("executing must finish in a terminal state");
-        let rendered = result_update(
-            tool_name,
-            arguments,
-            &outcome.result.content,
-            outcome.result.is_ok && !outcome.cancelled,
-            self.cwd,
-            outcome.terminal_id.as_deref(),
-        );
-        let meta = mapping::lifecycle_meta(
-            tool_name,
-            &lifecycle,
-            if outcome.cancelled { Some("cancelled") } else { None },
-            outcome.terminal_meta,
-        );
-        self.emit_update(
-            &call_id,
-            lifecycle.state().wire_status(),
-            rendered.content,
-            rendered.locations,
-            Some(meta),
-        );
+        let next_state = if outcome.cancelled { ToolLifecycleState::Cancelled } else if outcome.result.is_ok { ToolLifecycleState::Completed } else { ToolLifecycleState::Failed };
+        lifecycle.transition(next_state).expect("executing must finish in a terminal state");
+        let rendered = result_update(tool_name, arguments, &outcome.result.content, outcome.result.is_ok && !outcome.cancelled, self.cwd, outcome.terminal_id.as_deref());
+        let meta = mapping::lifecycle_meta(tool_name, &lifecycle, if outcome.cancelled { Some("cancelled") } else { None }, outcome.terminal_meta);
+        self.emit_update(&call_id, lifecycle.state().wire_status(), rendered.content, rendered.locations, Some(meta));
         outcome.result
     }
 
     async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
         let result = tokio::select! {
             value = self.registry.call_async(tool_name, arguments, self.cwd, self.additional_dirs) => value,
-            _ = wait_for_session_cancel(self.session_id.0.as_ref()) => {
-                return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true };
-            }
+            _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true },
         };
         let cancelled = session_cancelled(self.session_id.0.as_ref());
         match result {
-            Some(result) => ExecutionOutcome {
-                result: mapping::registry_result(result),
-                terminal_id: None,
-                terminal_meta: None,
-                cancelled,
-            },
-            None => ExecutionOutcome {
-                result: ToolResult::err(format!("Outil inconnu : {tool_name}")),
-                terminal_id: None,
-                terminal_meta: None,
-                cancelled,
-            },
+            Some(result) => ExecutionOutcome { result: mapping::registry_result(result), terminal_id: None, terminal_meta: None, cancelled },
+            None => ExecutionOutcome { result: ToolResult::err(format!("Outil inconnu : {tool_name}")), terminal_id: None, terminal_meta: None, cancelled },
         }
     }
 }
@@ -261,9 +179,9 @@ mod tests {
     #[test]
     fn stop_reason_mapping() {
         use agent_client_protocol::schema::v1::StopReason;
-        assert_eq!(mapping::map_stop_reason(Some("length")), StopReason::MaxTokens);
-        assert_eq!(mapping::map_stop_reason(Some("content_filter")), StopReason::Refusal);
-        assert_eq!(mapping::map_stop_reason(None), StopReason::EndTurn);
+        assert_eq!(map_stop_reason(Some("length")), StopReason::MaxTokens);
+        assert_eq!(map_stop_reason(Some("content_filter")), StopReason::Refusal);
+        assert_eq!(map_stop_reason(None), StopReason::EndTurn);
     }
 
     #[test]
