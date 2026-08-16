@@ -16,5 +16,6 @@ pub enum AcpSemanticEvent {
     ToolExecutionStarted { context: ToolEventContext },
     ToolResultReceived { context: ToolEventContext, result: String },
     TurnCancelled { context: EventContext },
+    TurnFailed { context: EventContext },
     TurnCompleted { context: EventContext },
 }
