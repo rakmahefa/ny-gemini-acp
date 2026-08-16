@@ -19,12 +19,14 @@ pub fn emit_tool_state(
         ToolLifecycleState::Executing => {
             AcpSemanticEvent::ToolExecutionStarted { context }
         }
-        ToolLifecycleState::Completed | ToolLifecycleState::Failed => {
-            AcpSemanticEvent::ToolResultReceived {
-                context,
-                result: state.to_string(),
-            }
-        }
+        ToolLifecycleState::Completed => AcpSemanticEvent::ToolResultReceived {
+            context,
+            result: "completed".into(),
+        },
+        ToolLifecycleState::Failed => AcpSemanticEvent::ToolResultReceived {
+            context,
+            result: "failed".into(),
+        },
         ToolLifecycleState::Cancelled => AcpSemanticEvent::ToolResultReceived {
             context,
             result: "cancelled".into(),
@@ -34,7 +36,12 @@ pub fn emit_tool_state(
     let _ = bus.publish(event);
 }
 
-pub fn context(session_id: impl Into<String>, turn_id: impl Into<String>, sequence: u64, tool_call_id: impl Into<String>) -> ToolEventContext {
+pub fn context(
+    session_id: impl Into<String>,
+    turn_id: impl Into<String>,
+    sequence: u64,
+    tool_call_id: impl Into<String>,
+) -> ToolEventContext {
     ToolEventContext {
         event: EventContext::new(session_id, turn_id, sequence),
         tool_call_id: tool_call_id.into(),
