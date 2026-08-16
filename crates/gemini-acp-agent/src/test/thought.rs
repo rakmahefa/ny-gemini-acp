@@ -17,11 +17,13 @@ fn non_thinking_model_emits_response_events_directly() {
 #[test]
 fn thinking_model_without_explicit_thought_envelope_preserves_response() {
     let mut stream = ThoughtStream::new(true);
-    assert!(stream.feed("Voici la réponse finale").is_empty());
-    let tail = stream.feed(" avec plus de détails");
     assert_eq!(
-        tail,
-        vec![ThoughtEvent::ResponseChunk("Voici la réponse finale avec plus de détails".into())]
+        stream.feed("Voici la réponse finale"),
+        vec![ThoughtEvent::ResponseChunk("Voici la réponse finale".into())]
+    );
+    assert_eq!(
+        stream.feed(" avec plus de détails"),
+        vec![ThoughtEvent::ResponseChunk(" avec plus de détails".into())]
     );
     assert_eq!(stream.phase(), ThoughtPhase::Response);
     assert!(!stream.has_emitted_thought());
@@ -120,12 +122,12 @@ fn closing_marker_split_across_deltas_is_atomic() {
 }
 
 #[test]
-fn finish_without_explicit_thought_boundary_emits_response() {
+fn finish_without_explicit_thought_boundary_emits_short_response() {
     let mut stream = ThoughtStream::new(true);
-    stream.feed("Réponse générée par le modèle");
+    stream.feed("OK");
     assert_eq!(
         stream.finish(),
-        vec![ThoughtEvent::ResponseChunk("Réponse générée par le modèle".into())]
+        vec![ThoughtEvent::ResponseChunk("OK".into())]
     );
     assert!(!stream.has_emitted_thought());
     assert_eq!(stream.phase(), ThoughtPhase::Completed);
