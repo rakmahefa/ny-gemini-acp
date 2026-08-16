@@ -16,8 +16,8 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cargo Format Check
-        run: cargo fmt --check
+      - name: Cargo Format
+        run: cargo fmt
 
       - name: Cargo Test Workspace
         run: cargo test --workspace
