@@ -63,37 +63,43 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                     turn_manager
                         .start(sid.clone(), move |_cancellation| async move {
                             let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
-                            let mut semantic = TurnEventEmitter::new(events, sid.clone(), turn_id);
-                            semantic.turn_started();
-
                             let interactive =
                                 gemini_acp_runtime::tools::interactive::InteractiveContext {
                                     cx: turn_cx.clone(),
                                     session_id,
                                 };
-                            let result = gemini_acp_runtime::tools::interactive::scope(interactive, async move {
-                                prompt::run_turn(
-                                    store,
-                                    tools,
-                                    client,
-                                    req,
-                                    responder,
-                                    turn_cx,
-                                    &mut semantic,
-                                )
-                                .await
-                                .map_err(|e| {
-                                    gemini_acp_encaps::EncapsError::Task(e.to_string())
-                                })
-                            })
-                            .await;
 
-                            if result.is_ok() {
-                                semantic.turn_completed();
-                            } else {
-                                semantic.turn_cancelled();
-                            }
-                            result
+                            gemini_acp_runtime::tools::interactive::scope(
+                                interactive,
+                                async move {
+                                    let mut semantic =
+                                        TurnEventEmitter::new(events, sid.clone(), turn_id);
+                                    semantic.turn_started();
+
+                                    let result = prompt::run_turn(
+                                        store,
+                                        tools,
+                                        client,
+                                        req,
+                                        responder,
+                                        turn_cx,
+                                        &mut semantic,
+                                    )
+                                    .await
+                                    .map_err(|e| {
+                                        gemini_acp_encaps::EncapsError::Task(e.to_string())
+                                    });
+
+                                    if result.is_ok() {
+                                        semantic.turn_completed();
+                                    } else {
+                                        semantic.turn_cancelled();
+                                    }
+
+                                    result
+                                },
+                            )
+                            .await
                         })
                         .await
                         .map_err(|error| anyhow::anyhow!("failed to enqueue ACP turn: {error}"))?;
