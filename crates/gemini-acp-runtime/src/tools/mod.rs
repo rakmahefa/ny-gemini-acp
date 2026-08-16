@@ -17,6 +17,7 @@ pub mod builtin;
 pub mod executor;
 pub mod interactive;
 pub mod lifecycle;
+pub mod lifecycle_events;
 pub mod parse;
 pub mod prompt;
 pub mod registry;
@@ -26,5 +27,6 @@ pub mod tool_history;
 pub mod tool_ux;
 
 pub use lifecycle::{LifecycleError, ToolLifecycle, ToolLifecycleState};
+pub use lifecycle_events::{context as tool_event_context, emit_tool_state};
 pub use registry::ToolRegistry;
 pub use request::{ToolCallKind, ToolCallRequest, ToolCallRequestError, ToolCallState};
