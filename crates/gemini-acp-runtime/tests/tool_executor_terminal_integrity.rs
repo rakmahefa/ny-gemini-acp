@@ -93,8 +93,7 @@ fn executor_has_one_canonical_terminal_emission() {
     assert!(!source.contains("emit_failed("));
 
     let start = source.find("fn finish_terminal(").unwrap();
-    let end = source[start..].find("\n    pub async fn execute(").unwrap() + start;
-    let helper = &source[start..end];
+    let helper = &source[start..];
     assert_eq!(helper.matches("self.emit_update(").count(), 1);
     assert!(helper.contains("finish_with_result("));
 }

@@ -8,6 +8,7 @@
 //! - [`follow_up`]      — parsing et normalisation du composant Gemini `<FollowUp>`.
 //! - [`notify`]         — notifications ACP (chunks texte, usage tokens).
 //! - [`output_filter`]  — filtrage streaming des marqueurs ACP échappés par Gemini.
+//! - [`stream`]         — consommation du flux Gemini et lifecycle sémantique.
 //! - [`title`]          — dérivation automatique du titre de session.
 //! - [`turn`]           — orchestration du tour complet.
 
@@ -17,6 +18,7 @@ pub mod error;
 pub mod follow_up;
 pub mod notify;
 pub mod output_filter;
+pub mod stream;
 pub mod title;
 pub mod turn;
 
