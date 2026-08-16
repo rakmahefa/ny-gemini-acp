@@ -68,6 +68,51 @@ impl<'a> ToolExecutor<'a> {
         Self { cx, session_id, registry, cwd, additional_dirs, get_mode }
     }
 
+    /// Emit one terminal result through the lifecycle's canonical envelope.
+    ///
+    /// Every terminal path, including rejection and pre-execution cancellation,
+    /// must use this helper. The lifecycle chooses the wire status and binds the
+    /// result payload to the terminal sequence before ACP rendering happens.
+    fn finish_terminal(
+        &self,
+        call_id: &ToolCallId,
+        lifecycle: &mut ToolLifecycle,
+        tool_name: &str,
+        arguments: &Value,
+        content: impl Into<String>,
+        is_ok: bool,
+        cancelled: bool,
+        reason: Option<&str>,
+        terminal_id: Option<&str>,
+        terminal_meta: Option<Map<String, Value>>,
+    ) -> ToolResult {
+        let content = content.into();
+        let envelope = lifecycle
+            .finish_with_result(tool_name, content.clone(), is_ok, cancelled)
+            .expect("terminal tool path must finalize exactly once");
+
+        debug_assert_eq!(envelope.status, lifecycle.status());
+
+        let rendered = result_update(
+            tool_name,
+            arguments,
+            &envelope.content,
+            envelope.status == ToolCallStatus::Completed,
+            self.cwd,
+            terminal_id,
+        );
+        let meta = mapping::lifecycle_meta(tool_name, lifecycle, reason, terminal_meta);
+        self.emit_update(
+            call_id,
+            envelope.status,
+            rendered.content,
+            rendered.locations,
+            Some(meta),
+        );
+
+        ToolResult { content, is_ok: envelope.status == ToolCallStatus::Completed }
+    }
+
     pub async fn execute(&self, tool_name: &str, arguments: &Value) -> ToolResult {
         let call_id = ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple()));
         let info = ToolInfo::build(tool_name, arguments, self.cwd, None);
@@ -75,11 +120,19 @@ impl<'a> ToolExecutor<'a> {
         self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
 
         if session_cancelled(self.session_id.0.as_ref()) {
-            lifecycle.cancel().expect("pending -> cancelled must be legal");
             let message = "outil annulé avant son démarrage";
-            let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
-            self.emit_failed(&call_id, message, arguments, tool_name, Some(meta));
-            return ToolResult::err(message);
+            return self.finish_terminal(
+                &call_id,
+                &mut lifecycle,
+                tool_name,
+                arguments,
+                message,
+                false,
+                true,
+                Some("cancelled"),
+                None,
+                None,
+            );
         }
 
         let mode = (self.get_mode)();
@@ -106,21 +159,22 @@ impl<'a> ToolExecutor<'a> {
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
                     if session_cancelled(self.session_id.0.as_ref()) {
-                        lifecycle
-                            .transition(ToolLifecycleState::Cancelled)
-                            .expect("permission -> cancelled must be legal");
                         let message = format!(
                             "{} ({}) annulé avant le démarrage de l'exécution.",
                             request.kind.label(), request.summary
                         );
-                        let meta = mapping::lifecycle_meta(
+                        return self.finish_terminal(
+                            &call_id,
+                            &mut lifecycle,
                             tool_name,
-                            &lifecycle,
+                            arguments,
+                            message,
+                            false,
+                            true,
                             Some("cancelled"),
                             None,
+                            None,
                         );
-                        self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
-                        return ToolResult::err(message);
                     }
                     lifecycle
                         .transition(ToolLifecycleState::Executing)
@@ -128,61 +182,72 @@ impl<'a> ToolExecutor<'a> {
                     self.emit_lifecycle(&call_id, &lifecycle, tool_name);
                 }
                 PermissionResult::Reject => {
-                    lifecycle
-                        .transition(ToolLifecycleState::Failed)
-                        .expect("permission -> failed must be legal");
                     let message = format!(
                         "{} ({}) refusé par l'utilisateur.",
                         request.kind.label(), request.summary
                     );
-                    let meta = mapping::lifecycle_meta(
+                    return self.finish_terminal(
+                        &call_id,
+                        &mut lifecycle,
                         tool_name,
-                        &lifecycle,
+                        arguments,
+                        message,
+                        false,
+                        false,
                         Some("user-rejected"),
                         None,
+                        None,
                     );
-                    self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
-                    return ToolResult::err(message);
                 }
                 PermissionResult::Cancelled => {
-                    lifecycle
-                        .transition(ToolLifecycleState::Cancelled)
-                        .expect("permission -> cancelled must be legal");
                     let message = format!(
                         "{} ({}) annulé pendant la demande d'autorisation.",
                         request.kind.label(), request.summary
                     );
-                    let meta = mapping::lifecycle_meta(
+                    return self.finish_terminal(
+                        &call_id,
+                        &mut lifecycle,
                         tool_name,
-                        &lifecycle,
+                        arguments,
+                        message,
+                        false,
+                        true,
                         Some("cancelled"),
                         None,
-                    );
-                    self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
-                    return ToolResult::err(message);
-                }
-                PermissionResult::TransportError(error) => {
-                    lifecycle
-                        .transition(ToolLifecycleState::Failed)
-                        .expect("permission -> failed must be legal");
-                    let message = format!("Échec de la demande de permission ACP : {error}");
-                    let meta = mapping::lifecycle_meta(
-                        tool_name,
-                        &lifecycle,
-                        Some("permission-error"),
                         None,
                     );
-                    self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
-                    return ToolResult::err(message);
+                }
+                PermissionResult::TransportError(error) => {
+                    let message = format!("Échec de la demande de permission ACP : {error}");
+                    return self.finish_terminal(
+                        &call_id,
+                        &mut lifecycle,
+                        tool_name,
+                        arguments,
+                        message,
+                        false,
+                        false,
+                        Some("permission-error"),
+                        None,
+                        None,
+                    );
                 }
             }
         } else {
             if session_cancelled(self.session_id.0.as_ref()) {
-                lifecycle.cancel().expect("pending -> cancelled must be legal");
                 let message = "outil annulé avant son exécution";
-                let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
-                self.emit_failed(&call_id, message, arguments, tool_name, Some(meta));
-                return ToolResult::err(message);
+                return self.finish_terminal(
+                    &call_id,
+                    &mut lifecycle,
+                    tool_name,
+                    arguments,
+                    message,
+                    false,
+                    true,
+                    Some("cancelled"),
+                    None,
+                    None,
+                );
             }
             lifecycle
                 .transition(ToolLifecycleState::Executing)
@@ -206,42 +271,22 @@ impl<'a> ToolExecutor<'a> {
             self.execute_registry(tool_name, arguments).await
         };
 
-        // The lifecycle is now the single source of truth for the terminal
-        // state and the canonical result payload. The executor must not decide
-        // Completed/Failed/Cancelled independently anymore.
-        let envelope = lifecycle
-            .finish_with_result(
-                tool_name,
-                outcome.result.content.clone(),
-                outcome.result.is_ok,
-                outcome.cancelled,
-            )
-            .expect("executing tool must finish exactly once in a terminal state");
-
-        debug_assert_eq!(envelope.status, lifecycle.status());
-
-        let rendered = result_update(
+        let result = self.finish_terminal(
+            &call_id,
+            &mut lifecycle,
             tool_name,
             arguments,
-            &envelope.content,
-            envelope.status == ToolCallStatus::Completed,
-            self.cwd,
-            outcome.terminal_id.as_deref(),
-        );
-        let meta = mapping::lifecycle_meta(
-            tool_name,
-            &lifecycle,
+            outcome.result.content.clone(),
+            outcome.result.is_ok,
+            outcome.cancelled,
             if outcome.cancelled { Some("cancelled") } else { None },
+            outcome.terminal_id.as_deref(),
             outcome.terminal_meta,
         );
-        self.emit_update(
-            &call_id,
-            envelope.status,
-            rendered.content,
-            rendered.locations,
-            Some(meta),
-        );
-        outcome.result
+
+        // Preserve the execution API's original semantics while ensuring the
+        // wire result is derived exclusively from the canonical envelope.
+        result
     }
 
     async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
