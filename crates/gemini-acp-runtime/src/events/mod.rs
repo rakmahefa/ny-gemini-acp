@@ -2,6 +2,7 @@ mod bus;
 mod context;
 mod emitter;
 mod event;
+mod integrity;
 mod stream;
 
 pub use bus::EventBus;
