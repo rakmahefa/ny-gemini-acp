@@ -65,9 +65,10 @@ fn xml_open_marker_split_across_deltas_is_atomic() {
     );
     let tail = stream.feed(" puis </thi");
     assert!(tail.iter().any(|event| match event {
-        ThoughtEvent::ThoughtChunk(text) => text.contains(" puis "),
+        ThoughtEvent::ThoughtChunk(text) => text == " puis ",
         _ => false,
     }));
+    assert!(!tail.iter().any(|event| matches!(event, ThoughtEvent::ThoughtEnd)));
     assert_eq!(
         stream.feed("nking>Réponse"),
         vec![ThoughtEvent::ThoughtEnd, ThoughtEvent::ResponseChunk("Réponse".into())]
@@ -108,7 +109,10 @@ fn closing_marker_split_across_deltas_is_atomic() {
         stream.feed("<thinking>pensée"),
         vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("pensée".into())]
     );
-    assert!(stream.feed(" utile </thi").is_empty());
+    assert_eq!(
+        stream.feed(" utile </thi"),
+        vec![ThoughtEvent::ThoughtChunk(" utile ".into())]
+    );
     assert_eq!(
         stream.feed("nking>Réponse"),
         vec![ThoughtEvent::ThoughtEnd, ThoughtEvent::ResponseChunk("Réponse".into())]
