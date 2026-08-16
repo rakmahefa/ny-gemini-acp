@@ -26,8 +26,8 @@ pub async fn consume<E: Display>(
     let mut follow_up_stream = StreamNormalizer::default();
     let mut assistant = String::new();
     let mut tool_detection_text = String::new();
+    let mut thinking_active = false;
     semantic.assistant_started();
-    if is_thinking_model { semantic.thinking_started(); }
     let outcome = loop {
         tokio::select! {
             _ = cancel.changed() => break StreamOutcome::Cancelled,
@@ -36,12 +36,31 @@ pub async fn consume<E: Display>(
                 match item {
                     Ok(delta) => for event in thought_stream.feed(&delta) {
                         match event {
+                            crate::thought::ThoughtEvent::ThoughtStart => {
+                                if !thinking_active {
+                                    semantic.thinking_started();
+                                    thinking_active = true;
+                                }
+                            }
                             crate::thought::ThoughtEvent::ThoughtChunk(text) => {
+                                if !thinking_active {
+                                    semantic.thinking_started();
+                                    thinking_active = true;
+                                }
                                 semantic.thinking_delta(&text);
                                 crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
                             }
-                            crate::thought::ThoughtEvent::ThoughtEnd => { if is_thinking_model { semantic.thinking_completed(); } }
+                            crate::thought::ThoughtEvent::ThoughtEnd => {
+                                if thinking_active {
+                                    semantic.thinking_completed();
+                                    thinking_active = false;
+                                }
+                            }
                             crate::thought::ThoughtEvent::ResponseChunk(text) => {
+                                if thinking_active {
+                                    semantic.thinking_completed();
+                                    thinking_active = false;
+                                }
                                 // Keep the raw response protocol separate from ACP presentation.
                                 // Tool detection consumes this raw response stream; the protocol
                                 // filter only protects the user-visible assistant channel.
@@ -66,12 +85,31 @@ pub async fn consume<E: Display>(
     drop(rx);
     for event in thought_stream.finish() {
         match event {
+            crate::thought::ThoughtEvent::ThoughtStart => {
+                if !thinking_active {
+                    semantic.thinking_started();
+                    thinking_active = true;
+                }
+            }
             crate::thought::ThoughtEvent::ThoughtChunk(text) => {
+                if !thinking_active {
+                    semantic.thinking_started();
+                    thinking_active = true;
+                }
                 semantic.thinking_delta(&text);
                 crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
             }
-            crate::thought::ThoughtEvent::ThoughtEnd => { if is_thinking_model { semantic.thinking_completed(); } }
+            crate::thought::ThoughtEvent::ThoughtEnd => {
+                if thinking_active {
+                    semantic.thinking_completed();
+                    thinking_active = false;
+                }
+            }
             crate::thought::ThoughtEvent::ResponseChunk(text) => {
+                if thinking_active {
+                    semantic.thinking_completed();
+                    thinking_active = false;
+                }
                 tool_detection_text.push_str(&text);
                 let filtered = protocol_filter.push(&text);
                 if !filtered.is_empty() {
@@ -84,6 +122,9 @@ pub async fn consume<E: Display>(
                 }
             }
         }
+    }
+    if thinking_active {
+        semantic.thinking_completed();
     }
     let filtered_tail = protocol_filter.finish();
     if !filtered_tail.is_empty() {

@@ -1,8 +1,14 @@
 //! Encapsulation du flux `thinking` Gemini → ACP.
 //!
 //! Le parseur est indépendant du transport Gemini et de la couche ACP. Il
-//! transforme un flux de deltas en événements sémantiques : pensée,
-//! transition vers la réponse, ou réponse.
+//! transforme un flux de deltas en événements sémantiques : pensée explicite,
+//! transition vers la réponse, ou réponse normale.
+//!
+//! Important : un modèle configuré en mode thinking n'implique pas que le
+//! flux texte du transport contienne effectivement un bloc de pensée. Le
+//! transport Gemini Web peut exposer uniquement la réponse finale. Dans ce
+//! cas, nous ne devons jamais classer arbitrairement la réponse comme pensée :
+//! elle reste une réponse assistant valide.
 
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
@@ -11,16 +17,23 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 
 const MARKER_LOOKBEHIND: usize = 32;
+const THINKING_OPEN_MARKERS: [&str; 4] = ["<thinking>", "<think>", "[Thinking]:", "[thinking]:"];
+const THINKING_CLOSE_MARKERS: [&str; 2] = ["</thinking>", "</think>"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThoughtPhase {
+    /// A thinking-capable model is being probed for an explicit thought block.
+    Detecting,
+    /// The response is normal assistant content; no explicit thought block was present.
     Response,
+    /// An explicit thought block is being streamed.
     Thinking,
     Completed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThoughtEvent {
+    ThoughtStart,
     ThoughtChunk(String),
     ThoughtEnd,
     ResponseChunk(String),
@@ -37,7 +50,7 @@ impl ThoughtStream {
     pub fn new(is_thinking_model: bool) -> Self {
         Self {
             phase: if is_thinking_model {
-                ThoughtPhase::Thinking
+                ThoughtPhase::Detecting
             } else {
                 ThoughtPhase::Response
             },
@@ -59,31 +72,81 @@ impl ThoughtStream {
             return Vec::new();
         }
 
-        if self.phase == ThoughtPhase::Response {
-            return vec![ThoughtEvent::ResponseChunk(delta.to_owned())];
+        match self.phase {
+            ThoughtPhase::Response => vec![ThoughtEvent::ResponseChunk(delta.to_owned())],
+            ThoughtPhase::Detecting => self.feed_detecting(delta),
+            ThoughtPhase::Thinking => self.feed_thinking(delta, false),
+            ThoughtPhase::Completed => Vec::new(),
+        }
+    }
+
+    pub fn finish(&mut self) -> Vec<ThoughtEvent> {
+        if self.phase == ThoughtPhase::Completed {
+            return Vec::new();
         }
 
-        self.pending.push_str(delta);
-        self.consume_open_marker();
+        let mut events = Vec::new();
+        let pending = std::mem::take(&mut self.pending);
 
-        if let Some((idx, marker_len, keep_marker)) = find_thought_end(&self.pending) {
-            // `pending` intentionally retains a marker lookbehind so that a
-            // marker split across deltas can be detected. That lookbehind may
-            // already have been emitted as a thought chunk on a previous feed;
-            // never emit it twice when the actual boundary is found.
-            let thought_start = if self.emitted_thought {
-                self.pending
-                    .char_indices()
-                    .nth(MARKER_LOOKBEHIND)
-                    .map(|(byte_idx, _)| byte_idx)
-                    .unwrap_or(0)
-                    .min(idx)
-            } else {
-                0
-            };
-            let thought = self.pending[thought_start..idx].to_owned();
-            let message_start = if keep_marker { idx } else { idx + marker_len };
-            let message = self.pending[message_start..].to_owned();
+        match self.phase {
+            ThoughtPhase::Detecting => {
+                // No explicit thought envelope arrived. Treat the buffered
+                // payload as assistant response rather than silently dropping
+                // it or misclassifying it as hidden reasoning.
+                if !pending.is_empty() {
+                    events.push(ThoughtEvent::ResponseChunk(pending));
+                }
+            }
+            ThoughtPhase::Response => {
+                if !pending.is_empty() {
+                    events.push(ThoughtEvent::ResponseChunk(pending));
+                }
+            }
+            ThoughtPhase::Thinking => {
+                if !pending.is_empty() {
+                    self.emitted_thought = true;
+                    events.push(ThoughtEvent::ThoughtChunk(pending));
+                }
+                events.push(ThoughtEvent::ThoughtEnd);
+            }
+            ThoughtPhase::Completed => {}
+        }
+
+        self.phase = ThoughtPhase::Completed;
+        events
+    }
+
+    fn feed_detecting(&mut self, delta: &str) -> Vec<ThoughtEvent> {
+        self.pending.push_str(delta);
+
+        if let Some(marker) = matching_open_marker(&self.pending) {
+            self.pending.drain(..marker.len());
+            self.phase = ThoughtPhase::Thinking;
+            return vec![ThoughtEvent::ThoughtStart];
+        }
+
+        if self.pending.len() < max_prefix_len(&THINKING_OPEN_MARKERS) {
+            return Vec::new();
+        }
+
+        // The beginning of the stream is not an explicit thought envelope.
+        // Flush all safely classified text as assistant response and switch to
+        // the normal response phase for the remainder of the stream.
+        let response = std::mem::take(&mut self.pending);
+        self.phase = ThoughtPhase::Response;
+        if response.is_empty() {
+            Vec::new()
+        } else {
+            vec![ThoughtEvent::ResponseChunk(response)]
+        }
+    }
+
+    fn feed_thinking(&mut self, delta: &str, _final_chunk: bool) -> Vec<ThoughtEvent> {
+        self.pending.push_str(delta);
+
+        if let Some((idx, marker_len)) = find_thought_end(&self.pending) {
+            let thought = self.pending[..idx].to_owned();
+            let message = self.pending[idx + marker_len..].to_owned();
             self.pending.clear();
             self.phase = ThoughtPhase::Response;
 
@@ -99,8 +162,9 @@ impl ThoughtStream {
             return events;
         }
 
-        if self.pending.chars().count() > MARKER_LOOKBEHIND {
-            let emit_chars = self.pending.chars().count() - MARKER_LOOKBEHIND;
+        let char_count = self.pending.chars().count();
+        if char_count > MARKER_LOOKBEHIND {
+            let emit_chars = char_count - MARKER_LOOKBEHIND;
             let split_at = self
                 .pending
                 .char_indices()
@@ -116,38 +180,6 @@ impl ThoughtStream {
         }
 
         Vec::new()
-    }
-
-    pub fn finish(&mut self) -> Vec<ThoughtEvent> {
-        if self.phase == ThoughtPhase::Completed {
-            return Vec::new();
-        }
-
-        let mut events = Vec::new();
-        let pending = std::mem::take(&mut self.pending);
-        if !pending.is_empty() {
-            if self.phase == ThoughtPhase::Thinking {
-                self.emitted_thought = true;
-                events.push(ThoughtEvent::ThoughtChunk(pending));
-            } else {
-                events.push(ThoughtEvent::ResponseChunk(pending));
-            }
-        }
-
-        if self.phase == ThoughtPhase::Thinking {
-            events.push(ThoughtEvent::ThoughtEnd);
-        }
-        self.phase = ThoughtPhase::Completed;
-        events
-    }
-
-    fn consume_open_marker(&mut self) {
-        for marker in ["<think>", "<thinking>"] {
-            if let Some(rest) = self.pending.strip_prefix(marker) {
-                self.pending = rest.to_owned();
-                break;
-            }
-        }
     }
 }
 
@@ -173,9 +205,9 @@ impl ThoughtSplitter {
         let mut message = String::new();
         for event in self.stream.feed(delta) {
             match event {
+                ThoughtEvent::ThoughtStart | ThoughtEvent::ThoughtEnd => {}
                 ThoughtEvent::ThoughtChunk(text) => thought.push_str(&text),
                 ThoughtEvent::ResponseChunk(text) => message.push_str(&text),
-                ThoughtEvent::ThoughtEnd => {}
             }
         }
         (thought, message)
@@ -186,9 +218,9 @@ impl ThoughtSplitter {
         let mut message = String::new();
         for event in self.stream.finish() {
             match event {
+                ThoughtEvent::ThoughtStart | ThoughtEvent::ThoughtEnd => {}
                 ThoughtEvent::ThoughtChunk(text) => thought.push_str(&text),
                 ThoughtEvent::ResponseChunk(text) => message.push_str(&text),
-                ThoughtEvent::ThoughtEnd => {}
             }
         }
         (thought, message)
@@ -199,34 +231,33 @@ impl ThoughtSplitter {
     }
 }
 
-fn find_thought_end(buffer: &str) -> Option<(usize, usize, bool)> {
-    for marker in ["</thinking>", "</think>"] {
-        if let Some(idx) = buffer.find(marker) {
-            return Some((idx, marker.len(), false));
+fn matching_open_marker(buffer: &str) -> Option<&'static str> {
+    THINKING_OPEN_MARKERS
+        .iter()
+        .copied()
+        .find(|marker| buffer.starts_with(marker))
+}
+
+fn max_prefix_len(markers: &[&str]) -> usize {
+    markers.iter().map(|marker| marker.len()).max().unwrap_or(0)
+}
+
+fn find_thought_end(buffer: &str) -> Option<(usize, usize)> {
+    THINKING_CLOSE_MARKERS
+        .iter()
+        .filter_map(|marker| buffer.find(marker).map(|idx| (idx, marker.len())))
+        .min_by_key(|(idx, _)| *idx)
+}
+
+/// Compat helper used by tests and by future marker implementations.
+fn partial_suffix_len(text: &str, needle: &str) -> usize {
+    let max = text.len().min(needle.len().saturating_sub(1));
+    for len in (1..=max).rev() {
+        if text.ends_with(&needle[..len]) {
+            return len;
         }
     }
-
-    let mut search_from = 0usize;
-    while let Some(dnl_idx) = buffer[search_from..].find("\n\n") {
-        let abs_idx = search_from + dnl_idx;
-        let after = &buffer[abs_idx + 2..];
-        let heading = after.starts_with("# ")
-            || after.starts_with("## ")
-            || after.starts_with("### ")
-            || after.starts_with("#### ");
-        let bold_label = after.starts_with("**")
-            && after.len() > 2
-            && after[2..]
-                .chars()
-                .next()
-                .is_some_and(|c| c.is_alphanumeric());
-
-        if heading || bold_label {
-            return Some((abs_idx, 0, true));
-        }
-        search_from = abs_idx + 2;
-    }
-    None
+    0
 }
 
 pub async fn notify_thought(
