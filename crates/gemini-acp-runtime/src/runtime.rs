@@ -1,4 +1,5 @@
 //! Runtime de l'agent : construction et cycle de vie de l'état applicatif.
+use crate::events::EventBus;
 use crate::session::SessionManager;
 use crate::tools::ToolRegistry;
 use anyhow::{Context, Result};
@@ -16,10 +17,13 @@ pub struct AppState {
     pub config: Arc<AgentConfig>,
     pub settings: Arc<tokio::sync::Mutex<SettingsManager>>,
     pub tools: Arc<ToolRegistry>,
+    pub events: EventBus,
 }
+
 pub struct AgentRuntime {
     state: AppState,
 }
+
 impl AgentRuntime {
     pub async fn from_config(config: AgentConfig) -> Result<Self> {
         for warning in config.validate() {
@@ -59,15 +63,19 @@ impl AgentRuntime {
                 config: Arc::new(config),
                 settings: Arc::new(tokio::sync::Mutex::new(settings)),
                 tools: Arc::new(tools),
+                events: EventBus::new(),
             },
         })
     }
+
     pub fn state(&self) -> &AppState {
         &self.state
     }
+
     pub async fn settings(&self) -> serde_json::Value {
         self.state.settings.lock().await.settings()
     }
+
     pub async fn shutdown(&self) {
         let store = Arc::clone(&self.state.store);
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, store.cancel_all()).await {
