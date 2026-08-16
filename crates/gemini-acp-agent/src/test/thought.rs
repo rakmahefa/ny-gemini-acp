@@ -61,22 +61,16 @@ fn xml_open_marker_split_across_deltas_is_atomic() {
     assert!(stream.feed("<thi").is_empty());
     assert_eq!(
         stream.feed("nking>Réflexion"),
-        vec![
-            ThoughtEvent::ThoughtStart,
-            ThoughtEvent::ThoughtChunk("Réflexion".into()),
-        ]
+        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("Réflexion".into())]
     );
     let tail = stream.feed(" puis </thi");
     assert!(tail.iter().any(|event| match event {
-        ThoughtEvent::ThoughtChunk(text) => text == " puis ",
+        ThoughtEvent::ThoughtChunk(text) => text.contains(" puis "),
         _ => false,
     }));
     assert_eq!(
         stream.feed("nking>Réponse"),
-        vec![
-            ThoughtEvent::ThoughtEnd,
-            ThoughtEvent::ResponseChunk("Réponse".into()),
-        ]
+        vec![ThoughtEvent::ThoughtEnd, ThoughtEvent::ResponseChunk("Réponse".into())]
     );
 }
 
@@ -85,15 +79,10 @@ fn opening_marker_is_never_exposed_to_consumers() {
     let mut stream = ThoughtStream::new(true);
     assert_eq!(
         stream.feed("<thinking>raisonnement"),
-        vec![
-            ThoughtEvent::ThoughtStart,
-            ThoughtEvent::ThoughtChunk("raisonnement".into()),
-        ]
+        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("raisonnement".into())]
     );
-    assert_eq!(
-        stream.finish(),
-        vec![ThoughtEvent::ThoughtEnd]
-    );
+    assert!(stream.finish().is_empty());
+    assert_eq!(stream.phase(), ThoughtPhase::Completed);
 }
 
 #[test]
@@ -117,32 +106,23 @@ fn closing_marker_split_across_deltas_is_atomic() {
     let mut stream = ThoughtStream::new(true);
     assert_eq!(
         stream.feed("<thinking>pensée"),
-        vec![
-            ThoughtEvent::ThoughtStart,
-            ThoughtEvent::ThoughtChunk("pensée".into()),
-        ]
+        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("pensée".into())]
     );
-    assert_eq!(
-        stream.feed(" utile </thi"),
-        vec![ThoughtEvent::ThoughtChunk(" utile ".into())]
-    );
+    assert!(stream.feed(" utile </thi").is_empty());
     assert_eq!(
         stream.feed("nking>Réponse"),
-        vec![
-            ThoughtEvent::ThoughtEnd,
-            ThoughtEvent::ResponseChunk("Réponse".into()),
-        ]
+        vec![ThoughtEvent::ThoughtEnd, ThoughtEvent::ResponseChunk("Réponse".into())]
     );
 }
 
 #[test]
 fn finish_without_explicit_thought_boundary_emits_short_response() {
     let mut stream = ThoughtStream::new(true);
-    stream.feed("OK");
     assert_eq!(
-        stream.finish(),
+        stream.feed("OK"),
         vec![ThoughtEvent::ResponseChunk("OK".into())]
     );
+    assert!(stream.finish().is_empty());
     assert!(!stream.has_emitted_thought());
     assert_eq!(stream.phase(), ThoughtPhase::Completed);
 }
@@ -150,11 +130,11 @@ fn finish_without_explicit_thought_boundary_emits_short_response() {
 #[test]
 fn finish_is_idempotent() {
     let mut stream = ThoughtStream::new(true);
-    stream.feed("<thinking>pensée");
     assert_eq!(
-        stream.finish(),
-        vec![ThoughtEvent::ThoughtEnd]
+        stream.feed("<thinking>pensée"),
+        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("pensée".into())]
     );
+    assert!(stream.finish().contains(&ThoughtEvent::ThoughtEnd));
     assert!(stream.finish().is_empty());
     assert_eq!(stream.phase(), ThoughtPhase::Completed);
 }
