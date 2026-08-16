@@ -44,7 +44,7 @@ impl<'a> ToolExecutor<'a> {
         let cancelled = cancelled_after_wait || session_cancelled(self.session_id.0.as_ref());
         if cancelled && !terminal_text.is_empty() { self.emit_partial_result(call_id, lifecycle, "shell_exec", arguments, &terminal_text); }
         let is_ok = !cancelled && wait_error.is_none() && signal.is_none() && exit_code.unwrap_or(0) == 0;
-        Ok(ExecutionOutcome { result: ToolResult { content: terminal_text.clone(), is_ok }, terminal_id: Some(terminal_id.0.to_string()), terminal_meta: Some(terminal_lifecycle_meta(&terminal_id.0, Some(&terminal_text), Some((exit_code, signal.as_deref())))), cancelled })
+        Ok(ExecutionOutcome { result: ToolResult { content: terminal_text.clone(), is_ok, executed: true }, terminal_id: Some(terminal_id.0.to_string()), terminal_meta: Some(terminal_lifecycle_meta(&terminal_id.0, Some(&terminal_text), Some((exit_code, signal.as_deref())))), cancelled })
     }
 
     fn emit_partial_result(&self, call_id: &ToolCallId, lifecycle: &ToolLifecycle, tool_name: &str, arguments: &Value, content: &str) {
