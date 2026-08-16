@@ -52,7 +52,7 @@ impl<'a> ToolExecutor<'a> {
         let envelope = ToolResultEnvelope::new(tool_name, content, ToolCallStatus::InProgress, lifecycle.sequence());
         let rendered = super::super::tool_ux::result_update(tool_name, arguments, &envelope.content, false, self.cwd, None);
         let meta = serde_json::json!({ "result": { "terminal": false, "sequence": envelope.sequence } });
-        let _ = self.emit_update(call_id, envelope.status, rendered.content, rendered.locations, Some(meta.as_object().cloned().unwrap_or_default()));
+        self.emit_update(call_id, envelope.status, rendered.content, rendered.locations, Some(meta.as_object().cloned().unwrap_or_default()));
     }
 
     pub(super) async fn fetch_terminal_output(&self, terminal_id: &TerminalId) -> (String, bool) {
