@@ -11,13 +11,15 @@ mod terminal;
 
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::v1::{SessionId, ToolCallId};
+use agent_client_protocol::schema::v1::{SessionId, ToolCallId, ToolCallStatus};
 use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::{Map, Value};
 
 use crate::state::SessionMode;
 
-use super::lifecycle::{session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolLifecycleState};
+use super::lifecycle::{
+    session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolLifecycleState,
+};
 use super::registry::ToolRegistry;
 use super::tool_ux::{classify_risk, result_update, ToolInfo};
 
@@ -55,7 +57,14 @@ pub struct ToolExecutor<'a> {
 }
 
 impl<'a> ToolExecutor<'a> {
-    pub fn new(cx: &'a ConnectionTo<Client>, session_id: &'a SessionId, registry: &'a ToolRegistry, cwd: &'a Path, additional_dirs: &'a [PathBuf], get_mode: &'a (dyn Fn() -> SessionMode + Send + Sync)) -> Self {
+    pub fn new(
+        cx: &'a ConnectionTo<Client>,
+        session_id: &'a SessionId,
+        registry: &'a ToolRegistry,
+        cwd: &'a Path,
+        additional_dirs: &'a [PathBuf],
+        get_mode: &'a (dyn Fn() -> SessionMode + Send + Sync),
+    ) -> Self {
         Self { cx, session_id, registry, cwd, additional_dirs, get_mode }
     }
 
@@ -75,48 +84,94 @@ impl<'a> ToolExecutor<'a> {
 
         let mode = (self.get_mode)();
         let needs_permission = match info.kind {
-            agent_client_protocol::schema::v1::ToolKind::Edit | agent_client_protocol::schema::v1::ToolKind::Execute => match mode {
+            agent_client_protocol::schema::v1::ToolKind::Edit
+            | agent_client_protocol::schema::v1::ToolKind::Execute => match mode {
                 SessionMode::BypassPermissions => false,
-                SessionMode::AcceptEdits => info.kind == agent_client_protocol::schema::v1::ToolKind::Execute && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High,
+                SessionMode::AcceptEdits => {
+                    info.kind == agent_client_protocol::schema::v1::ToolKind::Execute
+                        && classify_risk(tool_name, arguments)
+                            >= super::sandbox::RiskLevel::High
+                }
                 SessionMode::Default => true,
             },
             _ => false,
         };
 
         if needs_permission {
-            lifecycle.transition(ToolLifecycleState::Permission).expect("pending -> permission must be legal");
+            lifecycle
+                .transition(ToolLifecycleState::Permission)
+                .expect("pending -> permission must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
             let request = PermissionRequest::from_tool_call(tool_name, arguments, self.cwd);
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
                     if session_cancelled(self.session_id.0.as_ref()) {
-                        lifecycle.transition(ToolLifecycleState::Cancelled).expect("permission -> cancelled must be legal");
-                        let message = format!("{} ({}) annulé avant le démarrage de l'exécution.", request.kind.label(), request.summary);
-                        let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
+                        lifecycle
+                            .transition(ToolLifecycleState::Cancelled)
+                            .expect("permission -> cancelled must be legal");
+                        let message = format!(
+                            "{} ({}) annulé avant le démarrage de l'exécution.",
+                            request.kind.label(), request.summary
+                        );
+                        let meta = mapping::lifecycle_meta(
+                            tool_name,
+                            &lifecycle,
+                            Some("cancelled"),
+                            None,
+                        );
                         self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                         return ToolResult::err(message);
                     }
-                    lifecycle.transition(ToolLifecycleState::Executing).expect("permission -> executing must be legal");
+                    lifecycle
+                        .transition(ToolLifecycleState::Executing)
+                        .expect("permission -> executing must be legal");
                     self.emit_lifecycle(&call_id, &lifecycle, tool_name);
                 }
                 PermissionResult::Reject => {
-                    lifecycle.transition(ToolLifecycleState::Failed).expect("permission -> failed must be legal");
-                    let message = format!("{} ({}) refusé par l'utilisateur.", request.kind.label(), request.summary);
-                    let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("user-rejected"), None);
+                    lifecycle
+                        .transition(ToolLifecycleState::Failed)
+                        .expect("permission -> failed must be legal");
+                    let message = format!(
+                        "{} ({}) refusé par l'utilisateur.",
+                        request.kind.label(), request.summary
+                    );
+                    let meta = mapping::lifecycle_meta(
+                        tool_name,
+                        &lifecycle,
+                        Some("user-rejected"),
+                        None,
+                    );
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                     return ToolResult::err(message);
                 }
                 PermissionResult::Cancelled => {
-                    lifecycle.transition(ToolLifecycleState::Cancelled).expect("permission -> cancelled must be legal");
-                    let message = format!("{} ({}) annulé pendant la demande d'autorisation.", request.kind.label(), request.summary);
-                    let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("cancelled"), None);
+                    lifecycle
+                        .transition(ToolLifecycleState::Cancelled)
+                        .expect("permission -> cancelled must be legal");
+                    let message = format!(
+                        "{} ({}) annulé pendant la demande d'autorisation.",
+                        request.kind.label(), request.summary
+                    );
+                    let meta = mapping::lifecycle_meta(
+                        tool_name,
+                        &lifecycle,
+                        Some("cancelled"),
+                        None,
+                    );
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                     return ToolResult::err(message);
                 }
                 PermissionResult::TransportError(error) => {
-                    lifecycle.transition(ToolLifecycleState::Failed).expect("permission -> failed must be legal");
+                    lifecycle
+                        .transition(ToolLifecycleState::Failed)
+                        .expect("permission -> failed must be legal");
                     let message = format!("Échec de la demande de permission ACP : {error}");
-                    let meta = mapping::lifecycle_meta(tool_name, &lifecycle, Some("permission-error"), None);
+                    let meta = mapping::lifecycle_meta(
+                        tool_name,
+                        &lifecycle,
+                        Some("permission-error"),
+                        None,
+                    );
                     self.emit_failed(&call_id, &message, arguments, tool_name, Some(meta));
                     return ToolResult::err(message);
                 }
@@ -129,7 +184,9 @@ impl<'a> ToolExecutor<'a> {
                 self.emit_failed(&call_id, message, arguments, tool_name, Some(meta));
                 return ToolResult::err(message);
             }
-            lifecycle.transition(ToolLifecycleState::Executing).expect("pending -> executing must be legal");
+            lifecycle
+                .transition(ToolLifecycleState::Executing)
+                .expect("pending -> executing must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
         }
 
@@ -137,7 +194,11 @@ impl<'a> ToolExecutor<'a> {
             match self.execute_shell_via_acp_terminal(arguments, &call_id).await {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    tracing::debug!(session=%self.session_id, error=%error, "terminal ACP indisponible avant exécution, fallback shell local");
+                    tracing::debug!(
+                        session=%self.session_id,
+                        error=%error,
+                        "terminal ACP indisponible avant exécution, fallback shell local"
+                    );
                     self.execute_registry(tool_name, arguments).await
                 }
             }
@@ -145,11 +206,41 @@ impl<'a> ToolExecutor<'a> {
             self.execute_registry(tool_name, arguments).await
         };
 
-        let next_state = if outcome.cancelled { ToolLifecycleState::Cancelled } else if outcome.result.is_ok { ToolLifecycleState::Completed } else { ToolLifecycleState::Failed };
-        lifecycle.transition(next_state).expect("executing must finish in a terminal state");
-        let rendered = result_update(tool_name, arguments, &outcome.result.content, outcome.result.is_ok && !outcome.cancelled, self.cwd, outcome.terminal_id.as_deref());
-        let meta = mapping::lifecycle_meta(tool_name, &lifecycle, if outcome.cancelled { Some("cancelled") } else { None }, outcome.terminal_meta);
-        self.emit_update(&call_id, lifecycle.state().wire_status(), rendered.content, rendered.locations, Some(meta));
+        // The lifecycle is now the single source of truth for the terminal
+        // state and the canonical result payload. The executor must not decide
+        // Completed/Failed/Cancelled independently anymore.
+        let envelope = lifecycle
+            .finish_with_result(
+                tool_name,
+                outcome.result.content.clone(),
+                outcome.result.is_ok,
+                outcome.cancelled,
+            )
+            .expect("executing tool must finish exactly once in a terminal state");
+
+        debug_assert_eq!(envelope.status, lifecycle.status());
+
+        let rendered = result_update(
+            tool_name,
+            arguments,
+            &envelope.content,
+            envelope.status == ToolCallStatus::Completed,
+            self.cwd,
+            outcome.terminal_id.as_deref(),
+        );
+        let meta = mapping::lifecycle_meta(
+            tool_name,
+            &lifecycle,
+            if outcome.cancelled { Some("cancelled") } else { None },
+            outcome.terminal_meta,
+        );
+        self.emit_update(
+            &call_id,
+            envelope.status,
+            rendered.content,
+            rendered.locations,
+            Some(meta),
+        );
         outcome.result
     }
 
