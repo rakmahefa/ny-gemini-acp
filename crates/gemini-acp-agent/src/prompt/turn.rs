@@ -3,22 +3,18 @@
 //! `turn.rs` owns turn orchestration only. Semantic stream lifecycle emission
 //! lives in [`stream`], while tool lifecycle emission lives in `ToolExecutor`.
 
+#[path = "stream.rs"]
 mod stream;
 
 use std::sync::Arc;
-
-use agent_client_protocol::schema::v1::{
-    ContentBlock, MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate,
-    StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate,
-    ToolCallUpdateFields, ToolKind,
-};
+use agent_client_protocol::schema::v1::{ContentBlock, MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use gemini_acp_runtime::state::{Role, Store, TurnError};
 use super::build::build_prompt;
 use super::content::blocks_to_parts;
-use super::error::{actionable_error_message, actionable_stream_error};
+use super::error::actionable_error_message;
 use super::follow_up::{replace_components, request_action};
-use super::notify::{notify_text, notify_usage};
+use super::notify::{notify_usage};
 use super::title::derive_title;
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, safe_session_update, ToolExecutor};
 use gemini_acp_runtime::tools::parse::parse_tool_calls;
@@ -30,8 +26,6 @@ const COMPACTION_THRESHOLD_CHARS: usize = (CONTEXT_WINDOW_CHARS as f64 * 0.9) as
 const EMERGENCY_COMPACTION_CHARS: usize = (CONTEXT_WINDOW_CHARS as f64 * 0.7) as usize;
 const PRESERVE_TURNS: usize = 10;
 
-enum TurnOutcome { Complete, Cancelled, Failed(String) }
-
 struct TurnGuard { store: Arc<Store>, session_id: String, session: Option<gemini_acp_runtime::state::Session>, finished: bool, generation: u64 }
 impl TurnGuard {
     fn new(store: Arc<Store>, session_id: String, session: gemini_acp_runtime::state::Session, generation: u64) -> Self { Self { store, session_id, session: Some(session), finished: false, generation } }
@@ -39,30 +33,13 @@ impl TurnGuard {
     async fn finish(mut self) { if let Some(session)=self.session.take(){ let sid=&self.session_id; if let Err(e)=self.store.end_turn(sid,session,self.generation).await { tracing::warn!(session=%self.session_id,"end_turn a échoué dans TurnGuard: {e}"); } } self.finished=true; }
 }
 impl Drop for TurnGuard {
-    fn drop(&mut self) {
-        if !self.finished { let sid=self.session_id.clone(); let store=self.store.clone(); let generation=self.generation; if let Some(session)=self.session.take(){ tokio::spawn(async move { if let Err(e)=store.end_turn(&sid,session,generation).await { tracing::warn!(session=%sid,"TurnGuard::drop: tour obsolète, état non persisté (sûr) : {e}"); } }); } else { let sid2=sid.clone(); let store2=store.clone(); tokio::spawn(async move { store2.force_idle(&sid2).await; }); tracing::warn!(session=%self.session_id,"TurnGuard::drop: session déjà consommée"); } }
-    }
+    fn drop(&mut self) { if !self.finished { let sid=self.session_id.clone(); let store=self.store.clone(); let generation=self.generation; if let Some(session)=self.session.take(){ tokio::spawn(async move { if let Err(e)=store.end_turn(&sid,session,generation).await { tracing::warn!(session=%sid,"TurnGuard::drop: tour obsolète, état non persisté (sûr) : {e}"); } }); } else { let sid2=sid.clone(); let store2=store.clone(); tokio::spawn(async move { store2.force_idle(&sid2).await; }); tracing::warn!(session=%self.session_id,"TurnGuard::drop: session déjà consommée"); } } }
 }
 
 fn map_stop_reason_from_error(e: &str) -> StopReason { let lower=e.to_lowercase(); if lower.contains("safety")||lower.contains("block"){StopReason::Refusal}else{StopReason::EndTurn} }
+fn compact_messages(messages:&mut Vec<(Role,String)>,target_chars:usize){ if messages.len()<=1{return;} let mut turns=Vec::new(); let mut current=Vec::new(); for msg in messages.iter(){if msg.0==Role::User&&!current.is_empty(){turns.push(std::mem::take(&mut current));}current.push(msg.clone());} if !current.is_empty(){turns.push(current);} if turns.len()<=PRESERVE_TURNS{return;} let current_chars:usize=messages.iter().map(|(_,t)|t.len()).sum(); if current_chars<=target_chars{return;} let tail_end=turns.len().saturating_sub(PRESERVE_TURNS); let mut candidates:Vec<(usize,usize)>=(0..tail_end).map(|i|(i,turns[i].iter().map(|(_,t)|t.len()).sum::<usize>())).collect(); candidates.sort_by_key(|b|std::cmp::Reverse(b.1)); let mut to_evict=std::collections::HashSet::new(); let mut remaining_chars=current_chars; for (idx,turn_chars) in candidates{if remaining_chars<=target_chars{break;}to_evict.insert(idx);remaining_chars-=turn_chars;} let mut compacted=Vec::new(); for (i,turn) in turns.iter().enumerate(){if i<tail_end&&to_evict.contains(&i){continue;}compacted.extend(turn.iter().cloned());} *messages=compacted; }
 
-fn compact_messages(messages:&mut Vec<(Role,String)>,target_chars:usize){
-    if messages.len()<=1{return;} let mut turns=Vec::new(); let mut current=Vec::new();
-    for msg in messages.iter(){if msg.0==Role::User&&!current.is_empty(){turns.push(std::mem::take(&mut current));}current.push(msg.clone());}
-    if !current.is_empty(){turns.push(current);} if turns.len()<=PRESERVE_TURNS{return;}
-    let current_chars:usize=messages.iter().map(|(_,t)|t.len()).sum(); if current_chars<=target_chars{return;}
-    let tail_end=turns.len().saturating_sub(PRESERVE_TURNS); let mut candidates:Vec<(usize,usize)>=(0..tail_end).map(|i|(i,turns[i].iter().map(|(_,t)|t.len()).sum::<usize>())).collect();
-    candidates.sort_by_key(|b|std::cmp::Reverse(b.1)); let mut to_evict=std::collections::HashSet::new(); let mut remaining_chars=current_chars;
-    for (idx,turn_chars) in candidates{if remaining_chars<=target_chars{break;}to_evict.insert(idx);remaining_chars-=turn_chars;}
-    let mut compacted=Vec::new(); for (i,turn) in turns.iter().enumerate(){if i<tail_end&&to_evict.contains(&i){continue;}compacted.extend(turn.iter().cloned());} *messages=compacted;
-}
-
-/// Déroule un tour `session/prompt` avec boucle outil intégrée.
-pub async fn run_turn(
-    store: Arc<Store>, tools: Arc<ToolRegistry>, client: gemini_acp_config::client::Client,
-    req: PromptRequest, responder: Responder<PromptResponse>, cx: ConnectionTo<Client>,
-    semantic: &mut gemini_acp_runtime::events::TurnEventEmitter,
-) -> Result<(), AcpError> {
+pub async fn run_turn(store: Arc<Store>, tools: Arc<ToolRegistry>, client: gemini_acp_config::client::Client, req: PromptRequest, responder: Responder<PromptResponse>, cx: ConnectionTo<Client>, semantic: &mut gemini_acp_runtime::events::TurnEventEmitter) -> Result<(), AcpError> {
     let session_id=req.session_id.clone(); let sid=&*session_id.0; let span=tracing::info_span!("turn",session=%session_id,chars_input=tracing::field::Empty,chars_output=tracing::field::Empty,tool_rounds=tracing::field::Empty,outcome=tracing::field::Empty); let _enter=span.enter();
     let (session,mut cancel,generation)=match store.begin_turn(sid).await{Ok(triple)=>triple,Err(TurnError::NotFound(_))=>return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id":session_id.to_string()}))),Err(TurnError::AlreadyRunning)=>return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id":session_id.to_string(),"error":"a turn is already running; send session/cancel first"}))),};
     let mut guard=TurnGuard::new(store.clone(),sid.to_string(),session,generation); let session=guard.session_mut(); let (user_text,images)=blocks_to_parts(&req.prompt); span.record("chars_input",user_text.chars().count()); let message_id=MessageId::from(format!("msg_{}",uuid::Uuid::new_v4().simple()));
