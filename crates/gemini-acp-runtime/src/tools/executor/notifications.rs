@@ -6,7 +6,7 @@ use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::{Map, Value};
 
 use super::{mapping, ToolExecutor};
-use super::super::tool_ux::{bounded_raw_input, result_update, ToolInfo};
+use super::super::tool_ux::{bounded_raw_input, ToolInfo};
 use super::super::lifecycle::ToolLifecycle;
 
 impl<'a> ToolExecutor<'a> {
@@ -38,11 +38,6 @@ impl<'a> ToolExecutor<'a> {
             ToolCallUpdateFields::new().status(status).content(content).locations(locations),
         ).meta(meta);
         let _ = self.cx.send_notification(SessionNotification::new(self.session_id.clone(), SessionUpdate::ToolCallUpdate(update)));
-    }
-
-    pub(super) fn emit_failed(&self, call_id: &ToolCallId, message: &str, args: &Value, tool_name: &str, meta: Option<Map<String, Value>>) {
-        let rendered = result_update(tool_name, args, message, false, self.cwd, None);
-        self.emit_update(call_id, ToolCallStatus::Failed, rendered.content, rendered.locations, meta);
     }
 }
 
