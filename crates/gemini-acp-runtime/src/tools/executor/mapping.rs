@@ -35,7 +35,7 @@ fn lifecycle_state_label(state: ToolLifecycleState) -> &'static str {
 }
 
 #[allow(dead_code)]
-pub(super) fn map_stop_reason(gemini_finish: Option<&str>) -> StopReason {
+pub fn map_stop_reason(gemini_finish: Option<&str>) -> StopReason {
     match gemini_finish {
         Some("length") | Some("max_tokens") => StopReason::MaxTokens,
         Some("content_filter") | Some("safety") | Some("block_reason") => StopReason::Refusal,
