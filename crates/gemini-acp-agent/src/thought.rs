@@ -16,7 +16,6 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 
-const MARKER_LOOKBEHIND: usize = 32;
 const THINKING_OPEN_MARKERS: [&str; 4] = ["<thinking>", "<think>", "[Thinking]:", "[thinking]:"];
 const THINKING_CLOSE_MARKERS: [&str; 2] = ["</thinking>", "</think>"];
 
@@ -122,18 +121,23 @@ impl ThoughtStream {
         if let Some(marker) = matching_open_marker(&self.pending) {
             self.pending.drain(..marker.len());
             self.phase = ThoughtPhase::Thinking;
-            return vec![ThoughtEvent::ThoughtStart];
+
+            let mut events = vec![ThoughtEvent::ThoughtStart];
+            events.extend(self.feed_thinking(""));
+            return events;
         }
 
-        if self.pending.len() < max_prefix_len(&THINKING_OPEN_MARKERS) {
+        // Keep enough bytes to recognize an opening marker split across chunks.
+        let keep = partial_suffix_for_markers(&self.pending, &THINKING_OPEN_MARKERS);
+        if self.pending.len() <= keep {
             return Vec::new();
         }
 
-        // The beginning of the stream is not an explicit thought envelope.
-        // Flush all safely classified text as assistant response and switch to
-        // the normal response phase for the remainder of the stream.
-        let response = std::mem::take(&mut self.pending);
+        let split_at = self.pending.len() - keep;
+        let response = self.pending[..split_at].to_owned();
+        self.pending.drain(..split_at);
         self.phase = ThoughtPhase::Response;
+
         if response.is_empty() {
             Vec::new()
         } else {
@@ -162,24 +166,22 @@ impl ThoughtStream {
             return events;
         }
 
-        let char_count = self.pending.chars().count();
-        if char_count > MARKER_LOOKBEHIND {
-            let emit_chars = char_count - MARKER_LOOKBEHIND;
-            let split_at = self
-                .pending
-                .char_indices()
-                .nth(emit_chars)
-                .map(|(idx, _)| idx)
-                .unwrap_or(self.pending.len());
-            let thought = self.pending[..split_at].to_owned();
-            self.pending.drain(..split_at);
-            if !thought.is_empty() {
-                self.emitted_thought = true;
-                return vec![ThoughtEvent::ThoughtChunk(thought)];
-            }
+        // Do not use a fixed lookbehind. Only retain the shortest suffix that
+        // can actually become a split closing marker on the next chunk.
+        let keep = partial_suffix_for_markers(&self.pending, &THINKING_CLOSE_MARKERS);
+        if self.pending.len() <= keep {
+            return Vec::new();
         }
 
-        Vec::new()
+        let split_at = self.pending.len() - keep;
+        let thought = self.pending[..split_at].to_owned();
+        self.pending.drain(..split_at);
+        if thought.is_empty() {
+            Vec::new()
+        } else {
+            self.emitted_thought = true;
+            vec![ThoughtEvent::ThoughtChunk(thought)]
+        }
     }
 }
 
@@ -238,8 +240,22 @@ fn matching_open_marker(buffer: &str) -> Option<&'static str> {
         .find(|marker| buffer.starts_with(marker))
 }
 
-fn max_prefix_len(markers: &[&str]) -> usize {
-    markers.iter().map(|marker| marker.len()).max().unwrap_or(0)
+fn partial_suffix_for_markers(text: &str, markers: &[&str]) -> usize {
+    markers
+        .iter()
+        .map(|marker| partial_suffix_len(text, marker))
+        .max()
+        .unwrap_or(0)
+}
+
+fn partial_suffix_len(text: &str, marker: &str) -> usize {
+    let max = text.len().min(marker.len().saturating_sub(1));
+    for len in (1..=max).rev() {
+        if text.ends_with(&marker[..len]) {
+            return len;
+        }
+    }
+    0
 }
 
 fn find_thought_end(buffer: &str) -> Option<(usize, usize)> {
