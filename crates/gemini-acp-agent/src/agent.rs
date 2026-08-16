@@ -90,10 +90,11 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                         gemini_acp_encaps::EncapsError::Task(e.to_string())
                                     });
 
-                                    if result.is_ok() {
-                                        semantic.turn_completed();
-                                    } else {
-                                        semantic.turn_cancelled();
+                                    // `run_turn` owns all expected terminal outcomes. Keep a
+                                    // defensive failure transition for an unexpected orchestration
+                                    // error so an active semantic turn can never leak terminality.
+                                    if result.is_err() && !semantic.is_terminal() {
+                                        semantic.turn_failed();
                                     }
 
                                     result
