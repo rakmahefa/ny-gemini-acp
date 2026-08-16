@@ -12,8 +12,8 @@
 //!   ACP StopReason.
 //! - **Error surfacing** : les erreurs sont envoyées comme `[error]`
 //!   `agent_message_chunk`.
-//! - **Prompt serialization** : attend la fin du prompt précédent avant de
-//!   démarrer.
+//! - **Prompt serialization** : attend la fin du prompt précédent avant
+//!   de démarrer.
 //! - **safe_session_update** : toutes les notifications ACP passent par
 //!   le wrapper défensif.
 
@@ -27,6 +27,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
 use gemini_acp_runtime::state::{Role, Store, TurnError};
+use gemini_acp_runtime::events::TurnEventEmitter;
 
 use super::build::build_prompt;
 use super::content::blocks_to_parts;
@@ -75,9 +76,7 @@ impl TurnGuard {
     }
 
     fn session_mut(&mut self) -> &mut gemini_acp_runtime::state::Session {
-        self.session
-            .as_mut()
-            .expect("TurnGuard: session déjà consommée")
+        self.session.as_mut().expect("TurnGuard: session déjà consommée")
     }
 
     async fn finish(mut self) {
@@ -117,35 +116,21 @@ impl Drop for TurnGuard {
 
 fn map_stop_reason_from_error(e: &str) -> StopReason {
     let lower = e.to_lowercase();
-    if lower.contains("safety") || lower.contains("block") {
-        StopReason::Refusal
-    } else {
-        StopReason::EndTurn
-    }
+    if lower.contains("safety") || lower.contains("block") { StopReason::Refusal } else { StopReason::EndTurn }
 }
 
 fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
-    if messages.len() <= 1 {
-        return;
-    }
+    if messages.len() <= 1 { return; }
     let mut turns: Vec<Vec<(Role, String)>> = Vec::new();
     let mut current_turn = Vec::new();
     for msg in messages.iter() {
-        if msg.0 == Role::User && !current_turn.is_empty() {
-            turns.push(std::mem::take(&mut current_turn));
-        }
+        if msg.0 == Role::User && !current_turn.is_empty() { turns.push(std::mem::take(&mut current_turn)); }
         current_turn.push(msg.clone());
     }
-    if !current_turn.is_empty() {
-        turns.push(current_turn);
-    }
-    if turns.len() <= PRESERVE_TURNS {
-        return;
-    }
+    if !current_turn.is_empty() { turns.push(current_turn); }
+    if turns.len() <= PRESERVE_TURNS { return; }
     let current_chars: usize = messages.iter().map(|(_, t)| t.len()).sum();
-    if current_chars <= target_chars {
-        return;
-    }
+    if current_chars <= target_chars { return; }
     let tail_end = turns.len().saturating_sub(PRESERVE_TURNS);
     let mut candidates: Vec<(usize, usize)> = (0..tail_end)
         .map(|i| (i, turns[i].iter().map(|(_, t)| t.len()).sum::<usize>()))
@@ -154,17 +139,13 @@ fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
     let mut to_evict = std::collections::HashSet::new();
     let mut remaining_chars = current_chars;
     for (idx, turn_chars) in candidates {
-        if remaining_chars <= target_chars {
-            break;
-        }
+        if remaining_chars <= target_chars { break; }
         to_evict.insert(idx);
         remaining_chars -= turn_chars;
     }
     let mut compacted = Vec::new();
     for (i, turn) in turns.iter().enumerate() {
-        if i < tail_end && to_evict.contains(&i) {
-            continue;
-        }
+        if i < tail_end && to_evict.contains(&i) { continue; }
         compacted.extend(turn.iter().cloned());
     }
     *messages = compacted;
@@ -178,6 +159,7 @@ pub async fn run_turn(
     req: PromptRequest,
     responder: Responder<PromptResponse>,
     cx: ConnectionTo<Client>,
+    semantic: &mut TurnEventEmitter,
 ) -> Result<(), AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
@@ -199,72 +181,27 @@ pub async fn run_turn(
     if session.title.is_none() && !user_text.trim().is_empty() {
         let title = derive_title(&user_text);
         session.title = Some(title.clone());
-        safe_session_update(
-            &cx,
-            &session_id,
-            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)),
-        );
+        safe_session_update(&cx, &session_id, SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)));
     }
 
     let mut refs = Vec::new();
     if !images.is_empty() {
         let total = images.len();
         let upload_call_id = ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple()));
-        safe_session_update(
-            &cx,
-            &session_id,
-            SessionUpdate::ToolCall(
-                ToolCall::new(
-                    upload_call_id.clone(),
-                    format!("Upload {total} image(s) (Scotty)"),
-                )
-                .kind(ToolKind::Fetch)
-                .status(ToolCallStatus::InProgress),
-            ),
-        );
+        safe_session_update(&cx, &session_id, SessionUpdate::ToolCall(ToolCall::new(upload_call_id.clone(), format!("Upload {total} image(s) (Scotty)")).kind(ToolKind::Fetch).status(ToolCallStatus::InProgress)));
         for (idx, (b64, mime)) in images.iter().enumerate() {
             match client.upload_image(b64, mime).await {
                 Ok(r) => refs.push(r),
                 Err(e) => {
-                    let content = vec![ToolCallContent::Content(
-                        agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(
-                            TextContent::new(format!(
-                                "Upload image {}/{} échoué: {e:#}",
-                                idx + 1,
-                                total
-                            )),
-                        )),
-                    )];
-                    safe_session_update(
-                        &cx,
-                        &session_id,
-                        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                            upload_call_id.clone(),
-                            ToolCallUpdateFields::new()
-                                .status(ToolCallStatus::Failed)
-                                .content(content),
-                        )),
-                    );
+                    let content = vec![ToolCallContent::Content(agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(TextContent::new(format!("Upload image {}/{} échoué: {e:#}", idx + 1, total))))),];
+                    safe_session_update(&cx, &session_id, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(upload_call_id.clone(), ToolCallUpdateFields::new().status(ToolCallStatus::Failed).content(content))));
                     span.record("outcome", "refusal_upload");
                     return responder.respond(PromptResponse::new(StopReason::Refusal));
                 }
             }
         }
-        let content = vec![ToolCallContent::Content(
-            agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(TextContent::new(
-                format!("{total} image(s) uploadée(s) avec succès"),
-            ))),
-        )];
-        safe_session_update(
-            &cx,
-            &session_id,
-            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                upload_call_id,
-                ToolCallUpdateFields::new()
-                    .status(ToolCallStatus::Completed)
-                    .content(content),
-            )),
-        );
+        let content = vec![ToolCallContent::Content(agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(TextContent::new(format!("{total} image(s) uploadée(s) avec succès"))))),];
+        safe_session_update(&cx, &session_id, SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(upload_call_id, ToolCallUpdateFields::new().status(ToolCallStatus::Completed).content(content))));
     }
 
     session.messages.push((Role::User, user_text.clone()));
@@ -286,33 +223,17 @@ pub async fn run_turn(
         }
 
         let history_chars: usize = session.messages.iter().map(|(_, t)| t.len()).sum();
-        if history_chars > COMPACTION_THRESHOLD_CHARS {
-            compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS);
-        }
+        if history_chars > COMPACTION_THRESHOLD_CHARS { compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS); }
 
         let prompt = build_prompt(session, Some(registry));
-        let mut rx = match client
-            .stream(&prompt, &session.model, session.think, &refs)
-            .await
-        {
+        let mut rx = match client.stream(&prompt, &session.model, session.think, &refs).await {
             Ok(rx) => rx,
             Err(e) => {
                 let note = actionable_error_message(&e);
-                let is_overflow = e.to_string().contains("context")
-                    || e.to_string().contains("too long")
-                    || e.to_string().contains("tokens");
-                if is_overflow && overflow_retry_count < 1 {
-                    compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS);
-                    overflow_retry_count += 1;
-                    continue;
-                }
+                let is_overflow = e.to_string().contains("context") || e.to_string().contains("too long") || e.to_string().contains("tokens");
+                if is_overflow && overflow_retry_count < 1 { compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS); overflow_retry_count += 1; continue; }
                 if is_overflow {
-                    emit_error_chunk(
-                        &cx,
-                        &session_id,
-                        &message_id,
-                        &format!("Context overflow persisted after emergency compaction: {e:#}"),
-                    );
+                    emit_error_chunk(&cx, &session_id, &message_id, &format!("Context overflow persisted after emergency compaction: {e:#}"));
                     span.record("outcome", "refusal_start");
                     return responder.respond(PromptResponse::new(StopReason::MaxTokens));
                 }
@@ -322,16 +243,14 @@ pub async fn run_turn(
             }
         };
 
-        let is_thinking_model = gemini_acp_config::core::models::resolve(
-            &session.model,
-            gemini_acp_config::core::models::DEFAULT_MODEL,
-        )
-        .map(|r| gemini_acp_config::core::models::is_thinking_mode(r.mode))
-        .unwrap_or(false);
+        let is_thinking_model = gemini_acp_config::core::models::resolve(&session.model, gemini_acp_config::core::models::DEFAULT_MODEL)
+            .map(|r| gemini_acp_config::core::models::is_thinking_mode(r.mode)).unwrap_or(false);
         let mut thought_stream = crate::thought::ThoughtStream::new(is_thinking_model);
         let mut follow_up_stream = StreamNormalizer::default();
         let mut assistant = String::new();
         let mut tool_detection_text = String::new();
+        semantic.assistant_started();
+        if is_thinking_model { semantic.thinking_started(); }
         let outcome = loop {
             tokio::select! {
                 _ = cancel.changed() => break TurnOutcome::Cancelled,
@@ -343,16 +262,18 @@ pub async fn run_turn(
                                 match event {
                                     crate::thought::ThoughtEvent::ThoughtChunk(text) => {
                                         tool_detection_text.push_str(&text);
+                                        semantic.thinking_delta(&text);
                                         crate::thought::notify_thought(&cx, &session_id, &message_id, &text).await?;
                                     }
-                                    crate::thought::ThoughtEvent::ThoughtEnd => {}
+                                    crate::thought::ThoughtEvent::ThoughtEnd => {
+                                        if is_thinking_model { semantic.thinking_completed(); }
+                                    }
                                     crate::thought::ThoughtEvent::ResponseChunk(text) => {
                                         tool_detection_text.push_str(&text);
                                         assistant.push_str(&text);
+                                        semantic.assistant_delta(&text);
                                         let safe_message = follow_up_stream.push(&text);
-                                        if !safe_message.is_empty() {
-                                            notify_text(&cx, &session_id, &message_id, safe_message)?;
-                                        }
+                                        if !safe_message.is_empty() { notify_text(&cx, &session_id, &message_id, safe_message)?; }
                                     }
                                 }
                             }
@@ -368,23 +289,24 @@ pub async fn run_turn(
             match event {
                 crate::thought::ThoughtEvent::ThoughtChunk(text) => {
                     tool_detection_text.push_str(&text);
+                    semantic.thinking_delta(&text);
                     crate::thought::notify_thought(&cx, &session_id, &message_id, &text).await?;
                 }
-                crate::thought::ThoughtEvent::ThoughtEnd => {}
+                crate::thought::ThoughtEvent::ThoughtEnd => {
+                    if is_thinking_model { semantic.thinking_completed(); }
+                }
                 crate::thought::ThoughtEvent::ResponseChunk(text) => {
                     tool_detection_text.push_str(&text);
                     assistant.push_str(&text);
+                    semantic.assistant_delta(&text);
                     let safe_message = follow_up_stream.push(&text);
-                    if !safe_message.is_empty() {
-                        notify_text(&cx, &session_id, &message_id, safe_message)?;
-                    }
+                    if !safe_message.is_empty() { notify_text(&cx, &session_id, &message_id, safe_message)?; }
                 }
             }
         }
         let follow_up_tail = follow_up_stream.finish();
-        if !follow_up_tail.is_empty() {
-            notify_text(&cx, &session_id, &message_id, follow_up_tail)?;
-        }
+        if !follow_up_tail.is_empty() { notify_text(&cx, &session_id, &message_id, follow_up_tail)?; }
+        semantic.assistant_completed();
 
         if matches!(outcome, TurnOutcome::Cancelled) {
             span.record("outcome", "cancelled");
@@ -405,84 +327,41 @@ pub async fn run_turn(
         }
 
         tracing::info!(session = %session_id, round = round, tool_count = tool_calls.len(), "tool calls détectés — exécution via ToolExecutor");
-        let tool_blocks: String = tool_calls
-            .iter()
-            .map(|c| c.to_history_block())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let assistant_history = if clean_text.is_empty() {
-            tool_blocks
-        } else {
-            format!("{}\n{}", clean_text, tool_blocks)
-        };
+        let tool_blocks: String = tool_calls.iter().map(|c| c.to_history_block()).collect::<Vec<_>>().join("\n");
+        let assistant_history = if clean_text.is_empty() { tool_blocks } else { format!("{}\n{}", clean_text, tool_blocks) };
         session.messages.push((Role::Assistant, assistant_history));
-
         gemini_acp_runtime::tools::lifecycle::clear_partial_output(sid);
 
-        let executor = ToolExecutor::new(
-            &cx,
-            &session_id,
-            registry,
-            &cwd,
-            &additional_dirs,
-            &mode_getter,
-        );
+        let executor = ToolExecutor::new(&cx, &session_id, registry, &cwd, &additional_dirs, &mode_getter);
         let mut follow_up_seen = false;
         let mut follow_up_selected = None;
 
         for call in &tool_calls {
-            if *cancel.borrow() {
-                return responder.respond(PromptResponse::new(StopReason::Cancelled));
-            }
-
+            if *cancel.borrow() { return responder.respond(PromptResponse::new(StopReason::Cancelled)); }
             if call.name == "FollowUp" {
                 follow_up_seen = true;
-                let label = call
-                    .arguments
-                    .get("label")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Suggested next step")
-                    .trim();
-                let query = call
-                    .arguments
-                    .get("query")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .trim();
+                let label = call.arguments.get("label").and_then(serde_json::Value::as_str).unwrap_or("Suggested next step").trim();
+                let query = call.arguments.get("query").and_then(serde_json::Value::as_str).unwrap_or("").trim();
                 if !label.is_empty() && !query.is_empty() {
                     match request_action(&cx, &session_id, label, query).await {
                         Ok(selected) => follow_up_selected = selected,
-                        Err(error) => {
-                            emit_error_chunk(
-                                &cx,
-                                &session_id,
-                                &message_id,
-                                &format!("FollowUp interaction failed: {error}"),
-                            );
-                        }
+                        Err(error) => emit_error_chunk(&cx, &session_id, &message_id, &format!("FollowUp interaction failed: {error}")),
                     }
                 }
                 break;
             }
-
+            semantic.tool_call_requested(call.id.to_string(), call.name.clone());
+            semantic.tool_execution_started(call.id.to_string());
             let result = executor.execute(&call.name, &call.arguments).await;
-            session.messages.push((
-                Role::Tool,
-                gemini_acp_runtime::tools::prompt::format_tool_result(&call.name, &result.content),
-            ));
+            semantic.tool_result_received(call.id.to_string(), result.content.clone());
+            session.messages.push((Role::Tool, gemini_acp_runtime::tools::prompt::format_tool_result(&call.name, &result.content)));
         }
 
         if follow_up_seen {
-            if let Some(query) = follow_up_selected {
-                session.messages.push((Role::User, query));
-                total_output.clear();
-                continue;
-            }
-
+            if let Some(query) = follow_up_selected { session.messages.push((Role::User, query)); total_output.clear(); continue; }
             total_output = clean_text;
             break;
         }
-
         if round == MAX_TURNS - 1 {
             total_output = "[Limite d'itérations outil atteinte]".into();
             final_assistant_pushed = true;
@@ -492,17 +371,8 @@ pub async fn run_turn(
 
     span.record("tool_rounds", tool_round);
     span.record("chars_output", total_output.chars().count());
-    if !final_assistant_pushed && !total_output.trim().is_empty() {
-        session
-            .messages
-            .push((Role::Assistant, total_output.clone()));
-    }
-    if let Err(e) = notify_usage(
-        &cx,
-        &session_id,
-        &build_prompt(session, Some(registry)),
-        &total_output,
-    ) {
+    if !final_assistant_pushed && !total_output.trim().is_empty() { session.messages.push((Role::Assistant, total_output.clone())); }
+    if let Err(e) = notify_usage(&cx, &session_id, &build_prompt(session, Some(registry)), &total_output) {
         tracing::warn!(session = %session_id, "notify_usage a échoué: {e}");
     }
     guard.finish().await;
