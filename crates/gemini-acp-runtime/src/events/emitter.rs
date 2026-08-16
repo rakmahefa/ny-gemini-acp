@@ -47,85 +47,80 @@ impl TurnEventEmitter {
     }
 
     pub fn turn_started(&mut self) {
-        self.publish(AcpSemanticEvent::TurnStarted {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::TurnStarted { context });
     }
 
     pub fn assistant_started(&mut self) {
-        self.publish(AcpSemanticEvent::AssistantStarted {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::AssistantStarted { context });
     }
 
     pub fn assistant_delta(&mut self, delta: impl Into<String>) {
+        let context = self.context();
         self.publish(AcpSemanticEvent::AssistantDelta {
-            context: self.context(),
+            context,
             delta: delta.into(),
         });
     }
 
     pub fn assistant_completed(&mut self) {
-        self.publish(AcpSemanticEvent::AssistantCompleted {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::AssistantCompleted { context });
     }
 
     pub fn thinking_started(&mut self) {
-        self.publish(AcpSemanticEvent::ThinkingStarted {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::ThinkingStarted { context });
     }
 
     pub fn thinking_delta(&mut self, delta: impl Into<String>) {
+        let context = self.context();
         self.publish(AcpSemanticEvent::ThinkingDelta {
-            context: self.context(),
+            context,
             delta: delta.into(),
         });
     }
 
     pub fn thinking_completed(&mut self) {
-        self.publish(AcpSemanticEvent::ThinkingCompleted {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::ThinkingCompleted { context });
     }
 
     pub fn tool_call_requested(&mut self, tool_call_id: impl Into<String>, name: impl Into<String>) {
+        let context = self.tool_context(tool_call_id);
         self.publish(AcpSemanticEvent::ToolCallRequested {
-            context: self.tool_context(tool_call_id),
+            context,
             name: name.into(),
         });
     }
 
     pub fn permission_requested(&mut self, tool_call_id: impl Into<String>) {
-        self.publish(AcpSemanticEvent::PermissionRequested {
-            context: self.tool_context(tool_call_id),
-        });
+        let context = self.tool_context(tool_call_id);
+        self.publish(AcpSemanticEvent::PermissionRequested { context });
     }
 
     pub fn tool_execution_started(&mut self, tool_call_id: impl Into<String>) {
-        self.publish(AcpSemanticEvent::ToolExecutionStarted {
-            context: self.tool_context(tool_call_id),
-        });
+        let context = self.tool_context(tool_call_id);
+        self.publish(AcpSemanticEvent::ToolExecutionStarted { context });
     }
 
     pub fn tool_result_received(&mut self, tool_call_id: impl Into<String>, result: impl Into<String>) {
+        let context = self.tool_context(tool_call_id);
         self.publish(AcpSemanticEvent::ToolResultReceived {
-            context: self.tool_context(tool_call_id),
+            context,
             result: result.into(),
         });
     }
 
     pub fn turn_cancelled(&mut self) {
-        self.publish(AcpSemanticEvent::TurnCancelled {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::TurnCancelled { context });
     }
 
     pub fn turn_completed(&mut self) {
-        self.publish(AcpSemanticEvent::TurnCompleted {
-            context: self.context(),
-        });
+        let context = self.context();
+        self.publish(AcpSemanticEvent::TurnCompleted { context });
     }
 }
 
