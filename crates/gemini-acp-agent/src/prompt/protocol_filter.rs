@@ -323,6 +323,19 @@ mod tests {
     }
 
     #[test]
+    fn filters_split_tool_result_envelope_without_reinterpreting_payload() {
+        let mut filter = ProtocolFilter::new();
+        assert_eq!(filter.push("[Tool res"), "");
+        assert_eq!(
+            filter.push(
+                "ult]: {\"tool\":\"file_read\",\"content\":\"x\\n'''\\n```\"}\n[Assistant]: Réponse"
+            ),
+            "Réponse"
+        );
+        assert_eq!(filter.finish(), "");
+    }
+
+    #[test]
     fn preserves_text_around_filtered_lines() {
         assert_eq!(
             sanitize("Avant\n[Tool result for shell_exec]: done\nAprès"),
