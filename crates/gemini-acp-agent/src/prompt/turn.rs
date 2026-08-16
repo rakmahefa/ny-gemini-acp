@@ -3,9 +3,6 @@
 //! `turn.rs` owns turn orchestration only. Semantic stream lifecycle emission
 //! lives in [`stream`], while tool lifecycle emission lives in `ToolExecutor`.
 
-#[path = "stream.rs"]
-mod stream;
-
 use std::sync::Arc;
 use agent_client_protocol::schema::v1::{ContentBlock, MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
@@ -14,7 +11,8 @@ use super::build::build_prompt;
 use super::content::blocks_to_parts;
 use super::error::actionable_error_message;
 use super::follow_up::{replace_components, request_action};
-use super::notify::{notify_usage};
+use super::notify::notify_usage;
+use super::stream;
 use super::title::derive_title;
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, safe_session_update, ToolExecutor};
 use gemini_acp_runtime::tools::parse::parse_tool_calls;
@@ -63,7 +61,7 @@ pub async fn run_turn(store: Arc<Store>, tools: Arc<ToolRegistry>, client: gemin
         for call in &tool_calls{
             if *cancel.borrow(){return responder.respond(PromptResponse::new(StopReason::Cancelled));}
             if call.name=="FollowUp"{follow_up_seen=true;let label=call.arguments.get("label").and_then(serde_json::Value::as_str).unwrap_or("Suggested next step").trim();let query=call.arguments.get("query").and_then(serde_json::Value::as_str).unwrap_or("").trim();if !label.is_empty()&&!query.is_empty(){match request_action(&cx,&session_id,label,query).await{Ok(selected)=>follow_up_selected=selected,Err(error)=>emit_error_chunk(&cx,&session_id,&message_id,&format!("FollowUp interaction failed: {error}")),}}break;}
-            let result=executor.execute_with_call_id_and_events(call.id.clone(),&call.name,&call.arguments,semantic).await; session.messages.push((Role::Tool,gemini_acp_runtime::tools::prompt::format_tool_result(&call.name,&result.content)));
+            let result=executor.execute_with_call_id_and_events(call.id.clone().into(),&call.name,&call.arguments,semantic).await; session.messages.push((Role::Tool,gemini_acp_runtime::tools::prompt::format_tool_result(&call.name,&result.content)));
         }
         if follow_up_seen{if let Some(query)=follow_up_selected{session.messages.push((Role::User,query));total_output.clear();continue;}total_output=clean_text;break;}
         if round==MAX_TURNS-1{total_output="[Limite d'itérations outil atteinte]".into();final_assistant_pushed=true;break;}
