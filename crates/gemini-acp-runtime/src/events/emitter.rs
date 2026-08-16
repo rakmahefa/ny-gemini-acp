@@ -75,6 +75,9 @@ impl TurnEventEmitter {
     pub fn turn_cancelled(&mut self) -> bool {
         if let Err(e)=self.integrity.turn_cancelled(){return self.reject(e)}; let context=self.context(); self.publish(AcpSemanticEvent::TurnCancelled{context}); true
     }
+    pub fn turn_failed(&mut self) -> bool {
+        if let Err(e)=self.integrity.turn_failed(){return self.reject(e)}; let context=self.context(); self.publish(AcpSemanticEvent::TurnFailed{context}); true
+    }
     pub fn turn_completed(&mut self) -> bool {
         if let Err(e)=self.integrity.turn_completed(){return self.reject(e)}; let context=self.context(); self.publish(AcpSemanticEvent::TurnCompleted{context}); true
     }
@@ -84,7 +87,7 @@ impl TurnEventEmitter {
 mod tests {
     use super::*;
     fn seq(event:&AcpSemanticEvent)->u64 { match event {
-        AcpSemanticEvent::TurnStarted{context}|AcpSemanticEvent::AssistantStarted{context}|AcpSemanticEvent::AssistantCompleted{context}|AcpSemanticEvent::ThinkingStarted{context}|AcpSemanticEvent::ThinkingCompleted{context}|AcpSemanticEvent::TurnCancelled{context}|AcpSemanticEvent::TurnCompleted{context}=>context.sequence,
+        AcpSemanticEvent::TurnStarted{context}|AcpSemanticEvent::AssistantStarted{context}|AcpSemanticEvent::AssistantCompleted{context}|AcpSemanticEvent::ThinkingStarted{context}|AcpSemanticEvent::ThinkingCompleted{context}|AcpSemanticEvent::TurnCancelled{context}|AcpSemanticEvent::TurnFailed{context}|AcpSemanticEvent::TurnCompleted{context}=>context.sequence,
         AcpSemanticEvent::AssistantDelta{context,..}|AcpSemanticEvent::ThinkingDelta{context,..}=>context.sequence,
         AcpSemanticEvent::ToolCallRequested{context,..}|AcpSemanticEvent::PermissionRequested{context}|AcpSemanticEvent::ToolExecutionStarted{context}|AcpSemanticEvent::ToolResultReceived{context,..}=>context.event.sequence,
     }}
@@ -109,5 +112,12 @@ mod tests {
         let bus=EventBus::new(); let mut rx=bus.subscribe(); let mut e=TurnEventEmitter::new(bus,"s","t");
         assert!(e.turn_started()); assert!(e.assistant_started()); assert!(e.thinking_started()); assert!(e.tool_call_requested("c","shell_exec")); assert!(e.turn_cancelled()); assert!(!e.turn_completed()); assert!(!e.assistant_delta("late"));
         let events:Vec<_>=std::iter::from_fn(||rx.try_recv().ok()).collect(); assert!(matches!(events.last(),Some(AcpSemanticEvent::TurnCancelled{..}))); assert_eq!(events.len(),5);
+    }
+
+    #[tokio::test]
+    async fn failure_is_terminal_and_sequence_stays_contiguous() {
+        let bus=EventBus::new(); let mut rx=bus.subscribe(); let mut e=TurnEventEmitter::new(bus,"s","t");
+        assert!(e.turn_started()); assert!(e.assistant_started()); assert!(e.turn_failed()); assert!(!e.turn_completed());
+        let events:Vec<_>=std::iter::from_fn(||rx.try_recv().ok()).collect(); assert_eq!(events.iter().map(seq).collect::<Vec<_>>(),vec![0,1,2]); assert!(matches!(events.last(),Some(AcpSemanticEvent::TurnFailed{..}))); assert_eq!(e.sequence(),3);
     }
 }
