@@ -2,6 +2,11 @@
 //!
 //! Le filtre ne tente pas d'interpréter le contenu des outils. Les résultats
 //! d'outils sont sérialisés séparément par `runtime::tools::tool_history`.
+//!
+//! Les marqueurs de protocole sont traités comme une grammaire de flux :
+//! lorsqu'un marqueur ou une fermeture de bloc est coupé entre deux chunks,
+//! son suffixe partiel reste buffered et ne peut donc jamais fuiter dans le
+//! contenu ACP.
 
 const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
@@ -37,6 +42,7 @@ enum DropMode {
 
 #[derive(Debug)]
 pub struct OutputFilter {
+    /// Partial protocol marker/fence carried across input chunks.
     candidate: String,
     at_line_start: bool,
     drop_mode: DropMode,
@@ -60,9 +66,11 @@ impl OutputFilter {
     pub fn new() -> Self {
         Self::default()
     }
+
     pub fn push(&mut self, chunk: &str) -> String {
         self.process(chunk, false)
     }
+
     pub fn finish(&mut self) -> String {
         self.process("", true)
     }
@@ -85,13 +93,31 @@ impl OutputFilter {
                 }
                 DropMode::ToolCallBlock(fence) => {
                     let closing = fence.closing();
-                    if input[i..].starts_with(closing) {
+
+                    // A tool-call fence is protocol syntax, not arbitrary
+                    // markdown. Only a closing fence at line start terminates
+                    // the block; this prevents backticks/quotes inside JSON,
+                    // strings, or tool output from prematurely ending it.
+                    if self.at_line_start && input[i..].starts_with(closing) {
                         i += closing.len();
                         self.drop_mode = DropMode::None;
                         self.at_line_start = true;
                         self.suppress_protocol_newline = true;
                         continue;
                     }
+
+                    if self.at_line_start && !final_chunk {
+                        let keep = partial_suffix_len(&input[i..], closing);
+                        if keep > 0 {
+                            let end = input.len() - keep;
+                            if end > i {
+                                i = end;
+                            }
+                            self.candidate.push_str(&input[i..]);
+                            break;
+                        }
+                    }
+
                     let ch = input[i..].chars().next().expect("index UTF-8 valide");
                     i += ch.len_utf8();
                     self.at_line_start = ch == '\n';
@@ -154,11 +180,13 @@ impl OutputFilter {
                 if rest.starts_with(TOOL_CALL_FENCE) {
                     self.drop_mode = DropMode::ToolCallBlock(ToolCallFence::Backtick);
                     i += TOOL_CALL_FENCE.len();
+                    self.at_line_start = false;
                     continue;
                 }
                 if rest.starts_with(TOOL_CALL_SINGLE_QUOTE_FENCE) {
                     self.drop_mode = DropMode::ToolCallBlock(ToolCallFence::SingleQuote);
                     i += TOOL_CALL_SINGLE_QUOTE_FENCE.len();
+                    self.at_line_start = false;
                     continue;
                 }
                 if rest.starts_with(THINKING_OPEN) {
@@ -294,19 +322,41 @@ mod tests {
     }
 
     #[test]
-    fn filters_new_json_tool_result_split_across_chunks() {
-        let mut filter = OutputFilter::new();
-        assert_eq!(filter.push("[Tool res"), "");
-        assert_eq!(filter.push("ult]: {\"tool\":\"file_read\",\"content\":\"x\\n'''\\n```\"}\n[Assistant]: Réponse"), "Réponse");
-        assert_eq!(filter.finish(), "");
+    fn filters_tool_call_closing_fence_split_at_every_boundary() {
+        let closing = "```";
+        for split in 1..closing.len() {
+            let mut filter = OutputFilter::new();
+            assert_eq!(filter.push("```tool_call\n{}\n"), "");
+            assert_eq!(filter.push(&closing[..split]), "");
+            assert_eq!(filter.push(&closing[split..]), "");
+            assert_eq!(filter.push("\n[Assistant]: suite"), "suite");
+            assert_eq!(filter.finish(), "");
+        }
     }
 
     #[test]
-    fn filters_thinking_close_split_across_chunks() {
-        let mut filter = OutputFilter::new();
-        assert_eq!(filter.push("<thinking>secret</think"), "");
-        assert_eq!(filter.push("ing>\nRéponse"), "Réponse");
-        assert_eq!(filter.finish(), "");
+    fn filters_single_quote_closing_fence_split_at_every_boundary() {
+        let closing = "'''";
+        for split in 1..closing.len() {
+            let mut filter = OutputFilter::new();
+            assert_eq!(filter.push("'''tool_call\n{}\n"), "");
+            assert_eq!(filter.push(&closing[..split]), "");
+            assert_eq!(filter.push(&closing[split..]), "");
+            assert_eq!(filter.push("\n[Assistant]: suite"), "suite");
+            assert_eq!(filter.finish(), "");
+        }
+    }
+
+    #[test]
+    fn ignores_fence_like_content_inside_tool_call_body() {
+        let input = "```tool_call\n{\"value\":\"```\"}\n```\n[Assistant]: Réponse";
+        assert_eq!(sanitize_text(input), "Réponse");
+    }
+
+    #[test]
+    fn ignores_fence_like_content_inside_single_quote_tool_call_body() {
+        let input = "'''tool_call\n{\"value\":\"'''\"}\n'''\n[Assistant]: Réponse";
+        assert_eq!(sanitize_text(input), "Réponse");
     }
 
     #[test]
@@ -331,5 +381,12 @@ mod tests {
             sanitize_text("Avant\n[Tool result for shell_exec]: done\nAprès"),
             "Avant\nAprès"
         );
+    }
+
+    #[test]
+    fn keeps_unclosed_tool_call_hidden_at_stream_end() {
+        let mut filter = OutputFilter::new();
+        assert_eq!(filter.push("```tool_call\n{\"secret\":true}\n"), "");
+        assert_eq!(filter.finish(), "");
     }
 }
