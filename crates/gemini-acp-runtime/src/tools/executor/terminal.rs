@@ -1,18 +1,19 @@
 use agent_client_protocol::schema::v1::{
-    CreateTerminalRequest, ReleaseTerminalRequest, Terminal, TerminalId,
+    CreateTerminalRequest, ReleaseTerminalRequest, SessionId, Terminal, TerminalId,
     TerminalOutputRequest, ToolCallContent, ToolCallId, ToolCallStatus, WaitForTerminalExitRequest,
 };
 use serde_json::{Map, Value};
 
-use super::{ExecutionOutcome, ToolExecutor, ToolResult};
+use super::super::lifecycle::{session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolResultEnvelope};
 use super::super::sandbox::ShellSandbox;
-use super::super::lifecycle::{session_cancelled, wait_for_session_cancel};
+use super::{ExecutionOutcome, ToolExecutor, ToolResult};
 
 impl<'a> ToolExecutor<'a> {
     pub(super) async fn execute_shell_via_acp_terminal(
         &self,
         arguments: &Value,
         call_id: &ToolCallId,
+        lifecycle: &ToolLifecycle,
     ) -> anyhow::Result<ExecutionOutcome> {
         let command = arguments
             .get("command")
@@ -49,6 +50,9 @@ impl<'a> ToolExecutor<'a> {
                 let partial = self.fetch_terminal_output(&terminal_id).await;
                 let _ = self.cx.send_request(ReleaseTerminalRequest::new(self.session_id.clone(), terminal_id.clone())).block_task().await;
                 let terminal_text = terminal_output_text(partial);
+                if !terminal_text.is_empty() {
+                    self.emit_partial_result(call_id, lifecycle, "shell_exec", &terminal_text);
+                }
                 let content = if terminal_text.is_empty() { "terminal annulé par session/cancel".to_owned() } else { terminal_text.clone() };
                 return Ok(ExecutionOutcome {
                     result: ToolResult::err(content),
@@ -79,6 +83,9 @@ impl<'a> ToolExecutor<'a> {
             _ => output,
         };
         let cancelled = cancelled_after_wait || session_cancelled(self.session_id.0.as_ref());
+        if cancelled && !terminal_text.is_empty() {
+            self.emit_partial_result(call_id, lifecycle, "shell_exec", &terminal_text);
+        }
         let is_ok = !cancelled && wait_error.is_none() && signal.is_none() && exit_code.unwrap_or(0) == 0;
         Ok(ExecutionOutcome {
             result: ToolResult { content: terminal_text.clone(), is_ok },
@@ -86,6 +93,45 @@ impl<'a> ToolExecutor<'a> {
             terminal_meta: Some(terminal_lifecycle_meta(&terminal_id.0, Some(&terminal_text), Some((exit_code, signal.as_deref())))),
             cancelled,
         })
+    }
+
+    fn emit_partial_result(
+        &self,
+        call_id: &ToolCallId,
+        lifecycle: &ToolLifecycle,
+        tool_name: &str,
+        content: &str,
+    ) {
+        if content.is_empty() {
+            return;
+        }
+        let envelope = ToolResultEnvelope::new(
+            tool_name,
+            content,
+            ToolCallStatus::InProgress,
+            lifecycle.sequence(),
+        );
+        let rendered = super::super::tool_ux::result_update(
+            tool_name,
+            &Value::Null,
+            &envelope.content,
+            false,
+            self.cwd,
+            None,
+        );
+        let meta = serde_json::json!({
+            "result": {
+                "terminal": false,
+                "sequence": envelope.sequence,
+            }
+        });
+        let _ = self.emit_update(
+            call_id,
+            envelope.status,
+            rendered.content,
+            rendered.locations,
+            Some(meta.as_object().cloned().unwrap_or_default()),
+        );
     }
 
     pub(super) async fn fetch_terminal_output(&self, terminal_id: &TerminalId) -> (String, bool) {
@@ -97,9 +143,7 @@ impl<'a> ToolExecutor<'a> {
 }
 
 pub(super) fn terminal_output_text((output, truncated): (String, bool)) -> String {
-    if output.trim().is_empty() {
-        return String::new();
-    }
+    if output.trim().is_empty() { return String::new(); }
     if truncated { format!("{output}\n… (sortie tronquée par le client ACP)") } else { output }
 }
 
