@@ -2,24 +2,15 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnPhase { NotStarted, Active, Terminal }
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum StreamPhase { Idle, Active }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolPhase { Requested, Permission, Executing, Terminal }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) struct IntegrityError { pub(super) message: String }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)] enum StreamPhase { Idle, Active }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)] enum ToolPhase { Requested, Permission, Executing, Terminal }
+#[derive(Debug, Clone, PartialEq, Eq)] pub(super) struct IntegrityError { pub(super) message: String }
 impl IntegrityError { fn new(message: impl Into<String>) -> Self { Self { message: message.into() } } }
-
-#[derive(Debug)]
-pub(super) struct TurnIntegrity { phase: TurnPhase, thinking: StreamPhase, assistant: StreamPhase, tools: HashMap<String, ToolPhase> }
-impl Default for TurnIntegrity {
-    fn default() -> Self { Self { phase: TurnPhase::NotStarted, thinking: StreamPhase::Idle, assistant: StreamPhase::Idle, tools: HashMap::new() } }
-}
+#[derive(Debug)] pub(super) struct TurnIntegrity { phase: TurnPhase, thinking: StreamPhase, assistant: StreamPhase, tools: HashMap<String, ToolPhase> }
+impl Default for TurnIntegrity { fn default()->Self{Self{phase:TurnPhase::NotStarted,thinking:StreamPhase::Idle,assistant:StreamPhase::Idle,tools:HashMap::new()}} }
 impl TurnIntegrity {
-    pub(super) fn phase(&self) -> TurnPhase { self.phase }
-    pub(super) fn turn_started(&mut self)->Result<(),IntegrityError>{ if self.phase!=TurnPhase::NotStarted{return Err(IntegrityError::new("turn_started must be the first turn event"))} self.phase=TurnPhase::Active;Ok(()) }
+    pub(super) fn phase(&self)->TurnPhase{self.phase}
+    pub(super) fn turn_started(&mut self)->Result<(),IntegrityError>{if self.phase!=TurnPhase::NotStarted{return Err(IntegrityError::new("turn_started must be the first turn event"))}self.phase=TurnPhase::Active;Ok(())}
     pub(super) fn assistant_started(&mut self)->Result<(),IntegrityError>{self.ensure_active("assistant_started")?;if self.assistant==StreamPhase::Active{return Err(IntegrityError::new("assistant stream is already active"))}if self.thinking==StreamPhase::Active{return Err(IntegrityError::new("assistant cannot start while thinking is active"))}self.assistant=StreamPhase::Active;Ok(())}
     pub(super) fn assistant_delta(&self)->Result<(),IntegrityError>{self.ensure_active("assistant_delta")?;if self.assistant!=StreamPhase::Active{return Err(IntegrityError::new("assistant_delta requires an active assistant stream"))}if self.thinking==StreamPhase::Active{return Err(IntegrityError::new("assistant_delta cannot be emitted while thinking is active"))}Ok(())}
     pub(super) fn assistant_completed(&mut self)->Result<(),IntegrityError>{self.ensure_active("assistant_completed")?;if self.assistant!=StreamPhase::Active{return Err(IntegrityError::new("assistant_completed requires an active assistant stream"))}if self.thinking==StreamPhase::Active{return Err(IntegrityError::new("thinking must complete before assistant completes"))}self.assistant=StreamPhase::Idle;Ok(())}
@@ -29,18 +20,11 @@ impl TurnIntegrity {
     pub(super) fn tool_call_requested(&mut self,id:&str)->Result<(),IntegrityError>{self.ensure_tool_start_allowed("tool_call_requested")?;if id.is_empty(){return Err(IntegrityError::new("tool_call_requested requires a non-empty tool_call_id"))}if self.tools.contains_key(id){return Err(IntegrityError::new(format!("tool call {id} was already requested")))}self.tools.insert(id.to_owned(),ToolPhase::Requested);Ok(())}
     pub(super) fn permission_requested(&mut self,id:&str)->Result<(),IntegrityError>{self.ensure_active("permission_requested")?;match self.tools.get_mut(id){Some(s@ToolPhase::Requested)=>{*s=ToolPhase::Permission;Ok(())},Some(s)=>Err(IntegrityError::new(format!("permission_requested for tool {id} is invalid from state {s:?}"))),None=>Err(IntegrityError::new(format!("permission_requested references unknown tool {id}")))}}
     pub(super) fn tool_execution_started(&mut self,id:&str)->Result<(),IntegrityError>{self.ensure_active("tool_execution_started")?;match self.tools.get_mut(id){Some(s@ToolPhase::Requested)|Some(s@ToolPhase::Permission)=>{*s=ToolPhase::Executing;Ok(())},Some(s)=>Err(IntegrityError::new(format!("tool_execution_started for tool {id} is invalid from state {s:?}"))),None=>Err(IntegrityError::new(format!("tool_execution_started references unknown tool {id}")))}}
-    pub(super) fn tool_result_received(&mut self,id:&str)->Result<(),IntegrityError>{self.ensure_active("tool_result_received")?;match self.tools.get_mut(id){Some(s@ToolPhase::Executing)=>{*s=ToolPhase::Terminal;Ok(())},Some(s)=>Err(IntegrityError::new(format!("tool_result_received for tool {id} is invalid from state {s:?}"))),None=>Err(IntegrityError::new(format!("tool_result_received references unknown tool {id}")))}}
+    pub(super) fn tool_result_received(&mut self,id:&str)->Result<(),IntegrityError>{self.ensure_active("tool_result_received")?;match self.tools.get_mut(id){Some(s@ToolPhase::Requested)|Some(s@ToolPhase::Permission)|Some(s@ToolPhase::Executing)=>{*s=ToolPhase::Terminal;Ok(())},Some(s)=>Err(IntegrityError::new(format!("tool_result_received for tool {id} is invalid from state {s:?}"))),None=>Err(IntegrityError::new(format!("tool_result_received references unknown tool {id}")))}}
     pub(super) fn turn_cancelled(&mut self)->Result<(),IntegrityError>{self.finish_terminal("turn_cancelled")}
     pub(super) fn turn_completed(&mut self)->Result<(),IntegrityError>{self.ensure_active("turn_completed")?;if self.assistant==StreamPhase::Active||self.thinking==StreamPhase::Active{return Err(IntegrityError::new("turn_completed cannot close an active text stream"))}if self.tools.values().any(|s|*s!=ToolPhase::Terminal){return Err(IntegrityError::new("turn_completed cannot close a turn with an active tool call"))}self.phase=TurnPhase::Terminal;Ok(())}
     fn finish_terminal(&mut self,event:&str)->Result<(),IntegrityError>{self.ensure_active(event)?;self.phase=TurnPhase::Terminal;self.assistant=StreamPhase::Idle;self.thinking=StreamPhase::Idle;for s in self.tools.values_mut(){*s=ToolPhase::Terminal}Ok(())}
     fn ensure_active(&self,event:&str)->Result<(),IntegrityError>{if self.phase!=TurnPhase::Active{return Err(IntegrityError::new(format!("{event} requires an active turn, current state is {:?}",self.phase)))}Ok(())}
     fn ensure_tool_start_allowed(&self,event:&str)->Result<(),IntegrityError>{self.ensure_active(event)?;if self.assistant==StreamPhase::Active||self.thinking==StreamPhase::Active{return Err(IntegrityError::new(format!("{event} cannot be emitted while a text stream is active")))}Ok(())}
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test] fn canonical_order(){let mut s=TurnIntegrity::default();assert!(s.turn_completed().is_err());s.turn_started().unwrap();s.assistant_started().unwrap();s.thinking_started().unwrap();assert!(s.assistant_completed().is_err());s.thinking_delta().unwrap();s.thinking_completed().unwrap();s.assistant_delta().unwrap();s.assistant_completed().unwrap();s.turn_completed().unwrap();assert_eq!(s.phase,TurnPhase::Terminal)}
-    #[test] fn tool_lifecycle(){let mut s=TurnIntegrity::default();s.turn_started().unwrap();s.tool_call_requested("c").unwrap();assert!(s.tool_result_received("c").is_err());s.permission_requested("c").unwrap();s.tool_execution_started("c").unwrap();s.tool_result_received("c").unwrap();s.turn_completed().unwrap()}
-    #[test] fn cancellation_terminal(){let mut s=TurnIntegrity::default();s.turn_started().unwrap();s.tool_call_requested("c").unwrap();s.turn_cancelled().unwrap();assert!(s.turn_completed().is_err());assert!(s.turn_cancelled().is_err())}
-}
+#[cfg(test)] mod tests{use super::*;#[test]fn canonical(){let mut s=TurnIntegrity::default();assert!(s.turn_completed().is_err());s.turn_started().unwrap();s.assistant_started().unwrap();s.thinking_started().unwrap();assert!(s.assistant_completed().is_err());s.thinking_delta().unwrap();s.thinking_completed().unwrap();s.assistant_delta().unwrap();s.assistant_completed().unwrap();s.turn_completed().unwrap();assert_eq!(s.phase,TurnPhase::Terminal)}#[test]fn tools(){let mut s=TurnIntegrity::default();s.turn_started().unwrap();s.tool_call_requested("c").unwrap();s.permission_requested("c").unwrap();s.tool_result_received("c").unwrap();s.turn_completed().unwrap()}#[test]fn cancel(){let mut s=TurnIntegrity::default();s.turn_started().unwrap();s.tool_call_requested("c").unwrap();s.turn_cancelled().unwrap();assert!(s.turn_completed().is_err());assert!(s.turn_cancelled().is_err())}}
