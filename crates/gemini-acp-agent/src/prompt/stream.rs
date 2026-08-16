@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, watch};
 
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::tools::executor::emit_error_chunk;
-use super::{error::actionable_stream_error, follow_up::StreamNormalizer, notify::notify_text, output_filter::OutputFilter};
+use super::{error::actionable_stream_error, follow_up::StreamNormalizer, notify::notify_text, protocol_filter::ProtocolFilter};
 
 pub enum StreamOutcome { Complete, Cancelled, Failed(String) }
 pub struct StreamResult { pub outcome: StreamOutcome, pub assistant: String, pub tool_detection_text: String }
@@ -22,7 +22,7 @@ pub async fn consume<E: Display>(
     is_thinking_model: bool, semantic: &mut TurnEventEmitter,
 ) -> Result<StreamResult, AcpError> {
     let mut thought_stream = crate::thought::ThoughtStream::new(is_thinking_model);
-    let mut output_filter = OutputFilter::new();
+    let mut protocol_filter = ProtocolFilter::new();
     let mut follow_up_stream = StreamNormalizer::default();
     let mut assistant = String::new();
     let mut tool_detection_text = String::new();
@@ -42,10 +42,11 @@ pub async fn consume<E: Display>(
                             }
                             crate::thought::ThoughtEvent::ThoughtEnd => { if is_thinking_model { semantic.thinking_completed(); } }
                             crate::thought::ThoughtEvent::ResponseChunk(text) => {
-                                // Only response content is eligible for tool parsing.
-                                // Thinking content is never reinterpreted as a tool call.
+                                // Keep the raw response protocol separate from ACP presentation.
+                                // Tool detection consumes this raw response stream; the protocol
+                                // filter only protects the user-visible assistant channel.
                                 tool_detection_text.push_str(&text);
-                                let filtered = output_filter.push(&text);
+                                let filtered = protocol_filter.push(&text);
                                 if !filtered.is_empty() {
                                     assistant.push_str(&filtered);
                                     let safe_message = follow_up_stream.push(&filtered);
@@ -72,7 +73,7 @@ pub async fn consume<E: Display>(
             crate::thought::ThoughtEvent::ThoughtEnd => { if is_thinking_model { semantic.thinking_completed(); } }
             crate::thought::ThoughtEvent::ResponseChunk(text) => {
                 tool_detection_text.push_str(&text);
-                let filtered = output_filter.push(&text);
+                let filtered = protocol_filter.push(&text);
                 if !filtered.is_empty() {
                     assistant.push_str(&filtered);
                     let safe_message = follow_up_stream.push(&filtered);
@@ -84,7 +85,7 @@ pub async fn consume<E: Display>(
             }
         }
     }
-    let filtered_tail = output_filter.finish();
+    let filtered_tail = protocol_filter.finish();
     if !filtered_tail.is_empty() {
         assistant.push_str(&filtered_tail);
         let safe_message = follow_up_stream.push(&filtered_tail);
