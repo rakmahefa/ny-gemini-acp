@@ -72,11 +72,19 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     session_id,
                                 };
                             let result = gemini_acp_runtime::tools::interactive::scope(interactive, async move {
-                                prompt::run_turn(store, tools, client, req, responder, turn_cx)
-                                    .await
-                                    .map_err(|e| {
-                                        gemini_acp_encaps::EncapsError::Task(e.to_string())
-                                    })
+                                prompt::run_turn(
+                                    store,
+                                    tools,
+                                    client,
+                                    req,
+                                    responder,
+                                    turn_cx,
+                                    &mut semantic,
+                                )
+                                .await
+                                .map_err(|e| {
+                                    gemini_acp_encaps::EncapsError::Task(e.to_string())
+                                })
                             })
                             .await;
 
