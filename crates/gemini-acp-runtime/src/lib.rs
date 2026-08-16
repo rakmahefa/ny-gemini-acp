@@ -11,7 +11,7 @@ pub mod session;
 pub mod state;
 pub mod tools;
 
-pub use events::{AcpSemanticEvent, EventContext, EventStream, ToolEventContext};
+pub use events::{AcpSemanticEvent, EventBus, EventContext, EventStream, ToolEventContext};
 pub use runtime::{AgentRuntime, AppState};
 pub use session::SessionManager;
 pub use tools::{ToolCallKind, ToolCallRequest, ToolCallRequestError, ToolCallState, ToolRegistry};
