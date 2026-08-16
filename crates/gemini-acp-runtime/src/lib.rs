@@ -4,12 +4,14 @@
 //! sessions), le client Gemini, [`session::SessionManager`], les outils et
 //! les prompts système. Le runtime reste indépendant du transport ACP.
 
+pub mod events;
 pub mod persona;
 pub mod runtime;
 pub mod session;
 pub mod state;
 pub mod tools;
 
+pub use events::{AcpSemanticEvent, EventBus, EventContext, EventStream, ToolEventContext};
 pub use runtime::{AgentRuntime, AppState};
 pub use session::SessionManager;
 pub use tools::{ToolCallKind, ToolCallRequest, ToolCallRequestError, ToolCallState, ToolRegistry};
