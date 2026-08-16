@@ -1,8 +1,9 @@
 use agent_client_protocol::schema::v1::StopReason;
 use serde_json::{json, Map, Value};
 
-use super::{ToolResult, super::registry::ToolResult as RegistryToolResult};
 use super::super::lifecycle::{ToolLifecycle, ToolLifecycleState};
+use super::super::registry::ToolResult as RegistryToolResult;
+use super::ToolResult;
 
 pub(super) fn registry_result(result: RegistryToolResult) -> ToolResult {
     match result {
@@ -11,12 +12,7 @@ pub(super) fn registry_result(result: RegistryToolResult) -> ToolResult {
     }
 }
 
-pub(super) fn lifecycle_meta(
-    tool_name: &str,
-    lifecycle: &ToolLifecycle,
-    non_execution_kind: Option<&str>,
-    terminal_meta: Option<Map<String, Value>>,
-) -> Map<String, Value> {
+pub(super) fn lifecycle_meta(tool_name: &str, lifecycle: &ToolLifecycle, non_execution_kind: Option<&str>, terminal_meta: Option<Map<String, Value>>) -> Map<String, Value> {
     let mut meta = terminal_meta.unwrap_or_default();
     meta.insert("geminiAcp".into(), json!({ "lifecycle": { "state": lifecycle_state_label(lifecycle.state()), "sequence": lifecycle.sequence() } }));
     let claude = meta.entry("claudeCode").or_insert_with(|| json!({}));
