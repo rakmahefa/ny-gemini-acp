@@ -10,9 +10,7 @@ use tokio::sync::{mpsc, watch};
 
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::tools::executor::emit_error_chunk;
-use super::error::actionable_stream_error;
-use super::follow_up::StreamNormalizer;
-use super::notify::notify_text;
+use super::{error::actionable_stream_error, follow_up::StreamNormalizer, notify::notify_text};
 
 pub enum StreamOutcome { Complete, Cancelled, Failed(String) }
 pub struct StreamResult { pub outcome: StreamOutcome, pub assistant: String, pub tool_detection_text: String }
