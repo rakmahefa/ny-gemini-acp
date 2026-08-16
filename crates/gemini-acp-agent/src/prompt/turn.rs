@@ -54,7 +54,10 @@ pub async fn run_turn(store: Arc<Store>, tools: Arc<ToolRegistry>, client: gemin
         let stream::StreamResult{outcome,assistant,tool_detection_text}=streamed;
         if matches!(outcome,stream::StreamOutcome::Cancelled){span.record("outcome","cancelled");return responder.respond(PromptResponse::new(StopReason::Cancelled));}
         if let stream::StreamOutcome::Failed(e)=&outcome{span.record("outcome","failed");return responder.respond(PromptResponse::new(map_stop_reason_from_error(e)));}
-        let(clean_text,_)=parse_tool_calls(&assistant); let(_,tool_calls)=parse_tool_calls(&tool_detection_text); let clean_text=replace_components(&clean_text);
+        // `assistant` is already integrity-filtered for ACP presentation. Tool calls
+        // are parsed only from the response-only protocol stream collected separately.
+        let clean_text=replace_components(&assistant);
+        let(_,tool_calls)=parse_tool_calls(&tool_detection_text);
         if tool_calls.is_empty()||!session.tools_enabled||!registry.has_tools(){total_output=clean_text;break;}
         tracing::info!(session=%session_id,round=round,tool_count=tool_calls.len(),"tool calls détectés — exécution via ToolExecutor"); let tool_blocks:String=tool_calls.iter().map(|c|c.to_history_block()).collect::<Vec<_>>().join("\n"); let assistant_history=if clean_text.is_empty(){tool_blocks}else{format!("{}\n{}",clean_text,tool_blocks)}; session.messages.push((Role::Assistant,assistant_history));gemini_acp_runtime::tools::lifecycle::clear_partial_output(sid);
         let executor=ToolExecutor::new(&cx,&session_id,registry,&cwd,&additional_dirs,&mode_getter); let mut follow_up_seen=false; let mut follow_up_selected=None;
