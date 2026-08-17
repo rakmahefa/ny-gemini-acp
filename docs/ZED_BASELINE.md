@@ -6,8 +6,6 @@ This document defines the **real Zed baseline** for `ny-gemini-acp` before any f
 
 The goal is not to prove theoretical ACP compliance. The goal is to record what the current release of `ny-gemini-acp` actually does when launched by Zed as an External Agent.
 
-Zed currently integrates external agents through ACP. Custom agents are configured through `agent_servers` in Zed settings, and Zed exposes ACP traffic through `dev: open acp logs`. citeturn101497search0turn101497search1
-
 ## Baseline rules
 
 1. Run the baseline against the exact binary intended for daily Zed use.
@@ -26,162 +24,159 @@ Zed currently integrates external agents through ACP. Custom agents are configur
 | `UNOBSERVED` | Not yet executed. This is the default state for a new baseline. |
 | `N/A` | Not applicable to the current agent build/configuration. |
 
-## Test environment
+## Real baseline run #1
 
-Record these values for every baseline run:
+The following results are based on a real Zed ACP log captured from a fresh External Agent thread using the current `agent/zed-baseline` code path.
 
-```text
-Date:
-OS:
-Zed version:
-Zed build/channel:
-ny-gemini-acp commit:
-ny-gemini-acp version:
-Rust version:
-Launch command:
-Working directory:
-Authentication/configuration source:
-GEMINI_ACP_DATA_DIR:
-Other relevant environment:
-```
+### Environment evidence
 
-On Linux, Zed's user settings are normally stored at `~/.config/zed/settings.json`. citeturn177410search3turn177410search6
+| Field | Observed value |
+|---|---|
+| Observation timestamp | `2026-08-17T21:06:17Z` onward in ACP stderr/log entries |
+| Zed client | `zed` |
+| Zed version | `1.13.2+stable` |
+| ACP protocol version | `1` |
+| Agent name | `gemini-acp` |
+| Agent title | `Gemini (Web)` |
+| Agent version | `0.2.2` |
+| Workspace | `/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/ny-gemini-acp` |
+| Prompt | `Bonjour` |
+| Observed session ID | `sess_369b48a56e2749c6b8f5bdc05857086c` |
+| Observed message ID | `msg_dae0814536c14097b70997e4204687b3` |
+| MCP servers forwarded by Zed | `2` |
+| MCP handling in agent | Warning: forwarded servers received but not wired yet |
 
-## Recommended custom-agent configuration
+### Evidence summary
 
-Zed's custom External Agent configuration uses an `agent_servers` entry with a command, optional arguments, and environment variables. citeturn177410search0
-
-For a locally built release, use the equivalent of:
-
-```json
-{
-  "agent_servers": {
-    "ny-gemini-acp-baseline": {
-      "type": "custom",
-      "command": "/absolute/path/to/ny-gemini-acp/target/release/gemini-acp",
-      "args": [],
-      "env": {}
-    }
-  }
-}
-```
-
-Do not commit a machine-specific absolute path to the repository.
-
-## Baseline procedure
-
-### 1. Build the exact release binary
-
-```sh
-cargo build -p gemini-acp-agent --release
-```
-
-The binary used by Zed must be the resulting `target/release/gemini-acp` or an equivalent release artifact.
-
-### 2. Configure Zed
-
-Open Agent Settings and add a custom External Agent, or add the equivalent `agent_servers` entry to the settings file. Zed exposes Custom Agents from the External Agents page. citeturn101497search0turn101497search1
-
-### 3. Open a new external-agent thread
-
-Start a fresh thread from the Agent Panel/Threads Sidebar using the `ny-gemini-acp-baseline` agent.
-
-### 4. Enable ACP logging
-
-Open the Command Palette and run:
+The trace demonstrates the following real sequence:
 
 ```text
-Dev: Open ACP Logs
+initialize
+  -> initialize response
+session/new
+  -> session/new response
+session/set_config_option (model)
+session/set_config_option (think)
+  -> config_option_update notifications/responses
+session/prompt("Bonjour")
+  -> session_info_update(title="Bonjour")
+  -> agent_message_chunk*
+  -> tool_call
+  -> tool_call_update(in_progress)
+  -> tool_call_update(completed)
+  -> agent_message_chunk*
+  -> usage_update
+  -> session/prompt response(stopReason=end_turn)
 ```
 
-Zed documents the ACP log surface as the primary debugging mechanism for External Agents. citeturn101497search0
+The tool interaction was visibly represented through ACP `tool_call` and `tool_call_update` notifications rather than being exposed as ordinary assistant text. The streamed assistant message was delivered in multiple `agent_message_chunk` notifications using one stable `messageId`.
 
-### 5. Execute the baseline matrix below
+### Observed baseline matrix
 
-Run the tests in order. For every test, record:
-
-- prompt/input;
-- visible UI result;
-- ACP log observation;
-- expected result;
-- actual result;
-- status;
-- notes/reference to a regression test if it fails.
-
-## Baseline matrix
-
-### A. Process and handshake
-
-| ID | Scenario | Expected | Status |
+| ID | Scenario | Status | Evidence |
 |---|---|---|---|
-| ZED-001 | Zed launches `gemini-acp` | Process stays alive and accepts ACP traffic over stdio | `UNOBSERVED` |
-| ZED-002 | ACP initialization | Agent identifies itself as `gemini-acp` with the current package version | `UNOBSERVED` |
-| ZED-003 | Initialization capabilities | Zed accepts the advertised capabilities without a protocol error | `UNOBSERVED` |
-| ZED-004 | First session creation | New thread/session is created and rendered by Zed | `UNOBSERVED` |
-| ZED-005 | Second session creation | Independent thread/session can be created | `UNOBSERVED` |
+| ZED-001 | Zed launches `gemini-acp` and accepts ACP traffic over stdio | `PASS` | `initialize` request received and answered; subsequent session traffic succeeds |
+| ZED-002 | ACP initialization identifies agent | `PASS` | response reports `name=gemini-acp`, `title=Gemini (Web)`, `version=0.2.2` |
+| ZED-003 | Initialization capabilities accepted by Zed | `PASS` | Zed continues directly to `session/new`; no protocol error observed |
+| ZED-004 | First session creation | `PASS` | `session/new` returns `sess_369b48a56e2749c6b8f5bdc05857086c` with modes/config options |
+| ZED-005 | Second independent session creation | `UNOBSERVED` | not exercised in this capture |
+| ZED-010 | Plain text assistant response | `PASS` | `agent_message_chunk` notifications deliver coherent visible French text |
+| ZED-011 | Multi-chunk response | `PASS` | same `messageId` is used across multiple text chunks and final `stopReason=end_turn` is received |
+| ZED-012 | Assistant marker hidden | `UNOBSERVED` | no explicit marker injection test |
+| ZED-013 | User marker hidden | `UNOBSERVED` | no explicit marker injection test |
+| ZED-014 | Normal Markdown fence preserved | `UNOBSERVED` | not isolated as a baseline test |
+| ZED-020 | One tool call | `PASS` | `tool_call` → `in_progress` → `completed`, followed by assistant continuation |
+| ZED-021 | Tool result containing quotes | `UNOBSERVED` | not isolated |
+| ZED-022 | Tool result containing ellipsis/Unicode punctuation | `UNOBSERVED` | not isolated |
+| ZED-023 | Tool result containing ``` | `UNOBSERVED` | not isolated in real Zed |
+| ZED-024 | Tool result containing `'''` | `UNOBSERVED` | not isolated in real Zed |
+| ZED-025 | Tool result containing `[Assistant]:` | `UNOBSERVED` | not isolated in real Zed |
+| ZED-026 | Multiple consecutive tools | `UNOBSERVED` | not exercised |
+| ZED-030 | Tool-call opening split across chunks | `UNOBSERVED` | ACP log does not expose Gemini raw chunk partitioning |
+| ZED-031 | Tool-call closing fence split across chunks | `UNOBSERVED` | raw Gemini boundary not directly observable from this ACP capture |
+| ZED-032 | Tool-result prefix split across chunks | `UNOBSERVED` | raw Gemini boundary not directly observable |
+| ZED-033 | Assistant marker split across chunks | `UNOBSERVED` | raw Gemini boundary not directly observable |
+| ZED-034 | UTF-8 around chunk boundaries | `UNOBSERVED` | no targeted adversarial stream test |
+| ZED-040 | Normal completion | `PASS` | terminal `session/prompt` response contains `stopReason=end_turn` |
+| ZED-041 | User cancellation during active turn | `UNOBSERVED` | not exercised |
+| ZED-042 | Cancellation with no active turn | `UNOBSERVED` | not exercised |
+| ZED-043 | Agent/runtime error | `UNOBSERVED` | no failure scenario in this capture |
+| ZED-044 | Process restart | `UNOBSERVED` | not exercised |
+| ZED-050 | List sessions | `UNOBSERVED` | not exercised from Zed |
+| ZED-051 | Load session | `UNOBSERVED` | not exercised from Zed |
+| ZED-052 | Resume session | `UNOBSERVED` | not exercised |
+| ZED-053 | Fork session | `UNOBSERVED` | capability is advertised but not exercised |
+| ZED-054 | Close/delete session | `UNOBSERVED` | not exercised |
+| ZED-060 | No MCP configured | `UNOBSERVED` | this run had two forwarded MCP servers |
+| ZED-061 | Forwarded MCP server is discovered/used | `FAIL` | Zed forwarded two servers, but agent stderr explicitly reports they are received and **not wired yet** |
+| ZED-062 | MCP result contains protocol-like text | `UNOBSERVED` | no real MCP tool result with adversarial content observed |
+| ZED-063 | MCP error | `UNOBSERVED` | no MCP execution/error path exercised |
 
-### B. Basic assistant streaming
+### Initial findings
 
-| ID | Scenario | Expected | Status |
-|---|---|---|---|
-| ZED-010 | Plain text response | Visible response contains no internal protocol markers | `UNOBSERVED` |
-| ZED-011 | Multi-chunk response | Text is complete and ordering is preserved | `UNOBSERVED` |
-| ZED-012 | Assistant marker in Gemini output | Internal marker is hidden from Zed UI | `UNOBSERVED` |
-| ZED-013 | User marker in Gemini output | Internal marker is hidden from Zed UI | `UNOBSERVED` |
-| ZED-014 | Markdown code fence | Normal Markdown fence remains visible | `UNOBSERVED` |
+#### 1. ACP handshake is operational
 
-### C. Tool execution
+The real Zed client successfully negotiated protocol version `1`, received the agent capabilities, accepted the `gemini-acp` identity, created a session, changed configuration, submitted a prompt, received streaming updates, and received a terminal `end_turn` response.
 
-| ID | Scenario | Expected | Status |
-|---|---|---|---|
-| ZED-020 | One tool call | Zed renders a coherent tool interaction and the assistant continues | `UNOBSERVED` |
-| ZED-021 | Tool result contains quotes | Tool result does not corrupt following assistant output | `UNOBSERVED` |
-| ZED-022 | Tool result contains `...` or Unicode punctuation | Tool result remains data; assistant output remains intact | `UNOBSERVED` |
-| ZED-023 | Tool result contains ``` | Embedded fence is not reinterpreted as a new tool call | `UNOBSERVED` |
-| ZED-024 | Tool result contains `'''` | Embedded single-quote fence is not reinterpreted | `UNOBSERVED` |
-| ZED-025 | Tool result contains `[Assistant]:` | Embedded marker is not surfaced or treated as a lifecycle transition | `UNOBSERVED` |
-| ZED-026 | Multiple consecutive tools | Tool identity/order remains coherent | `UNOBSERVED` |
+This establishes a real-world PASS for the core Zed → ACP transport path.
 
-### D. Streaming boundaries
+#### 2. Streaming presentation is operational at the ACP boundary
 
-| ID | Scenario | Expected | Status |
-|---|---|---|---|
-| ZED-030 | Tool-call opening split across chunks | No protocol leakage | `UNOBSERVED` |
-| ZED-031 | Tool-call closing fence split across chunks | No protocol leakage and no dropped assistant text | `UNOBSERVED` |
-| ZED-032 | Tool result prefix split across chunks | Result envelope stays hidden | `UNOBSERVED` |
-| ZED-033 | Assistant marker split across chunks | Marker is removed without dropping visible text | `UNOBSERVED` |
-| ZED-034 | UTF-8 text around chunk boundaries | No corruption of Unicode output | `UNOBSERVED` |
+The capture contains multiple `agent_message_chunk` notifications for a single logical message, followed by `usage_update` and `stopReason=end_turn`. No protocol marker leaked into the observed assistant text.
 
-### E. Lifecycle and cancellation
+This is evidence for ZED-010/ZED-011 only. It is **not** proof of arbitrary raw Gemini chunk-boundary invariance, because ACP logs expose the already-normalized agent notifications rather than every upstream Gemini chunk.
 
-| ID | Scenario | Expected | Status |
-|---|---|---|---|
-| ZED-040 | Normal completion | Thread reaches a coherent terminal state | `UNOBSERVED` |
-| ZED-041 | User cancellation during active turn | Turn stops without later successful completion | `UNOBSERVED` |
-| ZED-042 | Cancellation with no active turn | No spurious failure or state corruption | `UNOBSERVED` |
-| ZED-043 | Agent/runtime error | Zed receives an actionable failure and thread is terminal | `UNOBSERVED` |
-| ZED-044 | Process restart | New Zed thread can reconnect cleanly | `UNOBSERVED` |
+#### 3. Tool lifecycle is operational
 
-### F. Sessions and persistence
+A real `glob` tool call was represented as:
 
-| ID | Scenario | Expected | Status |
-|---|---|---|---|
-| ZED-050 | List sessions | Existing sessions are discoverable | `UNOBSERVED` |
-| ZED-051 | Load session | History is rendered coherently | `UNOBSERVED` |
-| ZED-052 | Resume session | New prompt continues the expected session | `UNOBSERVED` |
-| ZED-053 | Fork session | Forked session is independent when capability is advertised | `UNOBSERVED` |
-| ZED-054 | Close/delete session | Session lifecycle remains coherent in Zed | `UNOBSERVED` |
+```text
+tool_call(state=pending)
+  -> tool_call_update(status=in_progress)
+  -> tool_call_update(status=completed)
+  -> assistant_message_chunk continuation
+```
 
-### G. MCP and tool forwarding
+The observed tool call used ID `gemini_call_0` and completed before the assistant resumed its response.
 
-Zed can forward configured MCP servers to External Agents over ACP. The agent may also have native MCP configuration. citeturn101497search3
+#### 4. Forwarded MCP is an explicit current limitation
 
-| ID | Scenario | Expected | Status |
-|---|---|---|---|
-| ZED-060 | No MCP configured | Agent still starts and works normally | `UNOBSERVED` |
-| ZED-061 | One forwarded MCP server | Agent discovers/uses it without corrupting ACP output | `UNOBSERVED` |
-| ZED-062 | MCP tool result contains protocol-like text | Result is treated as data, not protocol | `UNOBSERVED` |
-| ZED-063 | MCP error | Failure remains attributable and does not corrupt lifecycle state | `UNOBSERVED` |
+Zed forwarded two MCP server definitions in `session/new`:
+
+- `mcp-libre`
+- `mcp-server-playwright`
+
+The agent emitted this stderr warning:
+
+```text
+session/new received mcp_servers, but Gemini ACP does not wire them yet
+```
+
+Therefore this is a **real observed limitation**, not a hypothetical concern. ZED-061 is marked `FAIL` until forwarded MCP servers are either wired or the expected behavior is intentionally changed and documented.
+
+#### 5. Configuration negotiation is working
+
+Zed successfully negotiated the current configuration options for:
+
+- `model`
+- `think`
+- `tools_enabled`
+
+The trace shows both `session/set_config_option` responses and matching `config_option_update` notifications.
+
+## Remaining Phase 0 work
+
+The first run does not complete Phase 0 because many adversarial and lifecycle scenarios remain `UNOBSERVED`.
+
+The next real-Zed captures should focus on:
+
+1. a prompt forcing a `file_read`/tool result containing quotes, `…`, triple backticks, triple single quotes, and literal `[Assistant]:` text;
+2. multiple consecutive tool calls;
+3. explicit cancellation while a tool or model response is active;
+4. session reload/resume/fork from Zed;
+5. an MCP-only test that distinguishes forwarded-server discovery from the current built-in tool registry.
+
+These tests should be captured in ACP Logs and added here without changing production code first.
 
 ## Evidence capture
 
