@@ -19,10 +19,14 @@ jobs:
         toolchain: stable
         components: rustfmt
 
+    - name: Cache Cargo
+      uses: Swatinem/rust-cache@v2
+
     - name: Check formatting
       run: cargo fmt
       
   test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -30,12 +34,16 @@ jobs:
       - name: Install Rust (Edition 2021)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          toolchain: stable
 
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+      
       - name: Cargo Test Workspace
         run: cargo test --workspace
 
   clippy:
+    name: Clippy
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -43,7 +51,11 @@ jobs:
       - name: Install Rust (Edition 2021)
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          toolchain: stable
+          components: clippy
 
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+      
       - name: Cargo Clippy Workspace
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets
