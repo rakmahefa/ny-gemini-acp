@@ -1,7 +1,7 @@
 //! Runtime de l'agent : construction et cycle de vie de l'état applicatif.
 use crate::events::EventBus;
 use crate::session::SessionManager;
-use crate::tools::ToolRegistry;
+use crate::tools::{McpCatalog, ToolRegistry};
 use anyhow::{Context, Result};
 use gemini_acp_config::{AgentConfig, SettingsManager, SettingsManagerOptions};
 use std::sync::Arc;
@@ -54,7 +54,15 @@ impl AgentRuntime {
             .await
             .context("initialisation du SettingsManager")?;
         let mut tools = ToolRegistry::builtin();
-        tools.register(Box::new(crate::tools::interactive::AskUserQuestionTool));
+
+        let mcp = McpCatalog::from_env()
+            .await
+            .context("initialisation des serveurs MCP")?;
+        if mcp.has_tools() {
+            tracing::info!(tools = mcp.definitions().len(), "MCP infrastructure initialized");
+            tools.register_mcp(Arc::new(mcp));
+        }
+
         Ok(Self {
             state: AppState {
                 store,

@@ -12,12 +12,14 @@
 //! - [`sandbox`]   : validation de sécurité (path traversal, shell sandbox).
 //! - [`builtin`]   : outils intégrés.
 //! - [`interactive`] : outils qui utilisent directement les capacités interactives ACP.
+//! - [`mcp`]       : discovery/exécution d'outils via le Model Context Protocol.
 
 pub mod builtin;
 pub mod executor;
 pub mod interactive;
 pub mod lifecycle;
 pub mod lifecycle_events;
+pub mod mcp;
 pub mod parse;
 pub mod prompt;
 pub mod registry;
@@ -28,5 +30,6 @@ pub mod tool_ux;
 
 pub use lifecycle::{LifecycleError, ToolLifecycle, ToolLifecycleState};
 pub use lifecycle_events::{context as tool_event_context, emit_tool_state};
+pub use mcp::{McpCatalog, McpError, McpServerConfig, McpTransportKind};
 pub use registry::ToolRegistry;
 pub use request::{ToolCallKind, ToolCallRequest, ToolCallRequestError, ToolCallState};
