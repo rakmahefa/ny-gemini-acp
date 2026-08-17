@@ -5,6 +5,7 @@
 //! contains strings that look like executable protocol.
 
 use gemini_acp_runtime::tools::parse::{parse_tool_calls, ParsedToolCall};
+use serde_json::Value;
 
 const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
@@ -222,12 +223,39 @@ impl ToolStreamDetector {
 }
 
 fn parse_block(kind: BlockKind, body: &str) -> Vec<ParsedToolCall> {
-    let normalized = match kind {
-        BlockKind::FunctionCall => format!("```function_call\n{body}\n```"),
-        BlockKind::SingleQuoteToolCall => format!("```tool_call\n{body}\n```"),
-        BlockKind::ToolCall => format!("```tool_call\n{body}\n```"),
+    let normalized = body.trim();
+    if normalized.is_empty() {
+        return Vec::new();
+    }
+
+    let Ok(value) = serde_json::from_str::<Value>(normalized) else {
+        return Vec::new();
     };
-    parse_tool_calls(&normalized).1
+
+    let Some(name) = value.get("name").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+
+    let id = value
+        .get("id")
+        .or_else(|| value.get("call_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "gemini_call_0".to_owned());
+
+    let arguments = value
+        .get("arguments")
+        .or_else(|| value.get("args"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    match kind {
+        BlockKind::ToolCall | BlockKind::SingleQuoteToolCall => {
+            vec![ParsedToolCall::new(id, name, arguments)]
+        }
+        BlockKind::FunctionCall => vec![ParsedToolCall::new(id, name, arguments)],
+    }
 }
 
 fn parse_bare_json(text: &str) -> Option<ParsedToolCall> {
