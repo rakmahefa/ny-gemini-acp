@@ -3,7 +3,7 @@ use agent_client_protocol::{Client, ConnectionTo};
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::state::{Role, Session};
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, ToolExecutor};
-use gemini_acp_runtime::tools::parse::parse_tool_calls;
+use gemini_acp_runtime::tools::parse::ParsedToolCall;
 use gemini_acp_runtime::tools::ToolRegistry;
 use tokio::sync::watch;
 
@@ -129,7 +129,7 @@ pub(crate) async fn run(
         let stream::StreamResult {
             outcome,
             assistant,
-            tool_detection_text,
+            tool_calls,
         } = streamed;
 
         if matches!(outcome, stream::StreamOutcome::Cancelled) {
@@ -145,7 +145,6 @@ pub(crate) async fn run(
         }
 
         let clean_text = replace_components(&assistant);
-        let (_, tool_calls) = parse_tool_calls(&tool_detection_text);
         if tool_calls.is_empty() || !ctx.session.tools_enabled || !ctx.registry.has_tools() {
             total_output = clean_text;
             break;
@@ -160,7 +159,7 @@ pub(crate) async fn run(
 
         let tool_blocks = tool_calls
             .iter()
-            .map(|call| call.to_history_block())
+            .map(ParsedToolCall::to_history_block)
             .collect::<Vec<_>>()
             .join("\n");
         let assistant_history = if clean_text.is_empty() {
