@@ -31,7 +31,7 @@ impl std::fmt::Display for ContractViolation {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct StreamDelta {
     pub(crate) visible: String,
     pub(crate) tool_calls: Vec<ParsedToolCall>,
@@ -175,7 +175,11 @@ mod tests {
     fn arbitrary_chunk_boundaries_do_not_change_result() {
         let full = "[Assistant]: Debut\n```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```\n[Tool result]: {\"content\":\"x\"}\n[Assistant]: Fin";
         let reference = collect(&[full]);
-        for split in 1..full.len() {
+        for split in full
+            .char_indices()
+            .map(|(index, _)| index)
+            .filter(|index| *index > 0)
+        {
             let (left, right) = full.split_at(split);
             let actual = collect(&[left, right]);
             assert_eq!(actual.visible, reference.visible, "split at {split}");
