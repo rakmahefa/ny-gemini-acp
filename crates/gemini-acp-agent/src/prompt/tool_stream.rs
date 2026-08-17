@@ -161,38 +161,44 @@ impl ToolStreamDetector {
             self.line_probe.push(ch);
             if let Some(kind) = complete_opening(&self.line_probe) {
                 self.line_probe.clear();
-                self.mode = match kind {
-                    Opening::IgnoreLine => Mode::IgnoreLine,
-                    Opening::Block(kind) => Mode::Block {
-                        kind,
-                        body: String::new(),
-                        line_start: false,
-                        close_probe: String::new(),
-                        oversized: false,
-                    },
-                    Opening::Marker => Mode::Normal,
-                };
-                if matches!(self.mode, Mode::Block { .. } | Mode::IgnoreLine) {
-                    return;
+                match kind {
+                    Opening::IgnoreLine => {
+                        self.mode = Mode::IgnoreLine;
+                        return;
+                    }
+                    Opening::Block(kind) => {
+                        self.mode = Mode::Block {
+                            kind,
+                            body: String::new(),
+                            line_start: false,
+                            close_probe: String::new(),
+                            oversized: false,
+                        };
+                        return;
+                    }
+                    Opening::Marker => {
+                        self.line_start = false;
+                        return;
+                    }
                 }
             }
 
             if !could_continue_opening(&self.line_probe) {
                 let probe = std::mem::take(&mut self.line_probe);
-                self.line_start = false;
                 for probe_ch in probe.chars() {
                     self.process_normal_char(probe_ch, calls);
+                    self.line_start = probe_ch == '\n';
                 }
                 return;
             }
 
             if ch == '\n' {
                 let probe = std::mem::take(&mut self.line_probe);
-                self.line_start = true;
                 for probe_ch in probe.chars() {
                     if probe_ch != '\n' {
                         self.process_normal_char(probe_ch, calls);
                     }
+                    self.line_start = probe_ch == '\n';
                 }
             }
             return;
