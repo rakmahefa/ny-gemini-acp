@@ -111,3 +111,19 @@ impl McpToolDescriptor {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_descriptor_requires_object_input_schema() {
+        let descriptor = McpToolDescriptor {
+            name: "x".into(),
+            description: String::new(),
+            input_schema: serde_json::json!([]),
+            output_schema: None,
+        };
+        assert!(descriptor.validate().is_err());
+    }
+}
