@@ -1,63 +1,72 @@
 //! Incremental Gemini tool-protocol detection.
 //!
-//! The detector deliberately operates on the raw response stream, but only
-//! interprets protocol envelopes that start at line boundaries. Tool-result
-//! lines are opaque and are never reparsed, even when their payload contains
-//! strings that look like tool-call envelopes.
+//! The detector only interprets protocol envelopes at line boundaries. Tool
+//! result lines are opaque and are never reparsed, even when their payload
+//! contains strings that look like executable protocol.
 
 use gemini_acp_runtime::tools::parse::{parse_tool_calls, ParsedToolCall};
 
 const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
-const ASSISTANT_MARKER: &str = "[Assistant]:";
-const USER_MARKER: &str = "[User]:";
 const TOOL_CALL_FENCE: &str = "```tool_call";
 const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
 const FUNCTION_CALL_FENCE: &str = "```function_call";
-const MAX_PROTOCOL_BLOCK: usize = 256 * 1024;
-const MAX_FOLLOW_UP_TAG: usize = 64 * 1024;
-const MAX_BARE_JSON: usize = 256 * 1024;
+const FOLLOW_UP_PREFIX: &str = "<FollowUp";
+const MAX_LINE: usize = 256 * 1024;
+const MAX_FOLLOW_UP: usize = 64 * 1024;
+const MAX_TOOL_BLOCK: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind {
     ToolCall,
-    ToolCallSingleQuote,
     FunctionCall,
+    SingleQuoteToolCall,
+}
+
+impl BlockKind {
+    fn opening(self) -> &'static str {
+        match self {
+            Self::ToolCall => TOOL_CALL_FENCE,
+            Self::FunctionCall => FUNCTION_CALL_FENCE,
+            Self::SingleQuoteToolCall => TOOL_CALL_SINGLE_QUOTE_FENCE,
+        }
+    }
+
+    fn closing(self) -> &'static str {
+        match self {
+            Self::SingleQuoteToolCall => "'''",
+            Self::ToolCall | Self::FunctionCall => "```",
+        }
+    }
 }
 
 #[derive(Debug)]
 enum Mode {
     Normal,
-    IgnoreLine,
-    Block {
+    IgnoreToolResult,
+    ToolBlock {
         kind: BlockKind,
         body: String,
-        line_start: bool,
-        close_probe: String,
         oversized: bool,
     },
 }
 
-/// Incremental semantic detector for executable tool protocol.
+/// Streaming detector for executable tool protocol.
 #[derive(Debug)]
 pub(crate) struct ToolStreamDetector {
     mode: Mode,
-    line_start: bool,
-    line_probe: String,
-    follow_up: Option<(String, Option<char>)>,
-    bare_json: Option<String>,
-    plain_prefix_only: bool,
+    line: String,
+    follow_up: Option<String>,
+    at_stream_start: bool,
 }
 
 impl Default for ToolStreamDetector {
     fn default() -> Self {
         Self {
             mode: Mode::Normal,
-            line_start: true,
-            line_probe: String::new(),
+            line: String::new(),
             follow_up: None,
-            bare_json: None,
-            plain_prefix_only: true,
+            at_stream_start: true,
         }
     }
 }
@@ -68,251 +77,175 @@ impl ToolStreamDetector {
     }
 
     pub(crate) fn feed(&mut self, chunk: &str) -> Vec<ParsedToolCall> {
-        self.process(chunk, false)
+        let mut calls = Vec::new();
+        for ch in chunk.chars() {
+            self.feed_char(ch, &mut calls);
+        }
+        calls
     }
 
     pub(crate) fn finish(&mut self) -> Vec<ParsedToolCall> {
-        let mut calls = self.process("", true);
-        self.follow_up = None;
-        if let Some(candidate) = self.bare_json.take() {
-            calls.extend(parse_tool_calls(&candidate).1);
-        }
-        calls
-    }
-
-    fn process(&mut self, chunk: &str, final_chunk: bool) -> Vec<ParsedToolCall> {
         let mut calls = Vec::new();
-        for ch in chunk.chars() {
-            self.process_char(ch, &mut calls);
+        if !self.line.is_empty() {
+            let line = std::mem::take(&mut self.line);
+            self.finish_line(line, &mut calls);
         }
-        if final_chunk {
-            calls.extend(self.finish_block_if_complete());
-        }
+        self.follow_up = None;
+        self.mode = Mode::Normal;
         calls
     }
 
-    fn process_char(&mut self, ch: char, calls: &mut Vec<ParsedToolCall>) {
+    fn feed_char(&mut self, ch: char, calls: &mut Vec<ParsedToolCall>) {
+        self.line.push(ch);
+        if self.line.len() > MAX_LINE {
+            self.line.clear();
+            return;
+        }
+
+        if ch != '\n' {
+            return;
+        }
+
+        let line = std::mem::take(&mut self.line);
+        self.process_line(line, calls);
+    }
+
+    fn process_line(&mut self, line: String, calls: &mut Vec<ParsedToolCall>) {
         match &mut self.mode {
-            Mode::IgnoreLine => {
-                if ch == '\n' {
-                    self.mode = Mode::Normal;
-                    self.line_start = true;
-                    self.line_probe.clear();
-                }
-                return;
+            Mode::Normal => self.process_normal_line(line, calls),
+            Mode::IgnoreToolResult => {
+                self.mode = Mode::Normal;
             }
-            Mode::Block {
+            Mode::ToolBlock {
                 kind,
                 body,
-                line_start,
-                close_probe,
                 oversized,
             } => {
-                let closing = match kind {
-                    BlockKind::ToolCall | BlockKind::FunctionCall => "```",
-                    BlockKind::ToolCallSingleQuote => "'''",
-                };
-
-                if *line_start || !close_probe.is_empty() {
-                    if ch == closing.as_bytes()[close_probe.len()] as char {
-                        close_probe.push(ch);
-                        if close_probe == closing {
-                            let body = std::mem::take(body);
-                            let kind = *kind;
-                            let was_oversized = *oversized;
-                            close_probe.clear();
-                            self.mode = Mode::Normal;
-                            self.line_start = true;
-                            if !was_oversized {
-                                calls.extend(parse_block(kind, &body));
-                            }
-                            return;
-                        }
-                        return;
+                let text = line.trim_end_matches(['\r', '\n']);
+                if text == kind.closing() {
+                    let body_text = std::mem::take(body);
+                    let kind = *kind;
+                    let was_oversized = *oversized;
+                    self.mode = Mode::Normal;
+                    if !was_oversized {
+                        calls.extend(parse_block(kind, &body_text));
                     }
-                    if !close_probe.is_empty() {
-                        if !*oversized {
-                            body.push_str(close_probe);
-                        }
-                        close_probe.clear();
-                    }
-                }
-
-                if ch == '\n' {
-                    *line_start = true;
-                } else {
-                    *line_start = false;
+                    return;
                 }
 
                 if !*oversized {
-                    body.push(ch);
-                    if body.len() > MAX_PROTOCOL_BLOCK {
+                    body.push_str(&line);
+                    if body.len() > MAX_TOOL_BLOCK {
                         *oversized = true;
                         body.clear();
                     }
                 }
-                return;
             }
-            Mode::Normal => {}
-        }
-
-        if self.line_start {
-            self.line_probe.push(ch);
-            if let Some(kind) = complete_opening(&self.line_probe) {
-                self.line_probe.clear();
-                match kind {
-                    Opening::IgnoreLine => {
-                        self.mode = Mode::IgnoreLine;
-                        return;
-                    }
-                    Opening::Block(kind) => {
-                        self.mode = Mode::Block {
-                            kind,
-                            body: String::new(),
-                            line_start: false,
-                            close_probe: String::new(),
-                            oversized: false,
-                        };
-                        return;
-                    }
-                    Opening::Marker => {
-                        self.line_start = false;
-                        return;
-                    }
-                }
-            }
-
-            if !could_continue_opening(&self.line_probe) {
-                let probe = std::mem::take(&mut self.line_probe);
-                for probe_ch in probe.chars() {
-                    self.process_normal_char(probe_ch, calls);
-                    self.line_start = probe_ch == '\n';
-                }
-                return;
-            }
-
-            if ch == '\n' {
-                let probe = std::mem::take(&mut self.line_probe);
-                for probe_ch in probe.chars() {
-                    if probe_ch != '\n' {
-                        self.process_normal_char(probe_ch, calls);
-                    }
-                    self.line_start = probe_ch == '\n';
-                }
-            }
-            return;
-        }
-
-        self.process_normal_char(ch, calls);
-        if ch == '\n' {
-            self.line_start = true;
-            self.line_probe.clear();
         }
     }
 
-    fn process_normal_char(&mut self, ch: char, calls: &mut Vec<ParsedToolCall>) {
-        if let Some((tag, quote)) = &mut self.follow_up {
-            tag.push(ch);
-            if tag.len() > MAX_FOLLOW_UP_TAG {
+    fn finish_line(&mut self, line: String, calls: &mut Vec<ParsedToolCall>) {
+        match &mut self.mode {
+            Mode::Normal => self.process_normal_line(line, calls),
+            Mode::IgnoreToolResult | Mode::ToolBlock { .. } => {
+                self.mode = Mode::Normal;
+            }
+        }
+    }
+
+    fn process_normal_line(&mut self, line: String, calls: &mut Vec<ParsedToolCall>) {
+        let text = line.trim_end_matches(['\r', '\n']);
+        let trimmed = text.trim_start();
+
+        if trimmed.starts_with(TOOL_RESULT_PREFIX)
+            || trimmed.starts_with(TOOL_RESULT_ENVELOPE)
+        {
+            self.mode = Mode::IgnoreToolResult;
+            self.at_stream_start = false;
+            return;
+        }
+
+        if let Some(kind) = [
+            BlockKind::ToolCall,
+            BlockKind::SingleQuoteToolCall,
+            BlockKind::FunctionCall,
+        ]
+        .into_iter()
+        .find(|kind| trimmed.starts_with(kind.opening()))
+        {
+            self.mode = Mode::ToolBlock {
+                kind,
+                body: String::new(),
+                oversized: false,
+            };
+            self.at_stream_start = false;
+            return;
+        }
+
+        if let Some(tag) = &mut self.follow_up {
+            tag.push_str(text);
+            if tag.len() > MAX_FOLLOW_UP {
                 self.follow_up = None;
                 return;
             }
-            match quote {
-                Some(current) if ch == *current => *quote = None,
-                None if ch == '\'' || ch == '"' => *quote = Some(ch),
-                None if ch == '>' => {
-                    let tag = std::mem::take(tag);
-                    self.follow_up = None;
-                    calls.extend(parse_tool_calls(&tag).1);
-                }
-                _ => {}
+            if tag.contains('>') {
+                let tag = std::mem::take(tag);
+                calls.extend(parse_tool_calls(&tag).1);
             }
+            self.at_stream_start = false;
             return;
         }
 
-        if ch == '<' {
-            self.follow_up = Some(("<".to_owned(), None));
+        if text.contains(FOLLOW_UP_PREFIX) {
+            let Some(start) = text.find(FOLLOW_UP_PREFIX) else {
+                return;
+            };
+            let candidate = &text[start..];
+            if candidate.contains('>') {
+                calls.extend(parse_tool_calls(candidate).1);
+            } else if candidate.len() <= MAX_FOLLOW_UP {
+                self.follow_up = Some(candidate.to_owned());
+            }
+            self.at_stream_start = false;
             return;
         }
 
-        if let Some(candidate) = &mut self.bare_json {
-            candidate.push(ch);
-            if candidate.len() > MAX_BARE_JSON {
-                self.bare_json = None;
-                return;
+        if self.at_stream_start {
+            if let Some(call) = parse_bare_json(trimmed) {
+                calls.push(call);
             }
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) {
-                let candidate = std::mem::take(candidate);
-                if value
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some()
-                    && (value.get("arguments").is_some() || value.get("args").is_some())
-                {
-                    calls.extend(parse_tool_calls(&candidate).1);
-                }
-                self.plain_prefix_only = false;
+            if !trimmed.is_empty() {
+                self.at_stream_start = false;
             }
-            return;
-        }
-
-        if self.plain_prefix_only {
-            if ch.is_whitespace() {
-                return;
-            }
-            if ch == '{' {
-                self.bare_json = Some("{".to_owned());
-                return;
-            }
-            self.plain_prefix_only = false;
         }
     }
-
-    fn finish_block_if_complete(&mut self) -> Vec<ParsedToolCall> {
-        Vec::new()
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Opening {
-    IgnoreLine,
-    Block(BlockKind),
-    Marker,
-}
-
-fn complete_opening(probe: &str) -> Option<Opening> {
-    match probe {
-        TOOL_RESULT_ENVELOPE | TOOL_RESULT_PREFIX => Some(Opening::IgnoreLine),
-        TOOL_CALL_FENCE => Some(Opening::Block(BlockKind::ToolCall)),
-        TOOL_CALL_SINGLE_QUOTE_FENCE => Some(Opening::Block(BlockKind::ToolCallSingleQuote)),
-        FUNCTION_CALL_FENCE => Some(Opening::Block(BlockKind::FunctionCall)),
-        ASSISTANT_MARKER | USER_MARKER => Some(Opening::Marker),
-        _ => None,
-    }
-}
-
-fn could_continue_opening(probe: &str) -> bool {
-    [
-        TOOL_RESULT_PREFIX,
-        TOOL_RESULT_ENVELOPE,
-        TOOL_CALL_FENCE,
-        TOOL_CALL_SINGLE_QUOTE_FENCE,
-        FUNCTION_CALL_FENCE,
-        ASSISTANT_MARKER,
-        USER_MARKER,
-    ]
-    .iter()
-    .any(|prefix| prefix.starts_with(probe))
 }
 
 fn parse_block(kind: BlockKind, body: &str) -> Vec<ParsedToolCall> {
     let normalized = match kind {
-        BlockKind::ToolCall | BlockKind::ToolCallSingleQuote => {
-            format!("```tool_call\n{body}\n```")
-        }
         BlockKind::FunctionCall => format!("```function_call\n{body}\n```"),
+        BlockKind::SingleQuoteToolCall => format!("```tool_call\n{body}\n```"),
+        BlockKind::ToolCall => format!("```tool_call\n{body}\n```"),
     };
     parse_tool_calls(&normalized).1
+}
+
+fn parse_bare_json(text: &str) -> Option<ParsedToolCall> {
+    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
+    let name = value
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.trim().is_empty())?;
+    if value.get("arguments").is_none() && value.get("args").is_none() {
+        return None;
+    }
+
+    let (_, mut calls) = parse_tool_calls(text);
+    let mut call = calls.pop()?;
+    if call.name != name {
+        return None;
+    }
+    Some(call)
 }
 
 #[cfg(test)]
@@ -380,14 +313,14 @@ mod tests {
     #[test]
     fn detects_bare_json_tool_call_at_stream_prefix() {
         let calls = collect(&[
-            "{\"name\":\"shell_exec\",\"arguments\":{\"command\":\"pwd\"}}",
+            "{\"name\":\"shell_exec\",\"arguments\":{\"command\":\"pwd\"}}\n",
         ]);
         assert_eq!(calls.len(), 1);
     }
 
     #[test]
     fn normal_json_without_tool_shape_is_not_a_call() {
-        let calls = collect(&["{\"name\":\"project\",\"value\":42}"]);
+        let calls = collect(&["{\"name\":\"project\",\"value\":42}\n"]);
         assert!(calls.is_empty());
     }
 
