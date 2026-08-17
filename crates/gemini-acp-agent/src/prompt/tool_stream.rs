@@ -117,40 +117,48 @@ impl ToolStreamDetector {
             Mode::IgnoreToolResult => {
                 self.mode = Mode::Normal;
             }
-            Mode::ToolBlock {
-                kind,
-                body,
-                oversized,
-            } => {
-                let text = line.trim_end_matches(['\r', '\n']);
-                if text == kind.closing() {
-                    let body_text = std::mem::take(body);
-                    let kind = *kind;
-                    let was_oversized = *oversized;
-                    self.mode = Mode::Normal;
-                    if !was_oversized {
-                        calls.extend(parse_block(kind, &body_text));
-                    }
-                    return;
-                }
+            Mode::ToolBlock { .. } => self.process_tool_block_line(line, calls),
+        }
+    }
 
-                if !*oversized {
-                    body.push_str(&line);
-                    if body.len() > MAX_TOOL_BLOCK {
-                        *oversized = true;
-                        body.clear();
-                    }
-                }
+    fn process_tool_block_line(&mut self, line: String, calls: &mut Vec<ParsedToolCall>) {
+        let Mode::ToolBlock {
+            kind,
+            body,
+            oversized,
+        } = &mut self.mode
+        else {
+            unreachable!();
+        };
+
+        let text = line.trim_end_matches(['\r', '\n']);
+        if text == kind.closing() {
+            let body_text = std::mem::take(body);
+            let kind = *kind;
+            let was_oversized = *oversized;
+            self.mode = Mode::Normal;
+            if !was_oversized {
+                calls.extend(parse_block(kind, &body_text));
+            }
+            return;
+        }
+
+        if !*oversized {
+            body.push_str(&line);
+            if body.len() > MAX_TOOL_BLOCK {
+                *oversized = true;
+                body.clear();
             }
         }
     }
 
     fn finish_line(&mut self, line: String, calls: &mut Vec<ParsedToolCall>) {
-        match &mut self.mode {
+        match &self.mode {
             Mode::Normal => self.process_normal_line(line, calls),
-            Mode::IgnoreToolResult | Mode::ToolBlock { .. } => {
+            Mode::IgnoreToolResult => {
                 self.mode = Mode::Normal;
             }
+            Mode::ToolBlock { .. } => self.process_tool_block_line(line, calls),
         }
     }
 
