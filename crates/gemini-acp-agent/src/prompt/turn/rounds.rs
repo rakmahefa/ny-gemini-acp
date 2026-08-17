@@ -1,7 +1,7 @@
 use agent_client_protocol::schema::v1::{MessageId, SessionId, StopReason};
 use agent_client_protocol::{Client, ConnectionTo};
 use gemini_acp_runtime::events::TurnEventEmitter;
-use gemini_acp_runtime::state::{Role, Session, SessionMode};
+use gemini_acp_runtime::state::{Role, Session};
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, ToolExecutor};
 use gemini_acp_runtime::tools::parse::parse_tool_calls;
 use gemini_acp_runtime::tools::ToolRegistry;
@@ -24,6 +24,20 @@ pub(crate) struct RoundOutcome {
     pub(crate) assistant_already_persisted: bool,
 }
 
+pub(crate) struct RoundContext<'a> {
+    pub(crate) client: &'a gemini_acp_config::client::Client,
+    pub(crate) cx: &'a ConnectionTo<Client>,
+    pub(crate) session_id: &'a SessionId,
+    pub(crate) sid: &'a str,
+    pub(crate) message_id: &'a MessageId,
+    pub(crate) cancel: &'a mut watch::Receiver<bool>,
+    pub(crate) session: &'a mut Session,
+    pub(crate) registry: &'a ToolRegistry,
+    pub(crate) semantic: &'a mut TurnEventEmitter,
+    pub(crate) refs: &'a [String],
+    pub(crate) span: &'a tracing::Span,
+}
+
 fn map_stop_reason_from_error(error: &str) -> StopReason {
     let lower = error.to_lowercase();
     if lower.contains("safety") || lower.contains("block") {
@@ -34,21 +48,8 @@ fn map_stop_reason_from_error(error: &str) -> StopReason {
 }
 
 pub(crate) async fn run(
-    client: &gemini_acp_config::client::Client,
-    cx: &ConnectionTo<Client>,
-    session_id: &SessionId,
-    sid: &str,
-    message_id: &MessageId,
-    cancel: &mut watch::Receiver<bool>,
-    session: &mut Session,
-    registry: &ToolRegistry,
-    semantic: &mut TurnEventEmitter,
-    refs: &[String],
-    cwd: &std::path::Path,
-    additional_dirs: &[std::path::PathBuf],
-    mode_getter: &(dyn Fn() -> SessionMode + Send + Sync),
+    ctx: &mut RoundContext<'_>,
     max_turns: usize,
-    span: &tracing::Span,
 ) -> Result<RoundOutcome, RoundError> {
     let mut total_output = String::new();
     let mut tool_round = 0usize;
@@ -58,20 +59,21 @@ pub(crate) async fn run(
     for round in 0..max_turns {
         tool_round = round;
 
-        if *cancel.borrow() {
-            semantic.turn_cancelled();
-            span.record("outcome", "cancelled");
+        if *ctx.cancel.borrow() {
+            ctx.semantic.turn_cancelled();
+            ctx.span.record("outcome", "cancelled");
             return Err(RoundError::Stop(StopReason::Cancelled));
         }
 
-        let history_chars: usize = session.messages.iter().map(|(_, text)| text.len()).sum();
+        let history_chars: usize = ctx.session.messages.iter().map(|(_, text)| text.len()).sum();
         if history_chars > COMPACTION_THRESHOLD_CHARS {
-            compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS);
+            compact_messages(&mut ctx.session.messages, EMERGENCY_COMPACTION_CHARS);
         }
 
-        let prompt = crate::prompt::build::build_prompt(session, Some(registry));
-        let rx = match client
-            .stream(&prompt, &session.model, session.think, refs)
+        let prompt = crate::prompt::build::build_prompt(ctx.session, Some(ctx.registry));
+        let rx = match ctx
+            .client
+            .stream(&prompt, &ctx.session.model, ctx.session.think, ctx.refs)
             .await
         {
             Ok(rx) => rx,
@@ -82,34 +84,32 @@ pub(crate) async fn run(
                     || error.to_string().contains("tokens");
 
                 if is_overflow && overflow_retry_count < 1 {
-                    compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS);
+                    compact_messages(&mut ctx.session.messages, EMERGENCY_COMPACTION_CHARS);
                     overflow_retry_count += 1;
                     continue;
                 }
 
                 if is_overflow {
                     emit_error_chunk(
-                        cx,
-                        session_id,
-                        message_id,
-                        &format!(
-                            "Context overflow persisted after emergency compaction: {error:#}"
-                        ),
+                        ctx.cx,
+                        ctx.session_id,
+                        ctx.message_id,
+                        &format!("Context overflow persisted after emergency compaction: {error:#}"),
                     );
-                    semantic.turn_failed();
-                    span.record("outcome", "refusal_start");
+                    ctx.semantic.turn_failed();
+                    ctx.span.record("outcome", "refusal_start");
                     return Err(RoundError::Stop(StopReason::MaxTokens));
                 }
 
-                emit_error_chunk(cx, session_id, message_id, &note);
-                semantic.turn_failed();
-                span.record("outcome", "failed_start");
+                emit_error_chunk(ctx.cx, ctx.session_id, ctx.message_id, &note);
+                ctx.semantic.turn_failed();
+                ctx.span.record("outcome", "failed_start");
                 return Err(RoundError::Stop(StopReason::EndTurn));
             }
         };
 
         let is_thinking_model = gemini_acp_config::core::models::resolve(
-            &session.model,
+            &ctx.session.model,
             gemini_acp_config::core::models::DEFAULT_MODEL,
         )
         .map(|resolved| gemini_acp_config::core::models::is_thinking_mode(resolved.mode))
@@ -117,12 +117,12 @@ pub(crate) async fn run(
 
         let streamed = stream::consume(
             rx,
-            cancel,
-            cx,
-            session_id,
-            message_id,
+            ctx.cancel,
+            ctx.cx,
+            ctx.session_id,
+            ctx.message_id,
             is_thinking_model,
-            semantic,
+            ctx.semantic,
         )
         .await
         .map_err(RoundError::Acp)?;
@@ -133,26 +133,26 @@ pub(crate) async fn run(
         } = streamed;
 
         if matches!(outcome, stream::StreamOutcome::Cancelled) {
-            semantic.turn_cancelled();
-            span.record("outcome", "cancelled");
+            ctx.semantic.turn_cancelled();
+            ctx.span.record("outcome", "cancelled");
             return Err(RoundError::Stop(StopReason::Cancelled));
         }
 
         if let stream::StreamOutcome::Failed(error) = &outcome {
-            semantic.turn_failed();
-            span.record("outcome", "failed");
+            ctx.semantic.turn_failed();
+            ctx.span.record("outcome", "failed");
             return Err(RoundError::Stop(map_stop_reason_from_error(error)));
         }
 
         let clean_text = replace_components(&assistant);
         let (_, tool_calls) = parse_tool_calls(&tool_detection_text);
-        if tool_calls.is_empty() || !session.tools_enabled || !registry.has_tools() {
+        if tool_calls.is_empty() || !ctx.session.tools_enabled || !ctx.registry.has_tools() {
             total_output = clean_text;
             break;
         }
 
         tracing::info!(
-            session = %session_id,
+            session = %ctx.session_id,
             round,
             tool_count = tool_calls.len(),
             "tool calls détectés — exécution via ToolExecutor"
@@ -168,23 +168,27 @@ pub(crate) async fn run(
         } else {
             format!("{clean_text}\n{tool_blocks}")
         };
-        session.messages.push((Role::Assistant, assistant_history));
-        clear_partial_output(sid);
+        ctx.session
+            .messages
+            .push((Role::Assistant, assistant_history));
+        clear_partial_output(ctx.sid);
 
+        let session_mode = ctx.session.mode;
+        let mode_getter = || session_mode;
         let executor = ToolExecutor::new(
-            cx,
-            session_id,
-            registry,
-            cwd,
-            additional_dirs,
-            mode_getter,
+            ctx.cx,
+            ctx.session_id,
+            ctx.registry,
+            &ctx.session.cwd,
+            &ctx.session.additional_directories,
+            &mode_getter,
         );
         let mut follow_up_seen = false;
         let mut follow_up_selected = None;
 
         for call in &tool_calls {
-            if *cancel.borrow() {
-                semantic.turn_cancelled();
+            if *ctx.cancel.borrow() {
+                ctx.semantic.turn_cancelled();
                 return Err(RoundError::Stop(StopReason::Cancelled));
             }
 
@@ -203,12 +207,12 @@ pub(crate) async fn run(
                     .unwrap_or("")
                     .trim();
                 if !label.is_empty() && !query.is_empty() {
-                    match request_action(cx, session_id, label, query).await {
+                    match request_action(ctx.cx, ctx.session_id, label, query).await {
                         Ok(selected) => follow_up_selected = selected,
                         Err(error) => emit_error_chunk(
-                            cx,
-                            session_id,
-                            message_id,
+                            ctx.cx,
+                            ctx.session_id,
+                            ctx.message_id,
                             &format!("FollowUp interaction failed: {error}"),
                         ),
                     }
@@ -221,10 +225,10 @@ pub(crate) async fn run(
                     call.id.clone().into(),
                     &call.name,
                     &call.arguments,
-                    semantic,
+                    ctx.semantic,
                 )
                 .await;
-            session.messages.push((
+            ctx.session.messages.push((
                 Role::Tool,
                 gemini_acp_runtime::tools::prompt::format_tool_result(
                     &call.name,
@@ -235,7 +239,7 @@ pub(crate) async fn run(
 
         if follow_up_seen {
             if let Some(query) = follow_up_selected {
-                session.messages.push((Role::User, query));
+                ctx.session.messages.push((Role::User, query));
                 total_output.clear();
                 continue;
             }
