@@ -15,7 +15,6 @@ use super::{protocol_filter::ProtocolFilter, tool_stream::ToolStreamDetector};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContractViolation {
     ProtocolLeakedToAssistant,
-    DuplicateToolCallId(String),
     EmptyToolCallId,
     EmptyToolName,
 }
@@ -25,9 +24,6 @@ impl std::fmt::Display for ContractViolation {
         match self {
             Self::ProtocolLeakedToAssistant => {
                 f.write_str("protocol syntax escaped the ACP presentation filter")
-            }
-            Self::DuplicateToolCallId(id) => {
-                write!(f, "duplicate tool call id: {id}")
             }
             Self::EmptyToolCallId => f.write_str("tool call has an empty id"),
             Self::EmptyToolName => f.write_str("tool call has an empty name"),
@@ -177,13 +173,29 @@ mod tests {
 
     #[test]
     fn arbitrary_chunk_boundaries_do_not_change_result() {
-        let full = "[Assistant]: Début\n```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```\n[Tool result]: {\"content\":\"x\"}\n[Assistant]: Fin";
+        let full = "[Assistant]: Debut\n```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```\n[Tool result]: {\"content\":\"x\"}\n[Assistant]: Fin";
         let reference = collect(&[full]);
         for split in 1..full.len() {
             let (left, right) = full.split_at(split);
             let actual = collect(&[left, right]);
             assert_eq!(actual.visible, reference.visible, "split at {split}");
             assert_eq!(actual.tool_calls, reference.tool_calls, "split at {split}");
+        }
+    }
+
+    #[test]
+    fn arbitrary_multibyte_boundaries_are_supported() {
+        let full = "[Assistant]: Début\n[Assistant]: Réponse";
+        let reference = collect(&[full]);
+        let boundaries = full
+            .char_indices()
+            .skip(1)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        for split in boundaries {
+            let (left, right) = full.split_at(split);
+            let actual = collect(&[left, right]);
+            assert_eq!(actual.visible, reference.visible, "split at {split}");
         }
     }
 
