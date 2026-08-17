@@ -7,11 +7,12 @@
 use gemini_acp_runtime::tools::parse::{parse_tool_calls, ParsedToolCall};
 use serde_json::Value;
 
-use super::protocol::{
-    FUNCTION_CALL_FENCE, FOLLOW_UP_PREFIX, TOOL_CALL_FENCE, TOOL_CALL_SINGLE_QUOTE_FENCE,
-    TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX,
-};
-
+const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
+const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
+const TOOL_CALL_FENCE: &str = "```tool_call";
+const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
+const FUNCTION_CALL_FENCE: &str = "```function_call";
+const FOLLOW_UP_PREFIX: &str = "<FollowUp";
 const MAX_LINE: usize = 256 * 1024;
 const MAX_FOLLOW_UP: usize = 64 * 1024;
 const MAX_TOOL_BLOCK: usize = 256 * 1024;
@@ -276,7 +277,7 @@ fn parse_bare_json(text: &str) -> Option<ParsedToolCall> {
     }
 
     let (_, mut calls) = parse_tool_calls(text);
-    let mut call = calls.pop()?;
+    let call = calls.pop()?;
     if call.name != name {
         return None;
     }
