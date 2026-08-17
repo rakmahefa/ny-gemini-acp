@@ -44,7 +44,7 @@ pub(crate) struct ToolStreamDetector {
     mode: Mode,
     line_start: bool,
     line_probe: String,
-    follow_up: Option<(String, bool)>,
+    follow_up: Option<(String, Option<char>)>,
     bare_json: Option<String>,
     plain_prefix_only: bool,
 }
@@ -73,9 +73,7 @@ impl ToolStreamDetector {
 
     pub(crate) fn finish(&mut self) -> Vec<ParsedToolCall> {
         let mut calls = self.process("", true);
-        if self.follow_up.is_some() {
-            self.follow_up = None;
-        }
+        self.follow_up = None;
         if let Some(candidate) = self.bare_json.take() {
             calls.extend(parse_tool_calls(&candidate).1);
         }
@@ -122,10 +120,11 @@ impl ToolStreamDetector {
                         if close_probe == closing {
                             let body = std::mem::take(body);
                             let kind = *kind;
+                            let was_oversized = *oversized;
                             self.mode = Mode::Normal;
                             self.line_start = true;
                             close_probe.clear();
-                            if !*oversized {
+                            if !was_oversized {
                                 calls.extend(parse_block(kind, &body));
                             }
                             return;
@@ -171,7 +170,7 @@ impl ToolStreamDetector {
                         close_probe: String::new(),
                         oversized: false,
                     },
-                    Opening::Marker(_) => Mode::Normal,
+                    Opening::Marker => Mode::Normal,
                 };
                 if matches!(self.mode, Mode::Block { .. } | Mode::IgnoreLine) {
                     return;
@@ -227,7 +226,28 @@ impl ToolStreamDetector {
         }
 
         if ch == '<' {
-            self.follow_up = Some(("<".to_owned(), false));
+            self.follow_up = Some(("<".to_owned(), None));
+            return;
+        }
+
+        if let Some(candidate) = &mut self.bare_json {
+            candidate.push(ch);
+            if candidate.len() > MAX_BARE_JSON {
+                self.bare_json = None;
+                return;
+            }
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(candidate) {
+                let candidate = std::mem::take(candidate);
+                if value
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+                    && (value.get("arguments").is_some() || value.get("args").is_some())
+                {
+                    calls.extend(parse_tool_calls(&candidate).1);
+                }
+                self.plain_prefix_only = false;
+            }
             return;
         }
 
@@ -240,38 +260,11 @@ impl ToolStreamDetector {
                 return;
             }
             self.plain_prefix_only = false;
-            return;
-        }
-
-        if let Some(candidate) = &mut self.bare_json {
-            candidate.push(ch);
-            if candidate.len() > MAX_BARE_JSON {
-                self.bare_json = None;
-                return;
-            }
-            if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-                let candidate = std::mem::take(candidate);
-                let value = serde_json::from_str::<serde_json::Value>(&candidate).ok();
-                if value
-                    .as_ref()
-                    .and_then(|v| v.get("name").and_then(serde_json::Value::as_str))
-                    .is_some()
-                    && value
-                        .as_ref()
-                        .is_some_and(|v| v.get("arguments").is_some() || v.get("args").is_some())
-                {
-                    calls.extend(parse_tool_calls(&candidate).1);
-                }
-                self.plain_prefix_only = false;
-            }
         }
     }
 
     fn finish_block_if_complete(&mut self) -> Vec<ParsedToolCall> {
-        match &self.mode {
-            Mode::Block { .. } => Vec::new(),
-            _ => Vec::new(),
-        }
+        Vec::new()
     }
 }
 
@@ -279,7 +272,7 @@ impl ToolStreamDetector {
 enum Opening {
     IgnoreLine,
     Block(BlockKind),
-    Marker(&'static str),
+    Marker,
 }
 
 fn complete_opening(probe: &str) -> Option<Opening> {
@@ -288,8 +281,7 @@ fn complete_opening(probe: &str) -> Option<Opening> {
         TOOL_CALL_FENCE => Some(Opening::Block(BlockKind::ToolCall)),
         TOOL_CALL_SINGLE_QUOTE_FENCE => Some(Opening::Block(BlockKind::ToolCallSingleQuote)),
         FUNCTION_CALL_FENCE => Some(Opening::Block(BlockKind::FunctionCall)),
-        ASSISTANT_MARKER => Some(Opening::Marker(ASSISTANT_MARKER)),
-        USER_MARKER => Some(Opening::Marker(USER_MARKER)),
+        ASSISTANT_MARKER | USER_MARKER => Some(Opening::Marker),
         _ => None,
     }
 }
@@ -371,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_follow_up_without_buffering_the_whole_response() {
+    fn detects_follow_up_incrementally() {
         let calls = collect(&[
             "Réponse visible\n<FollowUp label=\"Tests\" ",
             "query=\"cargo test\" />",
@@ -381,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn detects_bare_json_tool_call_only_at_stream_prefix() {
+    fn detects_bare_json_tool_call_at_stream_prefix() {
         let calls = collect(&[
             "{\"name\":\"shell_exec\",\"arguments\":{\"command\":\"pwd\"}}",
         ]);
