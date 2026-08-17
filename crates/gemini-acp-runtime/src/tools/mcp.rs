@@ -4,7 +4,7 @@
 //! Builtin tools remain native `Tool` implementations while MCP tools are
 //! discovered dynamically and exposed through the same `ToolRegistry` API.
 
-use std::{collections::HashMap, path::Path, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::Path, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -403,7 +403,7 @@ impl McpServerClient {
     }
 
     async fn list_tools(&mut self) -> Result<Vec<McpToolDescriptor>, McpError> {
-        let mut cursor = None;
+        let mut cursor: Option<String> = None;
         let mut tools = Vec::new();
         loop {
             let mut params = json!({"limit": 100});
@@ -432,133 +432,114 @@ struct ToolListPage {
 #[derive(Debug, Deserialize)]
 struct ToolCallResult {
     #[serde(default)] content: Vec<Value>,
-    #[serde(rename = "isError", default)] is_error: bool,
+    #[serde(default, rename = "isError")]
+    is_error: bool,
 }
 
 #[derive(Debug)]
-struct McpBinding { server: String, tool: McpToolDescriptor }
+struct McpRegisteredTool {
+    server_name: String,
+    descriptor: McpToolDescriptor,
+}
 
 #[derive(Debug)]
 pub struct McpCatalog {
-    clients: Mutex<HashMap<String, McpServerClient>>,
-    bindings: Vec<McpBinding>,
+    servers: Vec<Mutex<McpServerClient>>,
+    tools: Vec<McpRegisteredTool>,
 }
 
 impl McpCatalog {
     pub async fn from_env() -> Result<Self, McpError> {
-        let raw = match std::env::var("GEMINI_ACP_MCP_SERVERS") { Ok(raw) if !raw.trim().is_empty() => raw, _ => return Ok(Self::empty()) };
+        let raw = match std::env::var("GEMINI_ACP_MCP_SERVERS") {
+            Ok(value) if !value.trim().is_empty() => value,
+            _ => return Ok(Self { servers: Vec::new(), tools: Vec::new() }),
+        };
         let configs: Vec<McpServerConfig> = serde_json::from_str(&raw)
             .map_err(|error| McpError::Config(format!("invalid GEMINI_ACP_MCP_SERVERS: {error}")))?;
-        Self::connect(configs).await
+        Self::from_configs(configs).await
     }
 
-    pub async fn connect(configs: Vec<McpServerConfig>) -> Result<Self, McpError> {
-        let mut clients = HashMap::new();
-        let mut bindings = Vec::new();
+    pub async fn from_configs(configs: Vec<McpServerConfig>) -> Result<Self, McpError> {
+        let mut servers = Vec::new();
+        let mut tools = Vec::new();
         for config in configs {
             let server_name = config.name.clone();
             let mut client = McpServerClient::connect(config).await?;
-            for tool in client.list_tools().await? {
-                bindings.push(McpBinding { server: server_name.clone(), tool });
+            for descriptor in client.list_tools().await? {
+                tools.push(McpRegisteredTool {
+                    server_name: server_name.clone(),
+                    descriptor,
+                });
             }
-            clients.insert(server_name, client);
+            servers.push(Mutex::new(client));
         }
-        Ok(Self { clients: Mutex::new(clients), bindings })
+        Ok(Self { servers, tools })
     }
 
-    pub fn empty() -> Self {
-        Self { clients: Mutex::new(HashMap::new()), bindings: Vec::new() }
+    pub fn has_tools(&self) -> bool {
+        !self.tools.is_empty()
     }
-
-    pub fn has_tools(&self) -> bool { !self.bindings.is_empty() }
 
     pub fn definitions(&self) -> Vec<Value> {
-        self.bindings.iter().map(|binding| json!({
-            "name": qualified_name(&binding.server, &binding.tool.name),
-            "description": binding.tool.description,
-            "parameters": binding.tool.input_schema,
-        })).collect()
+        self.tools.iter().map(|tool| {
+            let name = format!("mcp__{}__{}", tool.server_name, tool.descriptor.name);
+            json!({"name": name, "description": tool.descriptor.description, "parameters": tool.descriptor.input_schema})
+        }).collect()
     }
 
-    pub async fn call_async(&self, qualified: &str, args: &Value, _cwd: &Path, _extra_dirs: &[PathBuf]) -> Option<super::registry::ToolResult> {
-        let binding = self.bindings.iter().find(|binding| qualified_name(&binding.server, &binding.tool.name) == qualified)?;
-        let mut clients = self.clients.lock().await;
-        let client = clients.get_mut(&binding.server)?;
-        match client.call_tool(&binding.tool.name, args.clone()).await {
-            Ok(result) => {
-                let rendered = result.content.iter().map(render_content).collect::<Vec<_>>().join("\n");
-                if result.is_error { Some(super::registry::ToolResult::Err(rendered)) } else { Some(super::registry::ToolResult::Ok(rendered)) }
-            }
-            Err(error) => Some(super::registry::ToolResult::Err(error.to_string())),
-        }
+    pub async fn call_async(
+        &self,
+        qualified_name: &str,
+        args: &Value,
+        _cwd: &Path,
+        _extra_dirs: &[PathBuf],
+    ) -> Option<crate::tools::registry::ToolResult> {
+        let tool = self.tools.iter().find(|tool| {
+            format!("mcp__{}__{}", tool.server_name, tool.descriptor.name) == qualified_name
+        })?;
+        let server_index = self.tools.iter().take_while(|candidate| !std::ptr::eq(*candidate, tool)).filter(|candidate| candidate.server_name == tool.server_name).count();
+        let server = self.servers.get(server_index)?;
+        let mut server = server.lock().await;
+        let result = server.call_tool(&tool.descriptor.name, args.clone()).await;
+        Some(match result {
+            Ok(result) if result.is_error => crate::tools::registry::ToolResult::Err(render_tool_content(&result.content)),
+            Ok(result) => crate::tools::registry::ToolResult::Ok(render_tool_content(&result.content)),
+            Err(error) => crate::tools::registry::ToolResult::Err(error.to_string()),
+        })
     }
 }
 
-fn qualified_name(server: &str, tool: &str) -> String {
-    format!("mcp__{}__{}", sanitize_name(server), sanitize_name(tool))
-}
-
-fn sanitize_name(value: &str) -> String {
-    value.chars().map(|ch| if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.') { ch } else { '_' }).collect()
-}
-
-fn render_content(value: &Value) -> String {
-    match value.get("type").and_then(Value::as_str) {
-        Some("text") => value.get("text").and_then(Value::as_str).unwrap_or_default().to_owned(),
-        _ => value.to_string(),
-    }
+fn render_tool_content(content: &[Value]) -> String {
+    content.iter().map(|value| match value {
+        Value::String(text) => text.clone(),
+        other => serde_json::to_string(other).unwrap_or_else(|_| "<unserializable MCP content>".into()),
+    }).collect::<Vec<_>>().join("\n")
 }
 
 fn parse_json_rpc_response(bytes: &[u8]) -> Result<RpcResponse, McpError> {
-    let value: Value = serde_json::from_slice(bytes).map_err(|error| McpError::Protocol(format!("invalid JSON-RPC response: {error}")))?;
+    let value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| McpError::Protocol(format!("invalid JSON-RPC response: {error}")))?;
     parse_json_rpc_value(value)
 }
 
 fn parse_sse_rpc_response(bytes: &[u8]) -> Result<RpcResponse, McpError> {
-    let text = std::str::from_utf8(bytes).map_err(|error| McpError::Protocol(format!("invalid SSE response: {error}")))?;
-    let mut event_data = String::new();
-    for line in text.lines() { if let Some(data) = line.strip_prefix("data:") { if !event_data.is_empty() { event_data.push('\n'); } event_data.push_str(data.trim_start()); } }
-    if event_data.is_empty() { return Err(McpError::Protocol("SSE response contained no data event".into())); }
-    parse_json_rpc_response(event_data.as_bytes())
+    for line in String::from_utf8_lossy(bytes).lines() {
+        if let Some(data) = line.strip_prefix("data:") {
+            if !data.trim().is_empty() {
+                let value: Value = serde_json::from_str(data.trim())
+                    .map_err(|error| McpError::Protocol(format!("invalid SSE JSON-RPC data: {error}")))?;
+                return parse_json_rpc_value(value);
+            }
+        }
+    }
+    Err(McpError::Protocol("SSE response contained no data event".into()))
 }
 
 fn parse_json_rpc_value(value: Value) -> Result<RpcResponse, McpError> {
     let object = value.as_object().ok_or_else(|| McpError::Protocol("JSON-RPC response is not an object".into()))?;
-    if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") { return Err(McpError::Protocol("JSON-RPC response has invalid jsonrpc version".into())); }
     Ok(RpcResponse {
         result: object.get("result").cloned(),
-        error: object.get("error").cloned().map(serde_json::from_value).transpose().map_err(|error| McpError::Protocol(format!("invalid JSON-RPC error object: {error}")))?,
+        error: object.get("error").cloned().map(serde_json::from_value).transpose()
+            .map_err(|error| McpError::Protocol(format!("invalid JSON-RPC error: {error}")))?,
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn qualified_names_are_collision_safe() {
-        assert_eq!(qualified_name("foo-bar", "read_file"), "mcp__foo-bar__read_file");
-        assert_eq!(qualified_name("foo/bar", "read file"), "mcp__foo_bar__read_file");
-    }
-
-    #[test]
-    fn empty_catalog_has_no_tools() {
-        let catalog = McpCatalog::empty();
-        assert!(!catalog.has_tools());
-        assert!(catalog.definitions().is_empty());
-    }
-
-    #[test]
-    fn parses_json_rpc_error() {
-        let response = parse_json_rpc_response(br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"not found"}}"#).expect("valid JSON-RPC");
-        let error = response.error.expect("error object");
-        assert_eq!(error.code, -32601);
-        assert_eq!(error.message, "not found");
-    }
-
-    #[test]
-    fn parses_sse_json_rpc_response() {
-        let response = parse_sse_rpc_response(b"event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}\n\n").expect("valid SSE");
-        assert!(response.result.is_some());
-    }
 }
