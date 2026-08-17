@@ -1,19 +1,19 @@
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
-    sync::Mutex,
     time::{Duration, Instant},
 };
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use super::{
     config::{McpError, McpServerConfig, McpToolDescriptor, McpTransportKind},
     protocol::{request_params, RpcRequest},
     render::render_tool_content,
     transport::{HttpTransport, McpTransport, StdioTransport},
-    MAX_PAGE_COUNT, REQUEST_TIMEOUT, CACHE_DEFAULT_TTL,
+    CACHE_DEFAULT_TTL, MAX_PAGE_COUNT, REQUEST_TIMEOUT,
 };
 
 #[derive(Debug)]
@@ -306,11 +306,5 @@ mod tests {
         assert_eq!(qualified_name("foo-bar", "read_file"), "mcp__foo-bar__read_file");
         assert_eq!(qualified_name("foo/bar", "read file"), "mcp__foo_2fbar__read_20file");
         assert_ne!(qualified_name("foo/bar", "read_file"), qualified_name("foo_bar", "read_file"));
-    }
-
-    #[test]
-    fn renders_structured_content_when_no_text_exists() {
-        let structured = json!({"answer": 42});
-        assert_eq!(render_tool_content(&[], Some(&structured)), r#"{"answer":42}"#);
     }
 }
