@@ -54,12 +54,11 @@ impl AgentRuntime {
             .await
             .context("initialisation du SettingsManager")?;
         let mut tools = ToolRegistry::builtin();
-        tools.register(Box::new(crate::tools::interactive::AskUserQuestionTool));
 
-        if let Some(mcp) = McpCatalog::from_env()
+        let mcp = McpCatalog::from_env()
             .await
-            .context("initialisation des serveurs MCP")?
-        {
+            .context("initialisation des serveurs MCP")?;
+        if mcp.has_tools() {
             tracing::info!(tools = mcp.definitions().len(), "MCP infrastructure initialized");
             tools.register_mcp(Arc::new(mcp));
         }
