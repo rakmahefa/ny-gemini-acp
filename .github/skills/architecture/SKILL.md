@@ -31,38 +31,39 @@ Gemini / external sources
         |
         v
 +-------------------------+
-| Semantic Interpretation  |
-| - thought lifecycle      |
-| - tool-call detection    |
-| - stream contract        |
+| Semantic Interpretation |
+| - thought lifecycle     |
+| - tool-call detection   |
+| - stream contract       |
 +-------------------------+
         |
         v
 +-------------------------+
-| Runtime / Tool Services  |
-| - execution              |
-| - catalog                |
-| - MCP lifecycle          |
+| Runtime / Tool Services |
+| - execution             |
+| - catalog               |
+| - MCP lifecycle         |
 +-------------------------+
         |
         v
 +-------------------------+
-| ACP Presentation         |
-| - events                 |
-| - notifications          |
-| - errors                 |
+| ACP Presentation        |
+| - events                |
+| - notifications         |
+| - errors                |
 +-------------------------+
 ```
 
-The dependency rule is directional:
+The preferred dependency direction is:
 
 ```text
-presentation -> semantic -> acquisition
-runtime services <-> semantic contracts
-configuration -> all layers through explicit APIs
+ACP presentation -> semantic interfaces -> acquisition
+semantic interfaces -> runtime interfaces
+runtime implementation -> concrete execution/services
+configuration -> consumers through explicit typed APIs
 ```
 
-A lower layer must not import a higher-level presentation concern merely to simplify implementation.
+`semantic` must not depend on ACP wire serialization merely to simplify implementation. Runtime code must not import presentation details. If a feature appears to need bidirectional dependencies, introduce an explicit interface/port or reassess ownership instead of creating a crate cycle.
 
 ## Workspace Boundaries
 
@@ -147,6 +148,8 @@ Current contract responsibilities:
 - re-key duplicate stream-local tool-call IDs;
 - reject protocol syntax that escapes the presentation barrier.
 
+The **current duplicate-ID policy is deterministic re-keying**. Changing that policy to rejection is a semantic contract change and requires explicit lifecycle tests and architecture review.
+
 A new stream consumer should not independently interpret the same raw stream without an explicit contract review.
 
 ### `stream.rs`
@@ -171,40 +174,70 @@ The architectural direction for future stream work is a unified semantic event m
 Conceptually:
 
 ```text
-StreamEvent::ThinkingStarted
-StreamEvent::ThinkingDelta(text)
-StreamEvent::ThinkingCompleted
-StreamEvent::AssistantStarted
-StreamEvent::AssistantDelta(text)
-StreamEvent::ToolCall(call)
-StreamEvent::ToolResult(result)
-StreamEvent::AssistantCompleted
-StreamEvent::Cancelled
-StreamEvent::Failed(error)
+TurnStarted
+ThinkingStarted
+ThinkingDelta(text)
+ThinkingCompleted
+AssistantStarted
+AssistantDelta(text)
+ToolCall(call)
+ToolResult(result)
+AssistantCompleted
+TurnCompleted
+Cancelled
+Failed(error)
 ```
 
 This model is intentionally independent from ACP wire types.
 
 The semantic layer should answer **what happened**. The presentation layer should answer **how ACP represents it**.
 
-### Event invariants
+### Event lifecycle
 
-For a normal successful turn:
+A normal tool-assisted turn conceptually follows:
 
 ```text
-AssistantStarted
-  -> zero or more Thinking events
-  -> zero or more AssistantDelta events
-  -> zero or more ToolCall events
-  -> optional tool result lifecycle
-  -> AssistantCompleted
+TurnStarted
+   |
+   +--> ThinkingStarted -> ThinkingDelta* -> ThinkingCompleted
+   |
+   +--> AssistantStarted -> AssistantDelta*
+   |
+   +--> ToolCall
+   |       |
+   |       v
+   |   ToolExecution
+   |       |
+   |       v
+   |   ToolResult
+   |
+   +--> AssistantDelta*   (continuation)
+   |
+   v
+AssistantCompleted
+   |
+   v
+TurnCompleted
 ```
 
-Thinking must not remain active after response completion.
+Terminal alternatives are:
 
-A cancellation must not emit a normal assistant completion.
+```text
+active turn -> Cancelled
+active turn -> Failed(error)
+```
 
-A failed stream must expose an actionable error without inventing successful completion semantics.
+Lifecycle rules:
+
+- `TurnStarted` occurs before turn-scoped semantic output;
+- `AssistantStarted` occurs before assistant deltas;
+- `ThinkingCompleted` must precede the first response continuation when thinking is active;
+- tool execution must be represented as a semantic/runtime transition, not as filtered assistant text;
+- cancellation must not be followed by normal successful completion;
+- failure must not fabricate successful completion;
+- no lifecycle state may remain logically active after a terminal turn outcome.
+
+This is the target semantic model. Existing code may still have adapters or intermediate representations while this convergence is implemented incrementally.
 
 ## Tool Architecture
 
@@ -270,7 +303,8 @@ result rendering
 - result rendering does not execute tools;
 - protocol helpers do not contain business policy;
 - mutable client state must have explicit synchronization semantics;
-- asynchronous server/client state should prefer Tokio-aware synchronization where blocking mutexes would cross await points.
+- asynchronous server/client state should prefer Tokio-aware synchronization where blocking mutexes would cross await points;
+- consumers outside the MCP subsystem should use the thin public/module façade rather than reaching into internal MCP implementation modules directly.
 
 A module facade may re-export the public surface, but the facade should remain thin.
 
@@ -399,7 +433,7 @@ Examples:
 - malformed tool-call identity -> reject the semantic call;
 - protocol marker escapes the filter -> report a stream integrity failure;
 - incomplete internal tool envelope at EOF -> keep it hidden;
-- duplicate call ID -> deterministic re-key or reject according to the contract;
+- duplicate call ID -> current policy is deterministic re-keying;
 - impossible lifecycle transition -> fail the semantic contract.
 
 Do not silently convert malformed protocol into ordinary assistant prose.
@@ -482,7 +516,7 @@ Avoid:
 - repeatedly cloning the full accumulated stream;
 - quadratic string concatenation in hot loops when buffers can be reused;
 - parsing the same payload multiple times without justification;
-- blocking mutexes across async work;
+- blocking mutexes across `.await`;
 - unnecessary serialization/deserialization cycles.
 
 Do not sacrifice semantic correctness for micro-optimizations in protocol handling.
@@ -591,13 +625,15 @@ An architectural change is complete only when all applicable conditions are true
 
 - ownership is clear;
 - module boundaries are coherent;
+- dependency direction remains acyclic and justified;
+- new inter-crate dependencies have an explicit ownership rationale;
 - no duplicated protocol constants exist;
 - public APIs expose semantic concepts;
 - stream behavior is chunk-boundary invariant;
 - EOF behavior is tested;
 - cancellation behavior is tested where applicable;
 - malformed input fails closed;
-- duplicate tool identities are handled deterministically;
+- duplicate tool identities are handled deterministically according to the current contract;
 - ACP-visible output cannot contain internal protocol syntax accidentally;
 - runtime execution remains independent from text filtering;
 - tests cover the invariant, not only the happy path;
@@ -613,6 +649,7 @@ Before approving a change, ask:
 - Which layer owns this behavior?
 - Is the code living with its semantic owner?
 - Does the change introduce an upward dependency?
+- If a cross-layer dependency is necessary, is it expressed through a narrow semantic interface?
 
 ### Streaming
 
@@ -627,6 +664,7 @@ Before approving a change, ask:
 - Can a state remain active after completion?
 - What happens on cancellation?
 - What happens on failure?
+- Does the terminal state prevent later successful completion events?
 
 ### Tools
 
@@ -646,6 +684,7 @@ Before approving a change, ask:
 - Is transport separated from client/discovery policy?
 - Is synchronization async-safe?
 - Is rendering separate from execution?
+- Are external consumers using the public façade rather than internal modules?
 
 ### Testing
 
@@ -660,14 +699,16 @@ When an agent receives an architecture-sensitive task:
 
 1. **Map the repository** — inspect workspace members, owning crate, relevant modules, and recent commits.
 2. **Identify invariants** — write down current stream, protocol, lifecycle, and identity guarantees before editing.
-3. **Choose the smallest correct boundary** — do not refactor unrelated code.
-4. **Add or strengthen tests first when behavior is ambiguous.**
-5. **Implement one semantic responsibility per module.**
-6. **Keep orchestration thin.**
-7. **Run formatting, compile checks, unit tests, and integration/contract tests relevant to the changed layer.**
-8. **Review the diff for accidental protocol behavior changes.**
-9. **Document any new architectural invariant.**
-10. **Commit with a message describing the architectural intent.**
+3. **Classify the change** — Type A/B/C/D/E before choosing the implementation boundary.
+4. **Choose the smallest correct boundary** — do not refactor unrelated code.
+5. **Add or strengthen tests first when behavior is ambiguous.**
+6. **Implement one semantic responsibility per module.**
+7. **Keep orchestration thin.**
+8. **Review dependency direction** after any module/crate move.
+9. **Run formatting, compile checks, unit tests, and integration/contract tests relevant to the changed layer.**
+10. **Review the diff for accidental protocol behavior changes.**
+11. **Document any new architectural invariant.**
+12. **Commit with a message describing the architectural intent.**
 
 ## Preferred Evolution Path
 
@@ -708,7 +749,8 @@ Do not introduce:
 - hidden state transitions driven by logging side effects;
 - blocking locks across `.await`;
 - tests that assert only one favorable chunk layout;
-- error recovery that forwards ambiguous protocol as assistant text.
+- error recovery that forwards ambiguous protocol as assistant text;
+- broad bidirectional crate dependencies when a semantic interface would suffice.
 
 ## Documentation Rule
 
