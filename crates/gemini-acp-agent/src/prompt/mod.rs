@@ -7,8 +7,10 @@
 //! - [`error`]             — messages d'erreur actionnables.
 //! - [`follow_up`]         — parsing et normalisation du composant Gemini `<FollowUp>`.
 //! - [`notify`]            — notifications ACP (chunks texte, usage tokens).
+//! - [`protocol`]          — vocabulaire partagé des enveloppes Gemini/ACP.
 //! - [`protocol_filter`]   — dernière barrière de présentation pour les enveloppes protocole.
 //! - [`stream`]            — consommation du flux Gemini et lifecycle sémantique.
+//! - [`stream_contract`]   — contrat unifié raw protocol → ACP presentation.
 //! - [`tool_stream`]       — détection incrémentale des protocoles d'appel outil.
 //! - [`title`]             — dérivation automatique du titre de session.
 //! - [`turn`]              — orchestration du tour complet.
@@ -18,8 +20,10 @@ pub mod content;
 pub mod error;
 pub mod follow_up;
 pub mod notify;
+mod protocol;
 mod protocol_filter;
 pub mod stream;
+mod stream_contract;
 mod tool_stream;
 pub mod title;
 pub mod turn;

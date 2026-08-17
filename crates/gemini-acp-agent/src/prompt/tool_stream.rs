@@ -277,7 +277,7 @@ fn parse_bare_json(text: &str) -> Option<ParsedToolCall> {
     }
 
     let (_, mut calls) = parse_tool_calls(text);
-    let mut call = calls.pop()?;
+    let call = calls.pop()?;
     if call.name != name {
         return None;
     }

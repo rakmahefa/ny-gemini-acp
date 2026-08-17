@@ -4,6 +4,7 @@
 //! coordinates the turn and consumes the normalized stream result.
 
 use std::fmt::Display;
+
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use tokio::sync::{mpsc, watch};
@@ -16,8 +17,7 @@ use super::{
     error::actionable_stream_error,
     follow_up::StreamNormalizer,
     notify::notify_text,
-    protocol_filter::ProtocolFilter,
-    tool_stream::ToolStreamDetector,
+    stream_contract::SemanticStreamContract,
 };
 
 pub enum StreamOutcome {
@@ -42,8 +42,7 @@ pub async fn consume<E: Display>(
     semantic: &mut TurnEventEmitter,
 ) -> Result<StreamResult, AcpError> {
     let mut thought_stream = crate::thought::ThoughtStream::new(is_thinking_model);
-    let mut protocol_filter = ProtocolFilter::new();
-    let mut tool_detector = ToolStreamDetector::new();
+    let mut stream_contract = SemanticStreamContract::new();
     let mut follow_up_stream = StreamNormalizer::default();
     let mut assistant = String::new();
     let mut tool_calls = Vec::new();
@@ -85,8 +84,7 @@ pub async fn consume<E: Display>(
                                 }
                                 tool_calls.extend(handle_response_chunk(
                                     &text,
-                                    &mut tool_detector,
-                                    &mut protocol_filter,
+                                    &mut stream_contract,
                                     &mut follow_up_stream,
                                     &mut assistant,
                                     semantic,
@@ -133,8 +131,7 @@ pub async fn consume<E: Display>(
                 }
                 tool_calls.extend(handle_response_chunk(
                     &text,
-                    &mut tool_detector,
-                    &mut protocol_filter,
+                    &mut stream_contract,
                     &mut follow_up_stream,
                     &mut assistant,
                     semantic,
@@ -150,12 +147,23 @@ pub async fn consume<E: Display>(
         semantic.thinking_completed();
     }
 
-    tool_calls.extend(tool_detector.finish());
-
-    let filtered_tail = protocol_filter.finish();
-    if !filtered_tail.is_empty() {
-        assistant.push_str(&filtered_tail);
-        let safe_message = follow_up_stream.push(&filtered_tail);
+    let final_delta = match stream_contract.finish() {
+        Ok(delta) => delta,
+        Err(error) => {
+            tracing::error!(%error, "semantic stream contract violated at EOF");
+            emit_error_chunk(
+                cx,
+                session_id,
+                message_id,
+                "Internal stream integrity failure: protocol output was rejected.",
+            );
+            Default::default()
+        }
+    };
+    tool_calls.extend(final_delta.tool_calls);
+    if !final_delta.visible.is_empty() {
+        assistant.push_str(&final_delta.visible);
+        let safe_message = follow_up_stream.push(&final_delta.visible);
         if !safe_message.is_empty() {
             semantic.assistant_delta(&safe_message);
             notify_text(cx, session_id, message_id, safe_message)?;
@@ -185,8 +193,7 @@ pub async fn consume<E: Display>(
 
 fn handle_response_chunk(
     text: &str,
-    tool_detector: &mut ToolStreamDetector,
-    protocol_filter: &mut ProtocolFilter,
+    stream_contract: &mut SemanticStreamContract,
     follow_up_stream: &mut StreamNormalizer,
     assistant: &mut String,
     semantic: &mut TurnEventEmitter,
@@ -194,15 +201,27 @@ fn handle_response_chunk(
     session_id: &SessionId,
     message_id: &MessageId,
 ) -> Result<Vec<ParsedToolCall>, AcpError> {
-    let tool_calls = tool_detector.feed(text);
-    let filtered = protocol_filter.push(text);
-    if !filtered.is_empty() {
-        assistant.push_str(&filtered);
-        let safe_message = follow_up_stream.push(&filtered);
+    let delta = match stream_contract.feed(text) {
+        Ok(delta) => delta,
+        Err(error) => {
+            tracing::error!(%error, "semantic stream contract violation; dropping unsafe delta");
+            emit_error_chunk(
+                cx,
+                session_id,
+                message_id,
+                "Internal stream integrity failure: unsafe protocol output was rejected.",
+            );
+            return Ok(Vec::new());
+        }
+    };
+
+    if !delta.visible.is_empty() {
+        assistant.push_str(&delta.visible);
+        let safe_message = follow_up_stream.push(&delta.visible);
         if !safe_message.is_empty() {
             semantic.assistant_delta(&safe_message);
             notify_text(cx, session_id, message_id, safe_message)?;
         }
     }
-    Ok(tool_calls)
+    Ok(delta.tool_calls)
 }
