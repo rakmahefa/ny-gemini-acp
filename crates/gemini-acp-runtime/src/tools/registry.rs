@@ -2,10 +2,15 @@
 //!
 //! Responsabilités : ToolDef, ToolResult, Tool et ToolRegistry.
 //! Tous les builtin utilisent cette même abstraction; les outils composés
-//! délèguent aux primitives plutôt que de créer un second runtime.
+//! délèguent aux primitives plutôt que de créer un second runtime. Les outils
+//! MCP sont découverts dynamiquement dans [`crate::tools::mcp::McpCatalog`]
+//! et passent par la même surface de definitions/call.
 
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use super::mcp::McpCatalog;
 
 #[derive(Debug, Clone)]
 pub struct SandboxConfig {
@@ -72,6 +77,7 @@ pub trait Tool: Send + Sync {
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
     sandbox: SandboxConfig,
+    mcp: Option<Arc<McpCatalog>>,
 }
 
 impl std::fmt::Debug for ToolRegistry {
@@ -80,6 +86,7 @@ impl std::fmt::Debug for ToolRegistry {
         f.debug_struct("ToolRegistry")
             .field("tools", &names)
             .field("sandbox", &self.sandbox)
+            .field("mcp", &self.mcp.as_ref().map(|catalog| catalog.has_tools()))
             .finish()
     }
 }
@@ -95,6 +102,7 @@ impl ToolRegistry {
         Self {
             tools: Vec::new(),
             sandbox: SandboxConfig::default(),
+            mcp: None,
         }
     }
 
@@ -103,12 +111,18 @@ impl ToolRegistry {
         Self {
             tools: Vec::new(),
             sandbox,
+            mcp: None,
         }
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         tracing::debug!(name = tool.definition().name, "outil enregistré");
         self.tools.push(tool);
+    }
+
+    pub fn register_mcp(&mut self, catalog: Arc<McpCatalog>) {
+        tracing::info!(tools = catalog.definitions().len(), "MCP tools registered");
+        self.mcp = Some(catalog);
     }
 
     fn register_builtins(&mut self) {
@@ -137,11 +151,17 @@ impl ToolRegistry {
     }
 
     pub fn definitions(&self) -> Vec<Value> {
-        self.tools
+        let mut definitions = self
+            .tools
             .iter()
             .map(|t| t.definition().to_json())
-            .collect()
+            .collect::<Vec<_>>();
+        if let Some(mcp) = &self.mcp {
+            definitions.extend(mcp.definitions());
+        }
+        definitions
     }
+
     #[allow(dead_code)]
     pub fn sandbox(&self) -> &SandboxConfig {
         &self.sandbox
@@ -154,6 +174,11 @@ impl ToolRegistry {
         cwd: &Path,
         extra_dirs: &[PathBuf],
     ) -> Option<ToolResult> {
+        if let Some(mcp) = &self.mcp {
+            if let Some(result) = mcp.call_async(name, args, cwd, extra_dirs).await {
+                return Some(result);
+            }
+        }
         let tool = self.tools.iter().find(|t| t.definition().name == name)?;
         let mut allowed = self.sandbox.allowed_dirs.clone();
         for dir in extra_dirs {
@@ -165,7 +190,7 @@ impl ToolRegistry {
     }
 
     pub fn has_tools(&self) -> bool {
-        !self.tools.is_empty()
+        !self.tools.is_empty() || self.mcp.as_ref().is_some_and(McpCatalog::has_tools)
     }
 }
 
