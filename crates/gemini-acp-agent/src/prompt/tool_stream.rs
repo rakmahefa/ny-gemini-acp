@@ -109,9 +109,8 @@ impl ToolStreamDetector {
                 oversized,
             } => {
                 let closing = match kind {
-                    BlockKind::ToolCall => "```",
+                    BlockKind::ToolCall | BlockKind::FunctionCall => "```",
                     BlockKind::ToolCallSingleQuote => "'''",
-                    BlockKind::FunctionCall => "```",
                 };
 
                 if *line_start || !close_probe.is_empty() {
@@ -121,9 +120,9 @@ impl ToolStreamDetector {
                             let body = std::mem::take(body);
                             let kind = *kind;
                             let was_oversized = *oversized;
+                            close_probe.clear();
                             self.mode = Mode::Normal;
                             self.line_start = true;
-                            close_probe.clear();
                             if !was_oversized {
                                 calls.extend(parse_block(kind, &body));
                             }
