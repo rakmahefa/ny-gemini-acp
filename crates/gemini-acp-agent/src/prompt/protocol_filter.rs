@@ -9,13 +9,10 @@
 //! assistant content. It is intentionally conservative and incremental so
 //! protocol markers split across stream chunks cannot escape.
 
-const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
-const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
-const ASSISTANT_MARKER: &str = "[Assistant]:";
-const USER_MARKER: &str = "[User]:";
-const TOOL_CALL_FENCE: &str = "```tool_call";
-const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
-const FUNCTION_CALL_FENCE: &str = "```function_call";
+use super::protocol::{
+    ASSISTANT_MARKER, FUNCTION_CALL_FENCE, PROTOCOL_MARKERS, TOOL_CALL_FENCE,
+    TOOL_CALL_SINGLE_QUOTE_FENCE, TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX, USER_MARKER,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolCallFence {
@@ -187,16 +184,7 @@ impl ProtocolFilter {
                     continue;
                 }
 
-                let prefixes = [
-                    TOOL_RESULT_PREFIX,
-                    TOOL_RESULT_ENVELOPE,
-                    TOOL_CALL_FENCE,
-                    TOOL_CALL_SINGLE_QUOTE_FENCE,
-                    FUNCTION_CALL_FENCE,
-                    ASSISTANT_MARKER,
-                    USER_MARKER,
-                ];
-                if !final_chunk && prefixes.iter().any(|prefix| prefix.starts_with(rest)) {
+                if !final_chunk && PROTOCOL_MARKERS.iter().any(|prefix| prefix.starts_with(rest)) {
                     self.pending.push_str(rest);
                     break;
                 }
