@@ -15,6 +15,7 @@ const ASSISTANT_MARKER: &str = "[Assistant]:";
 const USER_MARKER: &str = "[User]:";
 const TOOL_CALL_FENCE: &str = "```tool_call";
 const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
+const FUNCTION_CALL_FENCE: &str = "```function_call";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolCallFence {
@@ -167,6 +168,13 @@ impl ProtocolFilter {
                     continue;
                 }
 
+                if rest.starts_with(FUNCTION_CALL_FENCE) {
+                    self.drop_mode = DropMode::ToolCallBlock(ToolCallFence::Backtick);
+                    i += FUNCTION_CALL_FENCE.len();
+                    self.at_line_start = false;
+                    continue;
+                }
+
                 if rest.starts_with(ASSISTANT_MARKER) {
                     i += ASSISTANT_MARKER.len();
                     self.skipping_marker_spacing = true;
@@ -184,6 +192,7 @@ impl ProtocolFilter {
                     TOOL_RESULT_ENVELOPE,
                     TOOL_CALL_FENCE,
                     TOOL_CALL_SINGLE_QUOTE_FENCE,
+                    FUNCTION_CALL_FENCE,
                     ASSISTANT_MARKER,
                     USER_MARKER,
                 ];
@@ -241,6 +250,12 @@ mod tests {
     #[test]
     fn filters_tool_call_blocks_without_parsing_the_body() {
         let input = "```tool_call\n{\"value\":\"```\"}\n```\n[Assistant]: Réponse";
+        assert_eq!(sanitize(input), "Réponse");
+    }
+
+    #[test]
+    fn filters_function_call_blocks() {
+        let input = "```function_call\n{\"name\":\"shell_exec\"}\n```\n[Assistant]: Réponse";
         assert_eq!(sanitize(input), "Réponse");
     }
 

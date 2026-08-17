@@ -9,8 +9,9 @@
 //! - [`notify`]            — notifications ACP (chunks texte, usage tokens).
 //! - [`protocol_filter`]   — dernière barrière de présentation pour les enveloppes protocole.
 //! - [`stream`]            — consommation du flux Gemini et lifecycle sémantique.
-//! - [`title`]              — dérivation automatique du titre de session.
-//! - [`turn`]               — orchestration du tour complet.
+//! - [`tool_stream`]       — détection incrémentale des protocoles d'appel outil.
+//! - [`title`]             — dérivation automatique du titre de session.
+//! - [`turn`]              — orchestration du tour complet.
 
 pub mod build;
 pub mod content;
@@ -19,6 +20,7 @@ pub mod follow_up;
 pub mod notify;
 mod protocol_filter;
 pub mod stream;
+mod tool_stream;
 pub mod title;
 pub mod turn;
 
