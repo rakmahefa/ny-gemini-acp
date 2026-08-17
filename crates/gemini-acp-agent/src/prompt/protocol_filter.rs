@@ -99,15 +99,23 @@ impl ProtocolFilter {
                         continue;
                     }
 
+                    // A partial closing fence can only be buffered when the
+                    // current line itself is incomplete at the chunk boundary.
+                    // Looking through embedded newlines would incorrectly treat
+                    // a fence at the end of a later line as a suffix of the JSON
+                    // or text preceding it.
                     if self.at_line_start && !final_chunk {
-                        let keep = partial_suffix_len(&input[i..], closing);
-                        if keep > 0 {
-                            let end = input.len() - keep;
-                            if end > i {
-                                i = end;
+                        let line_remainder = &input[i..];
+                        if !line_remainder.contains('\n') {
+                            let keep = partial_suffix_len(line_remainder, closing);
+                            if keep > 0 {
+                                let end = input.len() - keep;
+                                if end > i {
+                                    i = end;
+                                }
+                                self.pending.push_str(&input[i..]);
+                                break;
                             }
-                            self.pending.push_str(&input[i..]);
-                            break;
                         }
                     }
 
@@ -306,6 +314,19 @@ mod tests {
                 assert_eq!(filter.finish(), "");
             }
         }
+    }
+
+    #[test]
+    fn closing_fence_after_embedded_json_does_not_become_a_partial_suffix() {
+        let input = "```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```\n[Tool result]: {\"content\":\"x\"}\n[Assistant]: Fin";
+        let mut filter = ProtocolFilter::new();
+        let split = input.find("```\n[Tool result]").unwrap() + 3;
+        let first = filter.push(&input[..split]);
+        let second = filter.push(&input[split..]);
+        let tail = filter.finish();
+        assert_eq!(first, "");
+        assert_eq!(second, "Fin");
+        assert_eq!(tail, "");
     }
 
     #[test]
