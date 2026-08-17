@@ -9,10 +9,7 @@ use std::collections::HashSet;
 
 use gemini_acp_runtime::tools::parse::ParsedToolCall;
 
-use super::protocol::{
-    ASSISTANT_MARKER, FUNCTION_CALL_FENCE, PROTOCOL_MARKERS, TOOL_CALL_FENCE,
-    TOOL_CALL_SINGLE_QUOTE_FENCE, TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX, USER_MARKER,
-};
+use super::protocol::PROTOCOL_MARKERS;
 use super::{protocol_filter::ProtocolFilter, tool_stream::ToolStreamDetector};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,6 +141,10 @@ impl SemanticStreamContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::protocol::{
+        ASSISTANT_MARKER, FUNCTION_CALL_FENCE, TOOL_CALL_FENCE,
+        TOOL_CALL_SINGLE_QUOTE_FENCE, TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX, USER_MARKER,
+    };
 
     fn collect(chunks: &[&str]) -> StreamDelta {
         let mut contract = SemanticStreamContract::new();
