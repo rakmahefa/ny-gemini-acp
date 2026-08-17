@@ -15,7 +15,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use gemini_acp_runtime::events::TurnEventEmitter;
-use gemini_acp_runtime::state::{SessionMode, Store, TurnError};
+use gemini_acp_runtime::state::{Store, TurnError};
 use gemini_acp_runtime::tools::ToolRegistry;
 
 use super::build::build_prompt;
@@ -23,7 +23,7 @@ use super::content::blocks_to_parts;
 use super::notify::notify_usage;
 use super::title::derive_title;
 use gemini_acp_runtime::tools::executor::safe_session_update;
-use rounds::RoundOutcome;
+use rounds::{RoundContext, RoundOutcome};
 
 const MAX_TURNS: usize = 20;
 
@@ -97,32 +97,22 @@ pub async fn run_turn(
         .messages
         .push((gemini_acp_runtime::state::Role::User, user_text));
 
-    let cwd = session.cwd.clone();
-    let additional_dirs = session.additional_directories.clone();
     let registry = &*tools;
-    let session_mode = session.mode;
-    let mode_getter: Box<dyn Fn() -> SessionMode + Send + Sync> =
-        Box::new(move || session_mode);
-
-    let outcome = match rounds::run(
-        &client,
-        &cx,
-        &session_id,
+    let mut round_context = RoundContext {
+        client: &client,
+        cx: &cx,
+        session_id: &session_id,
         sid,
-        &message_id,
-        &mut cancel,
+        message_id: &message_id,
+        cancel: &mut cancel,
         session,
         registry,
         semantic,
-        &refs,
-        &cwd,
-        &additional_dirs,
-        &*mode_getter,
-        MAX_TURNS,
-        &span,
-    )
-    .await
-    {
+        refs: &refs,
+        span: &span,
+    };
+
+    let outcome = match rounds::run(&mut round_context, MAX_TURNS).await {
         Ok(outcome) => outcome,
         Err(rounds::RoundError::Stop(reason)) => {
             return responder.respond(PromptResponse::new(reason));
@@ -140,7 +130,8 @@ pub async fn run_turn(
     span.record("chars_output", output.chars().count());
 
     if !assistant_already_persisted && !output.trim().is_empty() {
-        session
+        round_context
+            .session
             .messages
             .push((gemini_acp_runtime::state::Role::Assistant, output.clone()));
     }
@@ -148,7 +139,7 @@ pub async fn run_turn(
     if let Err(error) = notify_usage(
         &cx,
         &session_id,
-        &build_prompt(session, Some(registry)),
+        &build_prompt(round_context.session, Some(registry)),
         &output,
     ) {
         tracing::warn!(session = %session_id, "notify_usage a échoué: {error}");
