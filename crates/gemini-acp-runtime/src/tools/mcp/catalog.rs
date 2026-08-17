@@ -217,7 +217,7 @@ impl McpCatalog {
                     server_name
                 )));
             }
-            let client = McpServerClient::connect(config).await?;
+            let mut client = McpServerClient::connect(config).await?;
             let descriptors = client.list_tools().await?;
             for descriptor in descriptors {
                 let qualified = qualified_name(&server_name, &descriptor.name);
