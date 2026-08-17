@@ -28,6 +28,10 @@ pub mod sandbox;
 pub mod tool_history;
 pub mod tool_ux;
 
+// `McpTransportKind` has no data-bearing variants, so it is safe and useful to
+// treat it as a copyable configuration discriminator throughout validation.
+impl Copy for mcp::McpTransportKind {}
+
 pub use lifecycle::{LifecycleError, ToolLifecycle, ToolLifecycleState};
 pub use lifecycle_events::{context as tool_event_context, emit_tool_state};
 pub use mcp::{McpCatalog, McpError, McpServerConfig, McpTransportKind};
