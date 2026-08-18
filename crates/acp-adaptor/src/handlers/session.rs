@@ -454,5 +454,5 @@ pub async fn handle_fork(
         }
     };
 
-    Ok(responder.respond(ForkSessionResponse::new(SessionId::from(forked.id))))
+    responder.respond(ForkSessionResponse::new(SessionId::from(forked.id)))
 }
