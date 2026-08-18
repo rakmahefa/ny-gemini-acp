@@ -3,7 +3,7 @@
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Error as AcpError, Responder};
 
-use gemini_acp_llm::config::config_options::build_agent_capabilities;
+use crate::config::config_options::build_agent_capabilities;
 use gemini_acp_runtime::AppState;
 
 pub async fn handle(
