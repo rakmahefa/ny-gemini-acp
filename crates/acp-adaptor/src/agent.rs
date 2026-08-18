@@ -5,8 +5,7 @@
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
-use gemini_acp_runtime::execution::TurnManager;
-use gemini_acp_runtime::{events::TurnEventEmitter, AppState};
+use gemini_acp_runtime::{events::TurnEventEmitter, AppState, EncapsError, TurnManager};
 
 use crate::handlers;
 use crate::prompt;
@@ -89,9 +88,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                         &mut semantic,
                                     )
                                     .await
-                                    .map_err(|e| {
-                                        gemini_acp_runtime::execution::EncapsError::Task(e.to_string())
-                                    });
+                                    .map_err(|e| EncapsError::Task(e.to_string()));
 
                                     if result.is_err() && !semantic.is_terminal() {
                                         semantic.turn_failed();
