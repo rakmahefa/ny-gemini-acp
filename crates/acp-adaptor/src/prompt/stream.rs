@@ -3,8 +3,6 @@
 //! This module owns semantic stream lifecycle emission. `turn.rs` only
 //! coordinates the turn and consumes the normalized stream result.
 
-use std::fmt::Display;
-
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{LlmError, ModelEvent, TurnEventEmitter};
@@ -74,16 +72,7 @@ fn handle_text_delta(
                     semantic.thinking_completed();
                     *thinking_active = false;
                 }
-                let delta = handle_response_chunk(
-                    &text,
-                    stream_contract,
-                    follow_up_stream,
-                    assistant,
-                    semantic,
-                    cx,
-                    session_id,
-                    message_id,
-                )?;
+                let delta = handle_response_chunk(&text, stream_contract, follow_up_stream, assistant, semantic, cx, session_id, message_id)?;
                 tool_calls.extend(delta.tool_calls);
                 interaction_groups.extend(delta.interaction_groups);
             }
@@ -117,20 +106,7 @@ pub async fn consume(
                 let Some(item) = item else { break StreamOutcome::Complete };
                 match item {
                     Ok(ModelEvent::TextDelta(delta)) => {
-                        handle_text_delta(
-                            &delta,
-                            &mut thought_stream,
-                            &mut stream_contract,
-                            &mut follow_up_stream,
-                            &mut assistant,
-                            &mut tool_calls,
-                            &mut interaction_groups,
-                            &mut thinking_active,
-                            semantic,
-                            cx,
-                            session_id,
-                            message_id,
-                        )?;
+                        handle_text_delta(&delta, &mut thought_stream, &mut stream_contract, &mut follow_up_stream, &mut assistant, &mut tool_calls, &mut interaction_groups, &mut thinking_active, semantic, cx, session_id, message_id)?;
                     }
                     Ok(ModelEvent::ReasoningDelta(text)) => {
                         if !thinking_active {
@@ -141,9 +117,7 @@ pub async fn consume(
                         crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
                     }
                     Ok(ModelEvent::ToolCall { .. }) => {
-                        break StreamOutcome::Failed(
-                            "structured provider tool calls are not yet supported by the ACP text-tool projection".to_owned(),
-                        );
+                        break StreamOutcome::Failed("structured provider tool calls are not yet supported by the ACP text-tool projection".to_owned());
                     }
                     Ok(ModelEvent::Usage { .. }) => {}
                     Err(error) => break StreamOutcome::Failed(error.to_string()),
@@ -180,16 +154,7 @@ pub async fn consume(
                     semantic.thinking_completed();
                     thinking_active = false;
                 }
-                let delta = handle_response_chunk(
-                    &text,
-                    &mut stream_contract,
-                    &mut follow_up_stream,
-                    &mut assistant,
-                    semantic,
-                    cx,
-                    session_id,
-                    message_id,
-                )?;
+                let delta = handle_response_chunk(&text, &mut stream_contract, &mut follow_up_stream, &mut assistant, semantic, cx, session_id, message_id)?;
                 tool_calls.extend(delta.tool_calls);
                 interaction_groups.extend(delta.interaction_groups);
             }
@@ -204,12 +169,7 @@ pub async fn consume(
         Ok(delta) => delta,
         Err(error) => {
             tracing::error!(%error, "semantic stream contract violated at EOF");
-            emit_error_chunk(
-                cx,
-                session_id,
-                message_id,
-                "Internal stream integrity failure: protocol output was rejected.",
-            );
+            emit_error_chunk(cx, session_id, message_id, "Internal stream integrity failure: protocol output was rejected.");
             Default::default()
         }
     };
@@ -238,12 +198,7 @@ pub async fn consume(
         emit_error_chunk(cx, session_id, message_id, &actionable_stream_error(error));
     }
 
-    Ok(StreamResult {
-        outcome,
-        assistant,
-        tool_calls,
-        interaction_groups,
-    })
+    Ok(StreamResult { outcome, assistant, tool_calls, interaction_groups })
 }
 
 fn handle_response_chunk(
@@ -260,12 +215,7 @@ fn handle_response_chunk(
         Ok(delta) => delta,
         Err(error) => {
             tracing::error!(%error, "semantic stream contract violation; dropping unsafe delta");
-            emit_error_chunk(
-                cx,
-                session_id,
-                message_id,
-                "Internal stream integrity failure: unsafe protocol output was rejected.",
-            );
+            emit_error_chunk(cx, session_id, message_id, "Internal stream integrity failure: unsafe protocol output was rejected.");
             return Ok(StreamDelta::default());
         }
     };

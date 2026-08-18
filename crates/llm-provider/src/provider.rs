@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::client::{Client, Config};
 use crate::config::AgentConfig;
-use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmRequest, LlmStream, ModelEvent, ModelRequest};
+use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]

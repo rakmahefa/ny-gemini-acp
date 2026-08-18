@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use agent_runtime::{McpServerConfig, ToolCallRequest, ToolCallResult, ToolProvider};
+use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig};
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
@@ -66,7 +66,7 @@ impl ToolProvider for DefaultToolProvider {
         &self,
         session_id: &str,
         _cwd: PathBuf,
-        servers: Vec<McpServerConfig>,
+        servers: Vec<ToolServerConfig>,
     ) -> Result<(), String> {
         if servers.is_empty() {
             self.clear_session(session_id).await;
