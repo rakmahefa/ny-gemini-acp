@@ -14,6 +14,7 @@ use agent_client_protocol::schema::v1::{
     MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
+use gemini_acp_llm::LlmProvider;
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::state::{Store, TurnError};
 use gemini_acp_runtime::tools::ToolRegistry;
@@ -30,7 +31,7 @@ const MAX_TURNS: usize = 20;
 pub async fn run_turn(
     store: Arc<Store>,
     tools: Arc<ToolRegistry>,
-    client: gemini_acp_config::client::Client,
+    provider: Arc<dyn LlmProvider>,
     req: PromptRequest,
     responder: Responder<PromptResponse>,
     cx: ConnectionTo<Client>,
@@ -41,6 +42,7 @@ pub async fn run_turn(
     let span = tracing::info_span!(
         "turn",
         session = %session_id,
+        provider = provider.name(),
         chars_input = tracing::field::Empty,
         chars_output = tracing::field::Empty,
         tool_rounds = tracing::field::Empty,
@@ -84,7 +86,7 @@ pub async fn run_turn(
         );
     }
 
-    let refs = match context::upload_images(&client, &cx, &session_id, &images).await {
+    let refs = match context::upload_images(provider.as_ref(), &cx, &session_id, &images).await {
         Ok(refs) => refs,
         Err(()) => {
             semantic.turn_failed();
@@ -99,7 +101,7 @@ pub async fn run_turn(
 
     let registry = &*tools;
     let mut round_context = RoundContext {
-        client: &client,
+        provider: provider.as_ref(),
         cx: &cx,
         session_id: &session_id,
         sid,
