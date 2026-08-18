@@ -38,13 +38,13 @@ fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<ToolServerC
                     || variable.name.chars().any(|ch| ch == '\0' || ch.is_control())
                 {
                     return Err(format!(
-                        "stdio MCP server '{}' contains invalid environment variable name '{}',
+                        "stdio MCP server '{}' contains invalid environment variable name '{}'",
                         server.name, variable.name
                     ));
                 }
                 if env.insert(variable.name.clone(), variable.value).is_some() {
                     return Err(format!(
-                        "stdio MCP server '{}' contains duplicate environment variable '{}',
+                        "stdio MCP server '{}' contains duplicate environment variable '{}'",
                         server.name, variable.name
                     ));
                 }
