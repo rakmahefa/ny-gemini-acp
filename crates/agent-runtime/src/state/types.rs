@@ -36,6 +36,7 @@ impl SessionMode {
             SessionMode::BypassPermissions,
         ]
     }
+
     pub fn from_str_lossy(s: &str) -> Option<Self> {
         match s.to_ascii_lowercase().as_str() {
             "default" => Some(Self::Default),
@@ -44,6 +45,7 @@ impl SessionMode {
             _ => None,
         }
     }
+
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Default => "Ask for permission",
@@ -51,6 +53,7 @@ impl SessionMode {
             Self::BypassPermissions => "Bypass all permissions",
         }
     }
+
     pub fn description(&self) -> &'static str {
         match self {
             Self::Default => "Ask the ACP client before edits and commands.",
@@ -60,11 +63,23 @@ impl SessionMode {
             Self::BypassPermissions => "Edits and commands run without prompting.",
         }
     }
+
     pub fn requires_write_permission(&self) -> bool {
         matches!(self, Self::Default)
     }
+
     pub fn requires_execute_permission(&self) -> bool {
         !matches!(self, Self::BypassPermissions)
+    }
+}
+
+impl From<SessionMode> for gemini_acp_tools::ToolPermissionMode {
+    fn from(mode: SessionMode) -> Self {
+        match mode {
+            SessionMode::Default => Self::Default,
+            SessionMode::AcceptEdits => Self::AcceptEdits,
+            SessionMode::BypassPermissions => Self::BypassPermissions,
+        }
     }
 }
 
@@ -109,6 +124,7 @@ impl Session {
             messages: Vec::new(),
         }
     }
+
     pub fn fork(&self, new_id: String) -> Self {
         let now = gemini_acp_config::core::time::now_iso();
         Self {
