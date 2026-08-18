@@ -10,10 +10,7 @@ extern crate self as gemini_acp_tools;
 
 pub use agent_runtime::*;
 
-/// Provider configuration surface used by ACP handlers.
-pub mod config {
-    pub use llm_provider::config::*;
-}
+pub mod config;
 
 /// Tool implementation surface used by ACP presentation/execution helpers.
 pub mod tools {
