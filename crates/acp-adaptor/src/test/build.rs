@@ -1,4 +1,6 @@
 use super::*;
+use tools_provider::tools::registry::ToolRegistry;
+use tools_provider::DefaultToolProvider;
 
 fn session(messages: &[(&str, &str)]) -> Session {
     let mut s = Session::new(
@@ -47,7 +49,6 @@ fn tool_result_est_injecte_sans_double_enveloppe() {
     ));
 
     let p = build_prompt(&s, None);
-
     assert!(p.contains("[Tool result for file_read]: [workspace]"));
     assert!(!p.contains("[Tool result]: [Tool result for file_read]"));
 }
@@ -96,11 +97,12 @@ fn build_prompt_vide_renvoie_juste_systeme() {
 #[test]
 fn build_prompt_avec_tools_injecte_section() {
     let s = session(&[]);
-    let reg = ToolRegistry::new();
-    let p = build_prompt(&s, Some(&reg));
+    let empty = DefaultToolProvider::new(ToolRegistry::new());
+    let p = build_prompt(&s, Some(&empty));
     assert!(!p.contains("# Tool Use"));
-    let reg = ToolRegistry::builtin();
-    let p = build_prompt(&s, Some(&reg));
+
+    let builtin = DefaultToolProvider::new(ToolRegistry::builtin());
+    let p = build_prompt(&s, Some(&builtin));
     assert!(p.contains("# Tool Use"));
     assert!(p.contains("file_read"));
     assert!(p.contains("shell_exec"));
@@ -110,7 +112,7 @@ fn build_prompt_avec_tools_injecte_section() {
 fn build_prompt_tools_disabled_pas_de_section() {
     let mut s = session(&[]);
     s.tools_enabled = false;
-    let reg = ToolRegistry::builtin();
-    let p = build_prompt(&s, Some(&reg));
+    let builtin = DefaultToolProvider::new(ToolRegistry::builtin());
+    let p = build_prompt(&s, Some(&builtin));
     assert!(!p.contains("# Tool Use"));
 }

@@ -1,11 +1,7 @@
-//! Cœur partagé Gemini : cookies Google, auth SAPISIDHASH, parsing du flux
-//! Gemini, table des modèles, erreurs typées, utilitaires temps. Aucune
-//! dépendance réseau ; pur traitement de données réutilisable par les
-//! modules `client`, `web2api`, et les crates `runtime`/`agent` en aval.
+//! Provider-local Gemini core utilities.
 //!
-//! Anciennement le crate `gemini-core` — déplacé tel quel dans
-//! `gemini-acp-config::core` (spec §3.2).
-
+//! Cookies, authentication, response framing, model resolution, typed errors
+//! and time helpers remain implementation details of the Gemini provider.
 pub mod auth;
 pub mod cookies;
 pub mod errors;

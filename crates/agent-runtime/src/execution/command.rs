@@ -1,7 +1,6 @@
-/// Commands understood by the encapsulated ACP worker.
+/// Commands understood by an agent execution thread.
 ///
-/// The foundation intentionally keeps this protocol small. ACP-specific
-/// request payloads will be introduced by the agent layer when it migrates.
+/// The command layer is intentionally small and provider/protocol-neutral.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadCommand {
     Stop,

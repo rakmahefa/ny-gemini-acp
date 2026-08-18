@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use gemini_acp_runtime::state::{Session, Store};
+use agent_runtime::state::{Session, Store};
 
 pub(crate) struct TurnGuard {
     store: Arc<Store>,

@@ -28,7 +28,9 @@ pub(super) struct IntegrityError {
 
 impl IntegrityError {
     pub(super) fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -60,7 +62,9 @@ impl TurnIntegrity {
 
     pub(super) fn turn_started(&mut self) -> Result<(), IntegrityError> {
         if self.phase != TurnPhase::NotStarted {
-            return Err(IntegrityError::new("turn_started must be the first turn event"));
+            return Err(IntegrityError::new(
+                "turn_started must be the first turn event",
+            ));
         }
         self.phase = TurnPhase::Active;
         Ok(())
@@ -72,7 +76,9 @@ impl TurnIntegrity {
             return Err(IntegrityError::new("assistant stream is already active"));
         }
         if self.thinking == StreamPhase::Active {
-            return Err(IntegrityError::new("assistant cannot start while thinking is active"));
+            return Err(IntegrityError::new(
+                "assistant cannot start while thinking is active",
+            ));
         }
         self.assistant = StreamPhase::Active;
         self.work_started = true;
@@ -82,10 +88,14 @@ impl TurnIntegrity {
     pub(super) fn assistant_delta(&self) -> Result<(), IntegrityError> {
         self.ensure_active("assistant_delta")?;
         if self.assistant != StreamPhase::Active {
-            return Err(IntegrityError::new("assistant_delta requires an active assistant stream"));
+            return Err(IntegrityError::new(
+                "assistant_delta requires an active assistant stream",
+            ));
         }
         if self.thinking == StreamPhase::Active {
-            return Err(IntegrityError::new("assistant_delta cannot be emitted while thinking is active"));
+            return Err(IntegrityError::new(
+                "assistant_delta cannot be emitted while thinking is active",
+            ));
         }
         Ok(())
     }
@@ -93,10 +103,14 @@ impl TurnIntegrity {
     pub(super) fn assistant_completed(&mut self) -> Result<(), IntegrityError> {
         self.ensure_active("assistant_completed")?;
         if self.assistant != StreamPhase::Active {
-            return Err(IntegrityError::new("assistant_completed requires an active assistant stream"));
+            return Err(IntegrityError::new(
+                "assistant_completed requires an active assistant stream",
+            ));
         }
         if self.thinking == StreamPhase::Active {
-            return Err(IntegrityError::new("thinking must complete before assistant completes"));
+            return Err(IntegrityError::new(
+                "thinking must complete before assistant completes",
+            ));
         }
         self.assistant = StreamPhase::Idle;
         Ok(())
@@ -105,7 +119,9 @@ impl TurnIntegrity {
     pub(super) fn thinking_started(&mut self) -> Result<(), IntegrityError> {
         self.ensure_active("thinking_started")?;
         if self.assistant != StreamPhase::Active {
-            return Err(IntegrityError::new("thinking requires an active assistant stream"));
+            return Err(IntegrityError::new(
+                "thinking requires an active assistant stream",
+            ));
         }
         if self.thinking == StreamPhase::Active {
             return Err(IntegrityError::new("thinking stream is already active"));
@@ -117,7 +133,9 @@ impl TurnIntegrity {
     pub(super) fn thinking_delta(&self) -> Result<(), IntegrityError> {
         self.ensure_active("thinking_delta")?;
         if self.thinking != StreamPhase::Active {
-            return Err(IntegrityError::new("thinking_delta requires an active thinking stream"));
+            return Err(IntegrityError::new(
+                "thinking_delta requires an active thinking stream",
+            ));
         }
         Ok(())
     }
@@ -125,7 +143,9 @@ impl TurnIntegrity {
     pub(super) fn thinking_completed(&mut self) -> Result<(), IntegrityError> {
         self.ensure_active("thinking_completed")?;
         if self.thinking != StreamPhase::Active {
-            return Err(IntegrityError::new("thinking_completed requires an active thinking stream"));
+            return Err(IntegrityError::new(
+                "thinking_completed requires an active thinking stream",
+            ));
         }
         self.thinking = StreamPhase::Idle;
         Ok(())
@@ -134,10 +154,14 @@ impl TurnIntegrity {
     pub(super) fn tool_call_requested(&mut self, id: &str) -> Result<(), IntegrityError> {
         self.ensure_active("tool_call_requested")?;
         if id.is_empty() {
-            return Err(IntegrityError::new("tool_call_requested requires a non-empty tool_call_id"));
+            return Err(IntegrityError::new(
+                "tool_call_requested requires a non-empty tool_call_id",
+            ));
         }
         if self.tools.contains_key(id) {
-            return Err(IntegrityError::new(format!("tool call {id} was already requested")));
+            return Err(IntegrityError::new(format!(
+                "tool call {id} was already requested"
+            )));
         }
         self.tools.insert(id.to_owned(), ToolPhase::Requested);
         self.work_started = true;

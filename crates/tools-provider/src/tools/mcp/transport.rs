@@ -59,7 +59,10 @@ impl StdioTransport {
         })
     }
 
-    pub(super) async fn request(&mut self, request: &RpcRequest<'_>) -> Result<RpcResponse, McpError> {
+    pub(super) async fn request(
+        &mut self,
+        request: &RpcRequest<'_>,
+    ) -> Result<RpcResponse, McpError> {
         let line = serialize_request_line(request)?;
         let write = async {
             self.stdin

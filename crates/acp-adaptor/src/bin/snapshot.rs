@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use agent_runtime::state::Store;
 use anyhow::{bail, Context, Result};
 
 #[tokio::main]
@@ -19,7 +20,7 @@ async fn main() -> Result<()> {
         .context("usage: gemini-acp-snapshot <list|restore|sessions> [args]")?;
 
     let data_dir = resolve_data_dir();
-    let store = gemini_acp_runtime::state::Store::open(&data_dir)
+    let store = Store::open(&data_dir)
         .await
         .with_context(|| format!("ouverture dépôt {}", data_dir.display()))?;
 

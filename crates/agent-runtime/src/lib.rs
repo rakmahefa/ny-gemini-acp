@@ -1,37 +1,23 @@
-//! Agent runtime: durable state, sessions, semantic events and execution.
-//!
-//! This crate is the center of the four-crate workspace architecture. ACP is
-//! adapted outside this crate; model and tool implementations are providers.
+//! Agent runtime: durable state, sessions and execution.
 
 pub mod events;
 mod execution;
 pub mod persona;
+pub mod providers;
 pub mod runtime;
 pub mod session;
 pub mod state;
+pub mod time;
 
-// Provider facades used while the workspace reset is being completed. The
-// implementations remain owned by `llm-provider`; these exports avoid forcing
-// every adapter module to know the provider package's internal crate layout.
-pub mod client {
-    pub use gemini_acp_config::client::*;
-}
-
-pub mod config {
-    pub use gemini_acp_config::config::*;
-}
-
-pub mod core {
-    pub use gemini_acp_config::core::*;
-}
-
-pub use gemini_acp_tools as tools;
-
+pub use events::{EventBus, EventContext, EventStream, SemanticEvent, ToolEventContext, TurnEventEmitter};
 pub use execution::{
-    AcpThread, AcpThreadHandle, AcpTurn, AcpTurnHandle, Cancellation, EncapsError,
+    AgentThread, AgentThreadHandle, AgentTurn, AgentTurnHandle, Cancellation, RuntimeError,
     ThreadCommand, ThreadState, TurnManager, TurnState,
 };
-pub use events::{AcpSemanticEvent, EventBus, EventContext, EventStream, ToolEventContext};
-pub use runtime::{AgentRuntime, AppState};
+pub use providers::{
+    GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
+    NullLlmProvider, NullToolProvider, SharedLlmProvider, SharedToolProvider, ToolCallRequest,
+    ToolCallResult, ToolEventSink, ToolProvider, ToolServerConfig, ToolTransportKind,
+};
+pub use runtime::{AgentRuntime, AppState, RuntimeConfig};
 pub use session::SessionManager;
-pub use tools::{ToolCallKind, ToolCallRequest, ToolCallRequestError, ToolCallState, ToolRegistry};

@@ -1,35 +1,41 @@
 use super::*;
+use crate::{NullLlmProvider, NullToolProvider};
+use std::sync::Arc;
 
-fn test_config() -> AgentConfig {
+fn test_config() -> RuntimeConfig {
     let dir = std::env::temp_dir().join(format!(
         "gemini-acp-runtime-test-{}",
         uuid::Uuid::new_v4().simple()
     ));
-    AgentConfig {
-        cookie_file: dir.join("cookies.json"),
-        default_model: gemini_acp_config::core::models::DEFAULT_MODEL.to_string(),
+    RuntimeConfig {
         data_dir: dir.join("data"),
-        auth_user: None,
-        proxy: None,
+        default_model: "gemini-3.6-flash".into(),
     }
 }
 
 #[tokio::test]
-async fn runtime_from_config_creates_state_and_session_manager() {
-    let config = test_config();
-    let runtime = AgentRuntime::from_config(config).await.expect("runtime");
+async fn runtime_new_creates_state_and_session_manager() {
+    let runtime = AgentRuntime::new(
+        test_config(),
+        Arc::new(NullLlmProvider),
+        Arc::new(NullToolProvider),
+    )
+    .await
+    .expect("runtime");
     assert!(runtime.state().store.list(None).await.is_empty());
-    assert!(runtime.settings().await.is_object());
-    let names = runtime.state().tools.definitions();
-    assert!(names.iter().any(|tool| tool["name"] == "AskUserQuestion"));
+    assert!(!runtime.state().tools.has_tools());
     let _ = runtime.state().sessions.store().clone();
     runtime.shutdown().await;
 }
 
 #[tokio::test]
 async fn runtime_shutdown_is_safe_without_active_turns() {
-    let runtime = AgentRuntime::from_config(test_config())
-        .await
-        .expect("runtime");
+    let runtime = AgentRuntime::new(
+        test_config(),
+        Arc::new(NullLlmProvider),
+        Arc::new(NullToolProvider),
+    )
+    .await
+    .expect("runtime");
     runtime.shutdown().await;
 }

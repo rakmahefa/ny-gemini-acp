@@ -1,25 +1,19 @@
-//! Construction de l'agent ACP et câblage du transport stdio.
-//!
-//! Responsabilités ACP : handlers, transport, permissions et conversion des
-//! notifications du runtime vers le protocole ACP.
-
+use crate::{handlers, prompt};
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
-use gemini_acp_runtime::{events::TurnEventEmitter, AppState, EncapsError, TurnManager};
-
-use crate::handlers;
-use crate::prompt;
+use agent_runtime::events::TurnEventEmitter;
+use agent_runtime::{AppState, RuntimeError, ToolProvider, TurnManager};
+use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_store = state.store.clone();
-    let h_client = state.client.clone();
     let h_tools = state.tools.clone();
     let h_sessions = state.sessions.clone();
+    let h_llm = state.llm.clone();
     let h_events = state.events.clone();
     let turn_manager = TurnManager::new();
 
-    Agent
-        .builder()
+    Agent::builder(Agent::default())
         .name("gemini-acp")
         .on_receive_request(
             {
@@ -42,16 +36,16 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
         .on_receive_request(
             {
                 let store = h_store.clone();
-                let client = h_client.clone();
-                let fallback_tools = h_tools.clone();
+                let tools = h_tools.clone();
                 let sessions = h_sessions.clone();
+                let llm = h_llm.clone();
                 let events = h_events.clone();
                 let turn_manager = turn_manager.clone();
                 async move |req: PromptRequest, responder, cx| {
                     let store = store.clone();
-                    let client = client.clone();
-                    let fallback_tools = fallback_tools.clone();
+                    let fallback_tools = tools.clone();
                     let sessions = sessions.clone();
+                    let llm = llm.clone();
                     let events = events.clone();
                     let turn_manager = turn_manager.clone();
                     let turn_cx = cx.clone();
@@ -60,47 +54,46 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
 
                     turn_manager
                         .start(sid.clone(), move |_cancellation| async move {
-                            let tools = sessions
-                                .tools_for(&sid)
-                                .await
-                                .unwrap_or(fallback_tools);
-                            let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
-                            let interactive =
-                                gemini_acp_runtime::tools::interactive::InteractiveContext {
-                                    cx: turn_cx.clone(),
-                                    session_id,
+                            let tools_for_session = sessions.tools_for(&sid).await;
+                            let tools: std::sync::Arc<dyn ToolProvider> =
+                                if tools_for_session.has_tools() {
+                                    tools_for_session
+                                } else {
+                                    fallback_tools
                                 };
+                            let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
+                            let interactive_context = interactive::InteractiveContext {
+                                cx: turn_cx.clone(),
+                                session_id,
+                            };
 
-                            gemini_acp_runtime::tools::interactive::scope(
-                                interactive,
-                                async move {
-                                    let mut semantic =
-                                        TurnEventEmitter::new(events, sid.clone(), turn_id);
-                                    semantic.turn_started();
+                            interactive::scope(interactive_context, async move {
+                                let mut semantic =
+                                    TurnEventEmitter::new(events, sid.clone(), turn_id);
+                                semantic.turn_started();
 
-                                    let result = prompt::run_turn(
-                                        store,
-                                        tools,
-                                        client,
-                                        req,
-                                        responder,
-                                        turn_cx,
-                                        &mut semantic,
-                                    )
-                                    .await
-                                    .map_err(|e| EncapsError::Task(e.to_string()));
+                                let result = prompt::run_turn(
+                                    store,
+                                    tools,
+                                    llm,
+                                    req,
+                                    responder,
+                                    turn_cx,
+                                    &mut semantic,
+                                )
+                                .await
+                                .map_err(|e| RuntimeError::Task(e.to_string()));
 
-                                    if result.is_err() && !semantic.is_terminal() {
-                                        semantic.turn_failed();
-                                    }
+                                if result.is_err() && !semantic.is_terminal() {
+                                    semantic.turn_failed();
+                                }
 
-                                    result
-                                },
-                            )
+                                result
+                            })
                             .await
                         })
                         .await
-                        .map_err(|error| anyhow::anyhow!("failed to enqueue ACP turn: {error}"))?;
+                        .map_err(|error| anyhow::anyhow!("failed to enqueue agent turn: {error}"))?;
                     Ok(())
                 }
             },

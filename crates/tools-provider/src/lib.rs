@@ -1,15 +1,8 @@
-//! Provider-neutral tool implementations for the agent runtime.
-//!
-//! This crate is intentionally independent from `agent-runtime`. The historical
-//! modules remain grouped below `tools/`, but runtime-facing contracts are
-//! defined locally and consumed through explicit provider traits.
+//! Builtin and MCP tool provider implementations.
+extern crate self as tools_provider;
 
-extern crate self as gemini_acp_encaps;
-
+pub mod provider;
 pub mod tools;
 
+pub use provider::DefaultToolProvider;
 pub use tools::*;
-
-/// Compatibility name for legacy lifecycle internals. The concrete cancellation
-/// primitive is now owned by the tools provider instead of the old encaps crate.
-pub type Cancellation = ToolCancellation;

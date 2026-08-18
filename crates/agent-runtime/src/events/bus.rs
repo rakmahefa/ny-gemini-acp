@@ -1,12 +1,12 @@
 use tokio::sync::broadcast;
 
-use super::AcpSemanticEvent;
+use super::SemanticEvent;
 
 const DEFAULT_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 pub struct EventBus {
-    sender: broadcast::Sender<AcpSemanticEvent>,
+    sender: broadcast::Sender<SemanticEvent>,
 }
 
 impl Default for EventBus {
@@ -21,11 +21,14 @@ impl EventBus {
         Self { sender }
     }
 
-    pub fn publish(&self, event: AcpSemanticEvent) -> Result<usize, broadcast::error::SendError<AcpSemanticEvent>> {
+    pub fn publish(
+        &self,
+        event: SemanticEvent,
+    ) -> Result<usize, broadcast::error::SendError<SemanticEvent>> {
         self.sender.send(event)
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<AcpSemanticEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {
         self.sender.subscribe()
     }
 }

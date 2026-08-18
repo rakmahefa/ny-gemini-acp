@@ -150,19 +150,17 @@ async fn partial_output_est_persiste_sur_annulation() {
         .unwrap();
     let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
     session.messages.push((Role::User, "bonjour".into()));
-    crate::tools::lifecycle::record_partial_output(&s.id, "Réponse partielle");
-
+    crate::state::turn_support::record_partial_output(&s.id, "Réponse partielle");
     store.end_turn(&s.id, session, generation).await.unwrap();
-
     let persisted = store.get(&s.id).await.unwrap();
     assert_eq!(
         persisted.messages,
         vec![
             (Role::User, "bonjour".into()),
-            (Role::Assistant, "Réponse partielle".into()),
+            (Role::Assistant, "Réponse partielle".into())
         ]
     );
-    assert_eq!(crate::tools::lifecycle::take_partial_output(&s.id), "");
+    assert_eq!(crate::state::turn_support::take_partial_output(&s.id), "");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -179,16 +177,14 @@ async fn partial_output_n_est_pas_duplique_sur_fin_normale() {
     session
         .messages
         .push((Role::Assistant, "Réponse complète".into()));
-    crate::tools::lifecycle::record_partial_output(&s.id, "Réponse complète");
-
+    crate::state::turn_support::record_partial_output(&s.id, "Réponse complète");
     store.end_turn(&s.id, session, generation).await.unwrap();
-
     let persisted = store.get(&s.id).await.unwrap();
     assert_eq!(
         persisted.messages,
         vec![
             (Role::User, "bonjour".into()),
-            (Role::Assistant, "Réponse complète".into()),
+            (Role::Assistant, "Réponse complète".into())
         ]
     );
     std::fs::remove_dir_all(&dir).ok();

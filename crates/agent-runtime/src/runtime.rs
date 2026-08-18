@@ -1,34 +1,35 @@
-//! Runtime de l'agent : construction et cycle de vie de l'état applicatif.
+//! Provider-neutral runtime composition root.
 use crate::events::EventBus;
 use crate::session::SessionManager;
-use crate::tools::{McpCatalog, ToolRegistry};
+use crate::{SharedLlmProvider, SharedToolProvider};
 use anyhow::{Context, Result};
-use gemini_acp_config::{AgentConfig, SettingsManager, SettingsManagerOptions};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-
+#[derive(Debug, Clone)]
+pub struct RuntimeConfig {
+    pub data_dir: PathBuf,
+    pub default_model: String,
+}
 #[derive(Clone)]
 pub struct AppState {
     pub store: Arc<crate::state::Store>,
     pub sessions: SessionManager,
-    pub client: gemini_acp_config::client::Client,
-    pub config: Arc<AgentConfig>,
-    pub settings: Arc<tokio::sync::Mutex<SettingsManager>>,
-    pub tools: Arc<ToolRegistry>,
+    pub llm: SharedLlmProvider,
+    pub tools: SharedToolProvider,
+    pub config: Arc<RuntimeConfig>,
     pub events: EventBus,
 }
-
 pub struct AgentRuntime {
     state: AppState,
 }
-
 impl AgentRuntime {
-    pub async fn from_config(config: AgentConfig) -> Result<Self> {
-        for warning in config.validate() {
-            tracing::warn!(%warning, "avertissement de configuration");
-        }
+    pub async fn new(
+        config: RuntimeConfig,
+        llm: SharedLlmProvider,
+        tools: SharedToolProvider,
+    ) -> Result<Self> {
         tokio::fs::create_dir_all(&config.data_dir)
             .await
             .with_context(|| format!("création {}", config.data_dir.display()))?;
@@ -37,53 +38,21 @@ impl AgentRuntime {
                 .await
                 .with_context(|| format!("ouverture du store {}", config.data_dir.display()))?,
         );
-        let sessions = SessionManager::new(Arc::clone(&store));
-        let client = gemini_acp_config::client::Client::new(gemini_acp_config::client::Config {
-            cookie_file: config.cookie_file.clone(),
-            default_model: config.default_model.clone(),
-            auth_user: config.auth_user,
-            proxy: config.proxy.clone(),
-            ..Default::default()
-        })
-        .await
-        .context("initialisation du client Gemini")?;
-        let cwd = std::env::current_dir().context("résolution du cwd")?;
-        let mut settings = SettingsManager::new(cwd, SettingsManagerOptions::default());
-        settings
-            .initialize()
-            .await
-            .context("initialisation du SettingsManager")?;
-        let mut tools = ToolRegistry::builtin();
-
-        let mcp = McpCatalog::from_env()
-            .await
-            .context("initialisation des serveurs MCP")?;
-        if mcp.has_tools() {
-            tracing::info!(tools = mcp.definitions().len(), "MCP infrastructure initialized");
-            tools.register_mcp(Arc::new(mcp));
-        }
-
+        let sessions = SessionManager::with_tool_provider(Arc::clone(&store), Arc::clone(&tools));
         Ok(Self {
             state: AppState {
                 store,
                 sessions,
-                client,
+                llm,
+                tools,
                 config: Arc::new(config),
-                settings: Arc::new(tokio::sync::Mutex::new(settings)),
-                tools: Arc::new(tools),
                 events: EventBus::new(),
             },
         })
     }
-
     pub fn state(&self) -> &AppState {
         &self.state
     }
-
-    pub async fn settings(&self) -> serde_json::Value {
-        self.state.settings.lock().await.settings()
-    }
-
     pub async fn shutdown(&self) {
         let store = Arc::clone(&self.state.store);
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, store.cancel_all()).await {
@@ -93,10 +62,8 @@ impl AgentRuntime {
                 "timeout pendant l'arrêt gracieux"
             ),
         }
-        self.state.settings.lock().await.dispose().await;
     }
 }
-
 #[cfg(test)]
 #[path = "test/runtime.rs"]
 mod tests;

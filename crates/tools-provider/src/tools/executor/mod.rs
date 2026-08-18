@@ -8,13 +8,15 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{SessionId, ToolCallId, ToolCallStatus};
 use agent_client_protocol::{Client, ConnectionTo};
+use agent_runtime::{ToolCallRequest, ToolEventSink, ToolProvider};
 use serde_json::{Map, Value};
+use tokio::sync::watch;
 
-use super::contracts::{ToolEventSink, ToolPermissionMode};
+use super::contracts::{ToolCancellation, ToolPermissionMode};
 use super::lifecycle::{
-    session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolLifecycleState,
+    bind_session_cancellation, session_cancelled, unbind_session_cancellation,
+    wait_for_session_cancel, ToolLifecycle, ToolLifecycleState,
 };
-use super::registry::ToolRegistry;
 use super::tool_ux::{classify_risk, result_update, ToolInfo};
 
 pub use mapping::map_stop_reason;
@@ -27,7 +29,6 @@ pub struct ToolResult {
     pub is_ok: bool,
     pub executed: bool,
 }
-
 impl ToolResult {
     pub fn err(content: impl Into<String>) -> Self {
         Self {
@@ -62,21 +63,27 @@ struct TerminalFinish<'a> {
 pub struct ToolExecutor<'a> {
     pub(crate) cx: &'a ConnectionTo<Client>,
     pub(crate) session_id: &'a SessionId,
-    pub(crate) registry: &'a ToolRegistry,
+    pub(crate) registry: &'a dyn ToolProvider,
     pub(crate) cwd: &'a Path,
     pub(crate) additional_dirs: &'a [PathBuf],
     pub(crate) get_mode: &'a (dyn Fn() -> ToolPermissionMode + Send + Sync),
+    pub(crate) cancellation: watch::Receiver<bool>,
 }
 
 impl<'a> ToolExecutor<'a> {
     pub fn new(
         cx: &'a ConnectionTo<Client>,
         session_id: &'a SessionId,
-        registry: &'a ToolRegistry,
+        registry: &'a dyn ToolProvider,
         cwd: &'a Path,
         additional_dirs: &'a [PathBuf],
         get_mode: &'a (dyn Fn() -> ToolPermissionMode + Send + Sync),
+        cancellation: watch::Receiver<bool>,
     ) -> Self {
+        bind_session_cancellation(
+            session_id.0.as_ref(),
+            ToolCancellation::from_receiver(cancellation.clone()),
+        );
         Self {
             cx,
             session_id,
@@ -84,6 +91,7 @@ impl<'a> ToolExecutor<'a> {
             cwd,
             additional_dirs,
             get_mode,
+            cancellation,
         }
     }
 
@@ -97,16 +105,15 @@ impl<'a> ToolExecutor<'a> {
         self.execute_inner(call_id, tool_name, arguments, Some(semantic))
             .await
     }
-
     pub async fn execute_with_call_id(
         &self,
         call_id: ToolCallId,
         tool_name: &str,
         arguments: &Value,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, None).await
+        self.execute_inner(call_id, tool_name, arguments, None)
+            .await
     }
-
     pub async fn execute(&self, tool_name: &str, arguments: &Value) -> ToolResult {
         self.execute_with_call_id(
             ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple())),
@@ -176,7 +183,7 @@ impl<'a> ToolExecutor<'a> {
         if let Some(e) = semantic.as_mut() {
             e.tool_call_requested(call_id.to_string(), tool_name.to_owned());
         }
-        if session_cancelled(self.session_id.0.as_ref()) {
+        if *self.cancellation.borrow() {
             return self.finish_terminal(
                 TerminalFinish {
                     call_id: &call_id,
@@ -193,7 +200,6 @@ impl<'a> ToolExecutor<'a> {
                 semantic,
             );
         }
-
         let mode = (self.get_mode)();
         let needs_permission = match info.kind {
             agent_client_protocol::schema::v1::ToolKind::Edit
@@ -201,14 +207,12 @@ impl<'a> ToolExecutor<'a> {
                 ToolPermissionMode::BypassPermissions => false,
                 ToolPermissionMode::AcceptEdits => {
                     info.kind == agent_client_protocol::schema::v1::ToolKind::Execute
-                        && classify_risk(tool_name, arguments)
-                            >= super::sandbox::RiskLevel::High
+                        && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High
                 }
                 ToolPermissionMode::Default => true,
             },
             _ => false,
         };
-
         if needs_permission {
             lifecycle
                 .transition(ToolLifecycleState::Permission)
@@ -220,7 +224,7 @@ impl<'a> ToolExecutor<'a> {
             let request = PermissionRequest::from_tool_call(tool_name, arguments, self.cwd);
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
-                    if session_cancelled(self.session_id.0.as_ref()) {
+                    if *self.cancellation.borrow() {
                         return self.finish_terminal(
                             TerminalFinish {
                                 call_id: &call_id,
@@ -310,7 +314,7 @@ impl<'a> ToolExecutor<'a> {
                 }
             }
         } else {
-            if session_cancelled(self.session_id.0.as_ref()) {
+            if *self.cancellation.borrow() {
                 return self.finish_terminal(
                     TerminalFinish {
                         call_id: &call_id,
@@ -335,7 +339,6 @@ impl<'a> ToolExecutor<'a> {
                 e.tool_execution_started(call_id.to_string());
             }
         }
-
         let outcome = if tool_name == "shell_exec" {
             match self
                 .execute_shell_via_acp_terminal(arguments, &call_id, &lifecycle)
@@ -343,18 +346,13 @@ impl<'a> ToolExecutor<'a> {
             {
                 Ok(o) => o,
                 Err(error) => {
-                    tracing::debug!(
-                        session = %self.session_id,
-                        error = %error,
-                        "terminal ACP indisponible avant exécution, fallback shell local"
-                    );
+                    tracing::debug!(session = %self.session_id, error = %error, "terminal ACP indisponible avant exécution, fallback shell local");
                     self.execute_registry(tool_name, arguments).await
                 }
             }
         } else {
             self.execute_registry(tool_name, arguments).await
         };
-
         self.finish_terminal(
             TerminalFinish {
                 call_id: &call_id,
@@ -377,43 +375,47 @@ impl<'a> ToolExecutor<'a> {
     }
 
     async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
-        let result = tokio::select! {
-            value = self.registry.call_async(tool_name, arguments, self.cwd, self.additional_dirs) => value,
-            _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome {
-                result: ToolResult::err("outil annulé pendant son exécution"),
-                terminal_id: None,
-                terminal_meta: None,
-                cancelled: true,
-            }
+        let request = ToolCallRequest {
+            session_id: self.session_id.0.to_string(),
+            name: tool_name.to_owned(),
+            arguments: arguments.clone(),
+            cwd: self.cwd.to_path_buf(),
+            additional_dirs: self.additional_dirs.to_vec(),
+            cancellation: self.cancellation.clone(),
         };
-        let cancelled = session_cancelled(self.session_id.0.as_ref());
-        match result {
-            Some(result) => ExecutionOutcome {
-                result: mapping::registry_result(result),
-                terminal_id: None,
-                terminal_meta: None,
-                cancelled,
+        let result = tokio::select! {
+            value = self.registry.call(request) => value,
+            _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true }
+        };
+        let cancelled =
+            session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
+        ExecutionOutcome {
+            result: ToolResult {
+                content: result.content,
+                is_ok: result.is_ok,
+                executed: result.executed,
             },
-            None => ExecutionOutcome {
-                result: ToolResult::err(format!("Outil inconnu : {tool_name}")),
-                terminal_id: None,
-                terminal_meta: None,
-                cancelled,
-            },
+            terminal_id: None,
+            terminal_meta: None,
+            cancelled,
         }
+    }
+}
+
+impl Drop for ToolExecutor<'_> {
+    fn drop(&mut self) {
+        unbind_session_cancellation(self.session_id.0.as_ref());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn permission_kind_mapping() {
         assert_eq!(PermissionKind::Write.label(), "write");
         assert_eq!(PermissionKind::Execute.label(), "execute");
     }
-
     #[test]
     fn stop_reason_mapping() {
         use agent_client_protocol::schema::v1::StopReason;
@@ -421,7 +423,6 @@ mod tests {
         assert_eq!(map_stop_reason(Some("content_filter")), StopReason::Refusal);
         assert_eq!(map_stop_reason(None), StopReason::EndTurn);
     }
-
     #[test]
     fn cancelled_terminal_preserves_partial_output() {
         assert_eq!(
@@ -433,15 +434,14 @@ mod tests {
             "partial output\n… (sortie tronquée par le client ACP)"
         );
     }
-
     #[test]
     fn empty_cancelled_terminal_output_stays_empty() {
         assert!(terminal::terminal_output_text(("   ".into(), false)).is_empty());
     }
-
     #[test]
     fn terminal_metadata_shape() {
-        let meta = terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
+        let meta =
+            terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
         assert_eq!(meta["terminal_info"]["terminal_id"], "term-1");
         assert_eq!(meta["terminal_output"]["data"], "hello");
         assert_eq!(meta["terminal_exit"]["exit_code"], 0);

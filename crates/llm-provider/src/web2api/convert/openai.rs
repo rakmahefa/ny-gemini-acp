@@ -1,26 +1,15 @@
-//! Format OpenAI `/v1/chat/completions` (refactor M9 §6.4).
-//!
-//! Port de `messages_to_prompt` : system → `[System instruction]`, assistant
-//! avec `tool_calls` → blocs ` ```tool_call `, tool → `[Tool result for <name>]`,
-//! user → texte. `tool_choice` `none` → pas de section tools.
+//! Format OpenAI `/v1/chat/completions`.
 
 use serde_json::{json, Value};
 
-use gemini_acp_config::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind};
-
 use super::common::{tool_call_block, ToolChoice};
+use llm_provider::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind};
 
-/// Instruction de la section tools OpenAI (fidélité vendor) — se termine par
-/// `Available tools:\n`. Le préfixe `[System instruction]:` reste concaténé
-/// par l'appelant.
-const INSTRUCTION_OPENAI: &str = "You have access to tools. To call a tool, respond with:\n\
-```tool_call\n{\"name\": \"func_name\", \"arguments\": {{...}}}\n```\n\
-Only use tool_call blocks when needed.\n\n\
+const INSTRUCTION_OPENAI: &str = "You have access to tools. To call a tool, respond with:\n\\
+```tool_call\n{\"name\": \"func_name\", \"arguments\": {{...}}}\n```\n\\
+Only use tool_call blocks when needed.\n\n\\
 Available tools:\n";
 
-/// Section `# Tool Use` (déclarations de fonctions) — port de
-/// `messages_to_prompt` (bloc tools) : consigne + liste JSON des descripteurs
-/// + contrainte `tool_choice` (port de `_build_tool_choice_instruction`).
 pub fn tools_section(tools: &[Value], tool_choice: &ToolChoice) -> Option<String> {
     let mut defs = Vec::new();
     for tool in tools {
@@ -30,11 +19,7 @@ pub fn tools_section(tools: &[Value], tool_choice: &ToolChoice) -> Option<String
             Some(tool.clone())
         };
         if let Some(f) = fn_ {
-            defs.push(json!({
-                "name": f.get("name").and_then(Value::as_str).unwrap_or(""),
-                "description": f.get("description").and_then(Value::as_str).unwrap_or(""),
-                "parameters": f.get("parameters").cloned().unwrap_or_else(|| json!({})),
-            }));
+            defs.push(json!({"name":f.get("name").and_then(Value::as_str).unwrap_or(""),"description":f.get("description").and_then(Value::as_str).unwrap_or(""),"parameters":f.get("parameters").cloned().unwrap_or_else(||json!({}))}));
         }
     }
     if defs.is_empty() {
@@ -51,26 +36,13 @@ pub fn tools_section(tools: &[Value], tool_choice: &ToolChoice) -> Option<String
     ))
 }
 
-/// Texte d'un message OpenAI `content` : chaîne, ou liste de parts
-/// `{type: text|input_text}` (+ note si une image est présente).
 pub fn content_text(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
         Value::Array(parts) => {
             let mut out = Vec::new();
             for part in parts {
-                match part.get("type").and_then(Value::as_str) {
-                    Some("text") | Some("input_text") => {
-                        if let Some(t) = part.get("text").and_then(Value::as_str) {
-                            out.push(t.to_string());
-                        }
-                    }
-                    Some("image_url") => out.push(
-                        "[Note: Image input not supported by this server; describe the image in text]. "
-                            .to_string(),
-                    ),
-                    _ => {}
-                }
+                match part.get("type").and_then(Value::as_str){Some("text")|Some("input_text")=>{if let Some(t)=part.get("text").and_then(Value::as_str){out.push(t.to_string());}},Some("image_url")=>out.push("[Note: Image input not supported by this server; describe the image in text]. ".to_string()),_=>{}}
             }
             out.join(" ")
         }
@@ -78,10 +50,6 @@ pub fn content_text(content: &Value) -> String {
     }
 }
 
-/// Convertit les messages OpenAI en prompt texte. Port de `messages_to_prompt` :
-/// system → `[System instruction]: …`, assistant avec `tool_calls` → blocs
-/// ` ```tool_call `, tool → `[Tool result for <name>]: <content>`, user → texte.
-/// `tool_choice` `none` → pas de section tools.
 pub fn messages_to_prompt(
     messages: &[Value],
     tools: Option<&[Value]>,
@@ -138,11 +106,11 @@ pub fn messages_to_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn tool_choice_none_occulte_la_section_tools() {
-        let tools = vec![json!({"type": "function", "function": {
-            "name": "lire", "description": "d", "parameters": {}}})];
+        let tools = vec![
+            json!({"type":"function","function":{"name":"lire","description":"d","parameters":{}}}),
+        ];
         let prompt = messages_to_prompt(&[], Some(&tools), &ToolChoice::None);
         assert!(!prompt.contains("You have access to tools"));
         let prompt = messages_to_prompt(&[], Some(&tools), &ToolChoice::Required);

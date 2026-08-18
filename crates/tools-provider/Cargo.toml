@@ -10,10 +10,11 @@ rust-version.workspace = true
 description = "Builtin and MCP tool provider implementations"
 
 [lib]
-name = "gemini_acp_tools"
+name = "tools_provider"
 path = "src/lib.rs"
 
 [dependencies]
+agent-runtime = { path = "../agent-runtime" }
 agent-client-protocol = { workspace = true, features = ["unstable_elicitation"] }
 anyhow = { workspace = true }
 async-trait = { workspace = true }

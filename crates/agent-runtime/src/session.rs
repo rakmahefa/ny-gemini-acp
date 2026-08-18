@@ -1,75 +1,43 @@
-//! Cycle de vie ACP des sessions.
+//! Session lifecycle and persistence.
+use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider, ToolServerConfig};
 use crate::state::{Session, SessionMode, Store};
-use crate::tools::{McpCatalog, McpServerConfig, ToolRegistry};
-use agent_client_protocol::schema::v1::McpServer;
 use anyhow::{bail, Context, Result};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
 pub const SESSION_ID_PREFIX: &str = "sess_";
 pub const MAX_TITLE_LENGTH: usize = 256;
-
 #[derive(Clone)]
 pub struct SessionManager {
     store: Arc<Store>,
-    /// Session-scoped registries own the MCP child processes and remote clients.
-    /// The registry is built completely before it is published, so a failed
-    /// reconfiguration never leaves a partially initialized catalog visible.
-    mcp_tools: Arc<tokio::sync::RwLock<HashMap<String, Arc<ToolRegistry>>>>,
+    tools: SharedToolProvider,
 }
 impl SessionManager {
     pub fn new(store: Arc<Store>) -> Self {
-        Self {
-            store,
-            mcp_tools: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
-        }
+        Self::with_tool_provider(store, Arc::new(NullToolProvider))
+    }
+    pub fn with_tool_provider(store: Arc<Store>, tools: SharedToolProvider) -> Self {
+        Self { store, tools }
     }
     pub fn store(&self) -> &Arc<Store> {
         &self.store
     }
-    pub async fn tools_for(&self, id: &str) -> Option<Arc<ToolRegistry>> {
-        self.mcp_tools.read().await.get(id).cloned()
+    pub async fn tools_for(&self, id: &str) -> Arc<dyn ToolProvider> {
+        self.tools.for_session(id).await
     }
     pub async fn clear_mcp(&self, id: &str) {
-        self.mcp_tools.write().await.remove(id);
+        self.tools.clear_session(id).await;
     }
-
-    /// Configure MCP for one ACP session.
-    ///
-    /// The session workspace is resolved from persisted session state so every
-    /// call site gets identical stdio working-directory semantics. The
-    /// forwarded ACP configuration is normalized and fully discovered before
-    /// replacing the previous registry. Empty configuration explicitly removes
-    /// any prior session override and makes the prompt fall back to global/env
-    /// MCP configuration through the agent's fallback registry.
     pub async fn configure_mcp(
         &self,
         id: &str,
-        servers: Vec<McpServer>,
-    ) -> std::result::Result<(), crate::tools::McpError> {
-        if servers.is_empty() {
-            self.clear_mcp(id).await;
-            return Ok(());
-        }
-
+        servers: Vec<ToolServerConfig>,
+    ) -> Result<(), String> {
         let session = self
             .store
             .get(id)
             .await
-            .ok_or_else(|| crate::tools::McpError::Config(format!("session introuvable: {id}")))?;
-        let configs = McpServerConfig::from_acp_servers(servers, &session.cwd)?;
-        let catalog = McpCatalog::from_configs(configs).await?;
-        let mut registry = ToolRegistry::builtin();
-        registry.register_mcp(Arc::new(catalog));
-        let registry = Arc::new(registry);
-
-        self.mcp_tools
-            .write()
-            .await
-            .insert(id.to_owned(), registry);
-        tracing::info!(session = %id, cwd = %session.cwd.display(), "forwarded MCP configuration activated for session");
-        Ok(())
+            .ok_or_else(|| format!("session introuvable: {id}"))?;
+        self.tools.configure_session(id, session.cwd, servers).await
     }
     pub fn validate_id(id: &str) -> Result<()> {
         let Some(rest) = id.strip_prefix(SESSION_ID_PREFIX) else {
@@ -216,7 +184,6 @@ impl SessionManager {
         Ok(())
     }
 }
-
 #[cfg(test)]
 #[path = "test/session.rs"]
 mod tests;

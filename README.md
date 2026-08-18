@@ -1,14 +1,14 @@
 # ny-gemini-acp
 
-A Rust-based Agent Client Protocol (ACP) agent designed first for **Zed**, with Gemini as the initial LLM provider and MCP as the primary external tool integration.
+A Rust-based Agent Client Protocol (ACP) agent designed first for **Zed**, with **Gemini** as the initial LLM provider and **MCP** as the primary external tool integration.
 
-The project is evolving toward a provider-oriented **agent runtime** architecture. The goal is to keep Zed/ACP compatibility stable while making the agent loop, model integration, tools, sessions, and future providers independently replaceable.
+The project is now organized around a provider-neutral agent runtime. The goal is to keep Zed/ACP compatibility stable while making the agent loop, model integration, tools, sessions, and future providers independently replaceable.
 
 > **Architectural reference:** DeepSeek Harness is used as an architectural reference only. This project does not depend on or attempt to reproduce DeepSeek Harness or Cordis.
 
-## Direction
+## Architecture
 
-The long-term architecture is:
+The repository is intentionally organized around four principal crates:
 
 ```text
                            Zed
@@ -18,7 +18,7 @@ The long-term architecture is:
                     ┌───────▼────────┐
                     │   ACP Adapter  │
                     │                │
-                    │ protocol ↔    │
+                    │ protocol ↔     │
                     │ runtime        │
                     └───────┬────────┘
                             │
@@ -29,6 +29,7 @@ The long-term architecture is:
                     │ Session        │
                     │ Context        │
                     │ Events         │
+                    │ Lifecycle      │
                     │ Policies       │
                     └───────┬────────┘
                             │
@@ -42,134 +43,71 @@ The long-term architecture is:
         └─────────────────┘   └─────────────────┘
 ```
 
-The most important boundary is that **ACP is an adapter, not the agent runtime**.
+The most important invariant is:
+
+> **ACP is an adapter, not the agent runtime.**
 
 Zed remains the primary interactive client. The runtime must not become coupled to Zed-specific presentation or ACP transport details.
 
-## Architectural layers
+## Crate responsibilities
 
-### 1. Zed
+### `acp-adaptor`
 
-Zed is the primary host and user interface.
+The ACP-facing boundary.
 
-Zed owns the editor experience: workspace, transcript presentation, approvals, model/configuration controls, and ACP transport lifecycle.
-
-`ny-gemini-acp` must continue to behave as a first-class ACP agent for Zed.
-
-The architecture must therefore preserve the ACP contract even while the internal runtime evolves.
-
-### 2. ACP Adapter
-
-The ACP Adapter translates between the ACP protocol and the internal Agent Runtime.
-
-Its responsibilities are deliberately narrow:
+Responsibilities:
 
 - ACP `initialize` and capability negotiation;
 - session lifecycle requests;
-- prompt input decoding;
-- ACP permission and interaction requests;
-- conversion of runtime events into ACP session updates;
-- conversion of ACP tool/server configuration into runtime configuration;
+- prompt decoding and ACP presentation;
+- permission and interaction handling;
+- conversion between ACP configuration and runtime configuration;
+- projection of semantic runtime/model events into ACP updates;
 - protocol-level validation and errors.
 
-The ACP Adapter should **not** own the agent loop, model-specific parsing, MCP execution, or persistent business logic.
+It must not own the core agent loop or provider implementations.
 
-The intended flow is:
+### `agent-runtime`
 
-```text
-ACP request
-    ↓
-ACP Adapter
-    ↓
-Runtime command / input
-    ↓
-Agent Runtime
-    ↓
-Runtime events
-    ↓
-ACP Adapter
-    ↓
-ACP notification / response
-```
+The provider-neutral semantic core.
 
-This makes it possible to add another frontend later without changing the core agent loop.
+Responsibilities:
 
-### 3. Agent Runtime
-
-The Agent Runtime is the center of the system.
-
-It owns the semantics of an agent turn independently of ACP or any particular LLM provider.
-
-Core responsibilities include:
-
-- agent loop and multi-step turns;
+- agent turn orchestration;
 - session state and lifecycle;
 - context construction and compaction;
-- canonical model/agent events;
-- tool dispatch;
-- permission policy;
-- cancellation and turn lifecycle;
+- canonical runtime events;
+- cancellation and turn ownership;
 - persistence and replay semantics;
-- provider-independent orchestration.
+- provider-independent tool/model orchestration.
 
-The runtime should evolve toward a clear distinction between **commands/inputs**, **durable session facts**, and **live runtime events**.
+The runtime depends only on provider contracts. It does not directly depend on Gemini, ACP, or the concrete MCP implementation.
 
-A long-term target is a canonical event vocabulary such as:
+### `llm-provider`
 
-```text
-turn started
-user message
-assistant delta
-thinking delta
-model tool call
-tool result
-follow-up request
-turn completed
-turn failed
-turn cancelled
-```
+The model-facing provider boundary.
 
-Provider-specific streams should be normalized into this vocabulary before the ACP layer sees them.
+Gemini is the current implementation.
 
-### 4. LLM Provider
+Provider-specific responsibilities include:
 
-An LLM Provider is the model-facing adapter used by the Agent Runtime.
-
-The first and reference implementation is **Gemini**.
-
-The provider boundary should isolate model-specific behavior such as:
-
-- authentication/session handling;
+- authentication and cookie/session handling;
 - request construction;
 - model selection;
 - thinking/reasoning configuration;
-- streaming transport;
-- provider-specific response parsing;
+- provider-native streaming;
+- provider response parsing;
 - provider-specific tool-call syntax;
 - usage reporting;
 - provider-specific errors.
 
-The runtime should consume a canonical provider interface rather than depending directly on Gemini's wire format.
+Gemini output is normalized into canonical model events before the ACP presentation layer consumes it.
 
-Conceptually:
+### `tools-provider`
 
-```text
-Agent Runtime
-     │
-     ▼
- LLM Provider
-     │
-     ├── Gemini provider (current)
-     └── future providers
-```
+The runtime tool capability implementation.
 
-Gemini remains the baseline during the architectural transition. Adding another provider should eventually require changes primarily inside the provider implementation, not inside session management, MCP, or ACP handlers.
-
-### 5. Tool Provider
-
-A Tool Provider exposes capabilities that the Agent Runtime can make available to the model.
-
-The first categories are:
+Current categories:
 
 ```text
 Tool Provider
@@ -180,15 +118,95 @@ Tool Provider
 │   └── interactive tools
 │
 └── MCP
-    ├── stdio
-    └── HTTP
+    ├── stdio/process transport
+    └── HTTP transport
 ```
 
-Tool providers own tool discovery, schemas, execution, and provider-specific transport details.
+The runtime sees a generic tool-provider contract. MCP-specific configuration and transport implementation remain inside the tool provider boundary.
 
-The Agent Runtime should see a common tool abstraction rather than treating MCP as a special case of the Gemini provider.
+## Canonical model contract
 
-This is particularly important for Zed: the `mcpServers` list received from `session/new` is session configuration and should become a deterministic set of session-scoped tool providers.
+The provider boundary no longer exposes raw string chunks as the semantic LLM contract.
+
+The intended flow is:
+
+```text
+Gemini wire stream
+      ↓
+Gemini provider
+      ↓
+ModelRequest / ModelEvent
+      ↓
+Agent Runtime
+      ↓
+ACP projection
+```
+
+The canonical model stream includes semantic categories such as:
+
+```text
+TextDelta
+ReasoningDelta
+ToolCall
+Usage
+```
+
+This is important because transport chunks are provider implementation details. The runtime should reason about model semantics, not Gemini framing.
+
+A future provider such as OpenAI, DeepSeek, Claude, or another implementation should target the same runtime-facing model contract rather than introduce another provider-shaped stream type.
+
+## Tool configuration boundary
+
+MCP is a **tool capability**, not an LLM feature.
+
+When Zed sends `mcpServers[]` through ACP, the adapter validates and normalizes the protocol representation into the generic runtime `ToolServerConfig` contract. The concrete `tools-provider` then maps that generic configuration to its MCP implementation.
+
+```text
+ACP McpServer
+      ↓
+ACP Adapter normalization
+      ↓
+ToolServerConfig
+      ↓
+Tool Provider
+      ↓
+MCP transport / builtin registry
+```
+
+This keeps MCP types and transport details from leaking into the core runtime contract.
+
+Important invariants:
+
+- preserve the complete Zed-provided server list;
+- preserve deterministic server and tool identity;
+- isolate independent MCP discovery failures where possible;
+- keep transport details out of `agent-runtime`;
+- keep MCP out of the LLM provider boundary;
+- treat tool results as opaque data at the model/protocol presentation boundary.
+
+## Semantic lifecycle
+
+The project already contains semantic stream and lifecycle hardening that is considered foundational architecture, not temporary plumbing.
+
+The runtime tracks canonical lifecycle events independently of ACP presentation, including:
+
+```text
+turn started
+assistant started
+assistant delta
+thinking started / delta / completed
+tool call requested
+permission requested
+tool execution started
+tool result received
+turn completed
+turn failed
+turn cancelled
+```
+
+Tool identities are semantic and scoped to a turn, rather than trusting a provider's stream-local IDs. This prevents provider-local ID reuse from corrupting the runtime lifecycle.
+
+The ACP adapter then projects these semantics into Zed/ACP notifications.
 
 ## Provider independence
 
@@ -212,154 +230,90 @@ Gemini
       └── Tool system
 ```
 
-The second shape creates protocol and provider coupling that becomes increasingly expensive once multiple model providers or frontends are introduced.
+The second shape would couple protocol behavior, agent orchestration, and a single model provider, making future providers unnecessarily expensive to add.
 
-## Canonical model events
+## Session and persistence model
 
-One of the key architectural goals is a provider-neutral event layer.
+Sessions remain a first-class runtime concern.
 
-Gemini currently emits provider-specific streaming data. That data must progressively be normalized before entering the Agent Runtime's semantic lifecycle.
-
-```text
-Gemini stream
-     ↓
-Gemini provider adapter
-     ↓
-Canonical model events
-     ↓
-Agent Runtime
-     ↓
-ACP projection
-```
-
-This keeps model-specific parsing out of the ACP adapter and allows future providers to share the same agent lifecycle.
-
-The existing semantic stream and lifecycle hardening work is therefore considered foundational rather than temporary plumbing.
-
-## Session and context direction
-
-The runtime should progressively move toward an event-oriented session model.
-
-The durable session history should be the source of truth from which the runtime can derive:
+The durable session state is the source of truth for:
 
 - model history;
 - ACP replay;
 - tool history;
 - titles and metadata;
-- usage/telemetry views;
+- turn ownership and cancellation state;
 - future UI projections.
 
-A future session model should distinguish clearly between durable facts and transient streaming notifications.
+The direction is to keep durable facts separate from transient streaming notifications so that replay and live execution remain consistent.
 
-This follows the same useful architectural principle found in DeepSeek Harness: model-visible state should be reconstructable from the session/event history.
+## Migration status
 
-## MCP direction
+The provider-neutral architecture has progressed beyond a physical crate split into actual contract hardening.
 
-MCP is a Tool Provider, not an LLM feature.
+### Completed
 
-When Zed sends:
+- four principal crates established: `acp-adaptor`, `agent-runtime`, `llm-provider`, `tools-provider`;
+- runtime/provider construction is dependency-injected;
+- `agent-runtime` no longer directly depends on ACP or Gemini implementations;
+- generic `LlmProvider` and `ToolProvider` boundaries are established;
+- canonical `ModelRequest` / `ModelEvent` streaming contract is in place;
+- runtime tool-server configuration is generic rather than MCP-named;
+- ACP MCP configuration is normalized at the adapter boundary;
+- historical `gemini_acp_*` compatibility aliases were removed from the ACP adapter;
+- semantic stream and tool lifecycle hardening remains preserved;
+- workspace validation is green with `cargo test --workspace --all-targets`.
 
-```text
-session/new
-  └── mcpServers[]
+## Validation
+
+The baseline validation command for this architecture is:
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace --all-targets
+./scripts/audit-provider-neutral.sh
 ```
 
-the ACP Adapter passes the complete list to the Agent Runtime.
+The provider-neutral audit is intentionally kept in the repository to guard the architecture against accidental re-coupling.
 
-The runtime creates session-scoped MCP providers, discovers their tools, and exposes the resulting definitions through the common Tool Provider interface.
+## Current direction
 
-Important invariants:
+The next architectural work should focus on **consolidation rather than another crate split**.
 
-- preserve the complete Zed-provided server list;
-- preserve deterministic server identity and tool identity;
-- isolate failures between independent MCP servers where possible;
-- keep MCP transport details out of the LLM provider;
-- make tool discovery stable before publishing a session registry;
-- never silently reinterpret MCP results as model protocol.
+Priority areas are:
 
-## Architectural principles
+1. continue moving remaining agent-loop semantics out of the ACP adapter;
+2. strengthen canonical model/tool contracts where generic JSON or provider-shaped data remains;
+3. keep provider-specific parsing and transport code inside provider crates;
+4. preserve semantic lifecycle and replay invariants while adding additional providers;
+5. validate future providers against the same runtime contract rather than branching the runtime around provider-specific behavior.
 
-### Stable outside, evolvable inside
-
-Zed/ACP compatibility is the external contract. Internal implementation may evolve aggressively as long as the observable ACP behavior remains correct.
-
-### Providers are replaceable
-
-Gemini is the baseline provider, not the architecture itself.
-
-### Capabilities are independent
-
-Tools and MCP are capabilities available to the Agent Runtime. They are not properties of a particular model implementation.
-
-### Events carry semantics
-
-Streaming transport chunks are implementation details. The runtime should reason in canonical semantic events.
-
-### Persistence is a first-class concern
-
-Session replay and model context must derive from consistent durable state rather than ad-hoc presentation strings.
-
-### DeepSeek Harness is a reference, not a dependency
-
-We borrow useful ideas such as composable providers, explicit seams, event-driven lifecycle, and separation between the harness and transport adapters. We do not mirror its framework, runtime, or implementation choices.
-
-## Migration strategy
-
-The architecture will be introduced incrementally.
-
-### Phase 1 — Provider boundary
-
-Place the existing Gemini implementation behind an explicit LLM provider interface without changing Zed behavior.
-
-### Phase 2 — Canonical model events
-
-Normalize Gemini streaming output into provider-neutral events. Keep current semantic lifecycle guarantees intact.
-
-### Phase 3 — Tool provider boundary
-
-Unify builtin and MCP tools behind a common capability surface.
-
-### Phase 4 — Runtime extraction
-
-Move turn orchestration, session semantics, context handling, and cancellation toward an ACP-independent Agent Runtime.
-
-### Phase 5 — Additional providers
-
-Only after the provider boundary is stable should additional model providers be introduced.
-
-Gemini remains the **baseline and reference provider throughout these phases**.
+Gemini remains the baseline/reference provider while these boundaries mature.
 
 ## Non-goals
 
-This direction does not currently aim to:
+This architecture does not currently aim to:
 
 - replace Zed;
 - replace ACP;
 - depend on DeepSeek Harness;
 - reproduce Cordis;
-- rewrite the project in TypeScript;
-- introduce multiple LLM providers before the Gemini provider boundary is stable.
+- introduce multiple providers before the provider contracts are stable;
+- move MCP into the LLM provider;
+- make ACP handlers responsible for the core agent loop.
 
 ## Success criteria
 
-The architecture will be considered successful when:
+The architecture is successful when:
 
-1. Zed continues to operate through ACP without regressions.
-2. Gemini remains fully functional through the new provider boundary.
-3. MCP tools are available through the same runtime tool abstraction as builtin tools.
-4. ACP handlers no longer contain core agent-loop logic.
-5. Provider-specific parsing is isolated from the Agent Runtime.
+1. Zed continues to operate through ACP without behavioral regressions.
+2. Gemini remains fully functional through the provider boundary.
+3. Builtin and MCP tools share the same runtime tool abstraction.
+4. ACP handlers contain protocol/presentation concerns rather than the core agent loop.
+5. Provider-specific parsing is isolated from `agent-runtime`.
 6. Session state can be replayed and projected consistently.
 7. Adding a second LLM provider does not require redesigning ACP, sessions, or MCP.
 
-## Current baseline
+## Reference
 
-At the start of this architectural phase:
-
-- **Frontend:** Zed
-- **Protocol:** ACP
-- **Agent runtime:** existing Rust runtime, being progressively extracted and decoupled
-- **LLM provider:** Gemini
-- **Tool providers:** builtin + MCP
-- **Architectural reference:** DeepSeek Harness
-- **Primary objective:** evolve the runtime without breaking Zed compatibility
+DeepSeek Harness is used only as a reference for useful architectural ideas such as explicit seams, composable providers, lifecycle-oriented events, and separation between transport adapters and the agent harness. The implementation and architecture of `ny-gemini-acp` remain independently designed around ACP/Zed compatibility and the Rust workspace.

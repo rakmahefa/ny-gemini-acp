@@ -5,7 +5,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 
-use gemini_acp_runtime::tools::lifecycle::record_partial_output;
+use tools_provider::tools::lifecycle::record_partial_output;
 
 pub const CONTEXT_TOKENS: u64 = 1_000_000;
 
@@ -14,11 +14,26 @@ pub fn usage_update(prompt: &str, assistant: &str) -> UsageUpdate {
     UsageUpdate::new(used, CONTEXT_TOKENS)
 }
 
+/// Emits a non-fatal ACP error chunk from provider-facing turn orchestration.
+pub fn emit_error_chunk(
+    cx: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    message_id: &MessageId,
+    error: &str,
+) {
+    cx.send_notification(SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
+                "\n\n[error] {error}"
+            ))))
+            .message_id(message_id.clone()),
+        ),
+    ))
+    .ok();
+}
+
 /// ACP notification sink for already-normalized assistant text.
-///
-/// Protocol filtering belongs to the streaming boundary in `stream.rs`.
-/// Keeping this function transport-only prevents the notification layer from
-/// silently reparsing or mutating content a second time.
 pub fn notify_text(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -28,9 +43,6 @@ pub fn notify_text(
     if text.is_empty() {
         return Ok(());
     }
-    // The client has now seen this exact text. Keep a turn-local copy so
-    // `session/cancel` can persist already-visible partial output even when
-    // the normal `total_output` finalization path is intentionally skipped.
     record_partial_output(session_id.0.as_ref(), &text);
     cx.send_notification(SessionNotification::new(
         session_id.clone(),

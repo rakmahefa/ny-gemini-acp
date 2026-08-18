@@ -1,37 +1,28 @@
-//! Binaire `gemini-acp` : transport ACP stdio vers l'agent Gemini.
-//!
-//! Responsabilités volontairement minimales :
-//! - initialiser le logging sur stderr ;
-//! - résoudre la configuration ;
-//! - créer le runtime ;
-//! - lancer le transport ACP et gérer le signal d'arrêt.
-
+//! ACP stdio adapter: configuration, provider construction and transport only.
+use acp_adaptor::agent::run_agent;
+use agent_runtime::{AgentRuntime, RuntimeConfig};
 use anyhow::{Context, Result};
-
-use gemini_acp_agent::run_agent;
-use gemini_acp_llm::AgentConfig;
-use gemini_acp_runtime::AgentRuntime;
-
+use llm_provider::{AgentConfig, GeminiProvider};
+use std::sync::Arc;
+use tools_provider::DefaultToolProvider;
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-
     let config = AgentConfig::from_env();
-    let runtime = AgentRuntime::from_config(config).await?;
-
-    tokio::select! {
-        result = run_agent(runtime.state().clone()) => {
-            result.context("transport ACP arrêté avec une erreur")?;
-        }
-        _ = wait_for_shutdown_signal() => {
-            runtime.shutdown().await;
-            tracing::info!("shutdown gracieux terminé");
-        }
-    }
-
+    let llm = Arc::new(GeminiProvider::from_agent_config(&config).await?);
+    let tools = Arc::new(DefaultToolProvider::from_env().await?);
+    let runtime = AgentRuntime::new(
+        RuntimeConfig {
+            data_dir: config.data_dir.clone(),
+            default_model: config.default_model.clone(),
+        },
+        llm,
+        tools,
+    )
+    .await?;
+    tokio::select! {result=run_agent(runtime.state().clone())=>{result.context("transport ACP arrêté avec une erreur")?;}_=wait_for_shutdown_signal()=>{runtime.shutdown().await;tracing::info!("shutdown gracieux terminé")}}
     Ok(())
 }
-
 fn init_tracing() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
@@ -40,39 +31,32 @@ fn init_tracing() {
         )
         .init();
 }
-
 async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-
         let mut sigterm = match signal(SignalKind::terminate()) {
-            Ok(signal) => signal,
+            Ok(s) => s,
             Err(error) => {
-                tracing::error!(%error, "installation du handler SIGTERM impossible");
+                tracing::error!(%error,"installation du handler SIGTERM impossible");
                 return;
             }
         };
         let mut sigint = match signal(SignalKind::interrupt()) {
-            Ok(signal) => signal,
+            Ok(s) => s,
             Err(error) => {
-                tracing::error!(%error, "installation du handler SIGINT impossible");
+                tracing::error!(%error,"installation du handler SIGINT impossible");
                 return;
             }
         };
-
-        tokio::select! {
-            _ = sigterm.recv() => tracing::info!("SIGTERM reçu"),
-            _ = sigint.recv() => tracing::info!("SIGINT reçu"),
-        }
+        tokio::select! {_=sigterm.recv()=>tracing::info!("SIGTERM reçu"),_=sigint.recv()=>tracing::info!("SIGINT reçu")}
     }
-
     #[cfg(not(unix))]
     {
         if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "installation du handler Ctrl-C impossible");
+            tracing::error!(%error,"installation du handler Ctrl-C impossible")
         } else {
-            tracing::info!("Ctrl-C reçu");
+            tracing::info!("Ctrl-C reçu")
         }
     }
 }

@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 
 use super::{
     McpError, CLIENT_NAME, CLIENT_VERSION, LEGACY_MCP_PROTOCOL_VERSION, MAX_MESSAGE_BYTES,
-    META_CLIENT_CAPABILITIES, META_CLIENT_INFO, META_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION,
+    MCP_PROTOCOL_VERSION, META_CLIENT_CAPABILITIES, META_CLIENT_INFO, META_PROTOCOL_VERSION,
 };
 
 #[derive(Debug, Clone)]
@@ -150,10 +150,15 @@ pub(super) fn parse_sse_rpc_response(
     if !data_lines.is_empty() {
         return parse_sse_data(&data_lines, expected_id);
     }
-    Err(McpError::Protocol("SSE response contained no data event".into()))
+    Err(McpError::Protocol(
+        "SSE response contained no data event".into(),
+    ))
 }
 
-fn parse_sse_data(data_lines: &[String], expected_id: Option<u64>) -> Result<RpcResponse, McpError> {
+fn parse_sse_data(
+    data_lines: &[String],
+    expected_id: Option<u64>,
+) -> Result<RpcResponse, McpError> {
     let data = data_lines.join("\n");
     let value: Value = serde_json::from_str(&data)
         .map_err(|error| McpError::Protocol(format!("invalid SSE JSON-RPC data: {error}")))?;
@@ -165,7 +170,9 @@ fn parse_json_rpc_value(value: Value, expected_id: Option<u64>) -> Result<RpcRes
         .as_object()
         .ok_or_else(|| McpError::Protocol("JSON-RPC response is not an object".into()))?;
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-        return Err(McpError::Protocol("JSON-RPC response has invalid jsonrpc version".into()));
+        return Err(McpError::Protocol(
+            "JSON-RPC response has invalid jsonrpc version".into(),
+        ));
     }
     let id = object
         .get("id")
@@ -206,11 +213,18 @@ pub(super) fn validate_custom_headers(headers: &HashMap<String, String>) -> Resu
         "mcp-session-id",
     ];
     for (name, value) in headers {
-        let parsed = HeaderName::from_bytes(name.as_bytes())
-            .map_err(|error| McpError::Config(format!("invalid MCP HTTP header '{name}': {error}")))?;
-        HeaderValue::from_str(value)
-            .map_err(|error| McpError::Config(format!("invalid value for MCP HTTP header '{name}': {error}")))?;
-        if RESERVED.iter().any(|reserved| parsed.as_str().eq_ignore_ascii_case(reserved)) {
+        let parsed = HeaderName::from_bytes(name.as_bytes()).map_err(|error| {
+            McpError::Config(format!("invalid MCP HTTP header '{name}': {error}"))
+        })?;
+        HeaderValue::from_str(value).map_err(|error| {
+            McpError::Config(format!(
+                "invalid value for MCP HTTP header '{name}': {error}"
+            ))
+        })?;
+        if RESERVED
+            .iter()
+            .any(|reserved| parsed.as_str().eq_ignore_ascii_case(reserved))
+        {
             return Err(McpError::Config(format!(
                 "MCP HTTP header '{}' is reserved and cannot be overridden",
                 name
@@ -236,29 +250,37 @@ mod tests {
 
     #[test]
     fn rejects_response_id_mismatch() {
-        let err = parse_json_rpc_response(
-            br#"{"jsonrpc":"2.0","id":2,"result":{}}"#,
-            Some(1),
-        )
-        .unwrap_err();
+        let err = parse_json_rpc_response(br#"{"jsonrpc":"2.0","id":2,"result":{}}"#, Some(1))
+            .unwrap_err();
         assert!(err.to_string().contains("id mismatch"));
     }
 
     #[test]
     fn legacy_initialize_payload_is_not_self_describing() {
         let request = RpcRequest::new(1, "initialize", legacy_initialize_params());
-        let value: Value = serde_json::from_slice(&serialize_request_payload(&request).unwrap()).unwrap();
-        assert_eq!(value["params"]["protocolVersion"], LEGACY_MCP_PROTOCOL_VERSION);
+        let value: Value =
+            serde_json::from_slice(&serialize_request_payload(&request).unwrap()).unwrap();
+        assert_eq!(
+            value["params"]["protocolVersion"],
+            LEGACY_MCP_PROTOCOL_VERSION
+        );
         assert!(value["params"].get("_meta").is_none());
     }
 
     #[test]
     fn request_payload_is_self_describing() {
         let request = RpcRequest::new(1, "tools/list", request_params(json!({})));
-        let value: Value = serde_json::from_slice(&serialize_request_payload(&request).unwrap()).unwrap();
+        let value: Value =
+            serde_json::from_slice(&serialize_request_payload(&request).unwrap()).unwrap();
         assert_eq!(value["jsonrpc"], "2.0");
-        assert_eq!(value["params"]["_meta"][META_PROTOCOL_VERSION], MCP_PROTOCOL_VERSION);
-        assert_eq!(value["params"]["_meta"][META_CLIENT_INFO]["name"], CLIENT_NAME);
+        assert_eq!(
+            value["params"]["_meta"][META_PROTOCOL_VERSION],
+            MCP_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            value["params"]["_meta"][META_CLIENT_INFO]["name"],
+            CLIENT_NAME
+        );
     }
 
     #[test]
