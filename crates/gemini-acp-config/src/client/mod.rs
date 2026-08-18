@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use gemini_acp_llm::{LlmError, LlmProvider, LlmRequest, LlmStream};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -105,6 +106,31 @@ impl Client {
             }
         }
         Ok(out)
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for Client {
+    fn name(&self) -> &'static str {
+        "gemini"
+    }
+
+    async fn stream(&self, request: LlmRequest) -> Result<LlmStream, LlmError> {
+        let receiver = self
+            .stream(&request.prompt, &request.model, request.thinking, &request.refs)
+            .await
+            .map_err(|error| LlmError::Provider(error.to_string()))?;
+        let (tx, mapped) = mpsc::channel(16);
+        tokio::spawn(async move {
+            let mut receiver = receiver;
+            while let Some(item) = receiver.recv().await {
+                let mapped_item = item.map_err(LlmError::Provider);
+                if tx.send(mapped_item).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(LlmStream::new(mapped))
     }
 }
 
