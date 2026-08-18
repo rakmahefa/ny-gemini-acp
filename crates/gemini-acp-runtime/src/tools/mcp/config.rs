@@ -83,12 +83,6 @@ impl McpServerConfig {
     pub fn from_acp(server: McpServer, session_cwd: &Path) -> Result<Self, McpError> {
         match server {
             McpServer::Stdio(server) => {
-                if !server.command.is_absolute() {
-                    return Err(McpError::Config(format!(
-                        "stdio MCP server '{}' command must be an absolute path",
-                        server.name
-                    )));
-                }
                 let command = server
                     .command
                     .to_str()
@@ -99,6 +93,20 @@ impl McpServerConfig {
                         ))
                     })?
                     .to_owned();
+
+                if command.trim().is_empty() {
+                    return Err(McpError::Config(format!(
+                        "stdio MCP server '{}' command is empty",
+                        server.name
+                    )));
+                }
+                if command.chars().any(|ch| ch == '\0' || ch.is_control()) {
+                    return Err(McpError::Config(format!(
+                        "stdio MCP server '{}' command contains control characters",
+                        server.name
+                    )));
+                }
+
                 let mut env = HashMap::new();
                 for variable in server.env {
                     if variable.name.is_empty()
@@ -249,10 +257,35 @@ mod tests {
     }
 
     #[test]
-    fn rejects_relative_stdio_commands_before_spawning() {
+    fn forwards_path_resolved_stdio_command() {
         let server = McpServer::Stdio(McpServerStdio::new("project-tools", "project-mcp"));
+        let config = McpServerConfig::from_acp(server, cwd()).unwrap();
+        assert_eq!(config.command.as_deref(), Some("project-mcp"));
+        assert_eq!(config.cwd.as_deref(), Some(cwd()));
+    }
+
+    #[test]
+    fn forwards_relative_stdio_command() {
+        let server = McpServer::Stdio(McpServerStdio::new("project-tools", "./project-mcp"));
+        let config = McpServerConfig::from_acp(server, cwd()).unwrap();
+        assert_eq!(config.command.as_deref(), Some("./project-mcp"));
+    }
+
+    #[test]
+    fn rejects_empty_stdio_command() {
+        let server = McpServer::Stdio(McpServerStdio::new("project-tools", "   "));
         let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
-        assert!(error.to_string().contains("absolute path"));
+        assert!(error.to_string().contains("command is empty"));
+    }
+
+    #[test]
+    fn rejects_control_characters_in_stdio_command() {
+        let server = McpServer::Stdio(McpServerStdio::new(
+            "project-tools",
+            "project-mcp\u{0007}",
+        ));
+        let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
+        assert!(error.to_string().contains("control characters"));
     }
 
     #[test]
