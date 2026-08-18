@@ -2,12 +2,13 @@
 """Split canonical ACP JSON logs into deterministic, analysis-sized chunks.
 
 The source file remains the canonical evidence. Generated chunks are copies of
-complete top-level JSON events, never line-based fragments of an event.
+complete top-level ACP events, never line-based fragments of an event.
 
-ACP logs can contain raw control characters inside captured tool/output text.
-Python's JSON decoder rejects those by default even though they are valid bytes
-inside the captured log payload. We therefore decode with ``strict=False`` and
-re-serialize the resulting events as canonical JSON.
+The captured logs are not guaranteed to be one strict JSON document: long Zed
+sessions may append multiple JSON arrays/objects to the same markdown artifact,
+and captured tool/output text may contain raw control characters. The parser
+therefore accepts concatenated top-level JSON documents with ``strict=False``
+and flattens arrays while preserving document/event order.
 """
 
 from __future__ import annotations
@@ -15,34 +16,69 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
+
+
+def parse_documents(raw: str, source: Path) -> list[Any]:
+    decoder = json.JSONDecoder(strict=False)
+    pos = 0
+    documents: list[Any] = []
+
+    while pos < len(raw):
+        while pos < len(raw) and raw[pos].isspace():
+            pos += 1
+        if pos >= len(raw):
+            break
+
+        try:
+            value, end = decoder.raw_decode(raw, pos)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"{source} is not parseable as concatenated ACP JSON: "
+                f"line {exc.lineno}, column {exc.colno}, char {exc.pos}: {exc.msg}"
+            ) from exc
+
+        documents.append(value)
+        pos = end
+
+    if not documents:
+        raise ValueError(f"{source} does not contain any JSON document")
+    return documents
+
+
+def parse_events(source: Path) -> tuple[list[Any], int]:
+    raw = source.read_text(encoding="utf-8")
+    documents = parse_documents(raw, source)
+
+    events: list[Any] = []
+    for document in documents:
+        if isinstance(document, list):
+            events.extend(document)
+        else:
+            events.append(document)
+
+    return events, len(documents)
 
 
 def split_log(source: Path, output_dir: Path, events_per_part: int) -> None:
-    raw = source.read_text(encoding="utf-8")
-    try:
-        events = json.loads(raw, strict=False)
-    except json.JSONDecodeError as exc:
-        raise ValueError(
-            f"{source} is not parseable as an ACP JSON array: "
-            f"line {exc.lineno}, column {exc.colno}, char {exc.pos}: {exc.msg}"
-        ) from exc
-
-    if not isinstance(events, list):
-        raise ValueError(f"{source} must contain a top-level JSON array")
     if events_per_part <= 0:
         raise ValueError("events_per_part must be > 0")
+
+    events, document_count = parse_events(source)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     for old in output_dir.glob("part-*.json"):
         old.unlink()
 
     manifest = [
-        f"# Split manifest — {source}",
+        f"# Split manifest — `{source}`",
         "",
-        f"- Source events: {len(events)}",
+        f"- Source JSON documents: {document_count}",
+        f"- Flattened events: {len(events)}",
         f"- Events per part: {events_per_part}",
-        "- Parts contain complete top-level events and preserve event order.",
-        "- Source decoding uses JSON `strict=False` because captured ACP/tool text may contain raw control characters.",
+        "- Parts contain complete top-level events and preserve source order.",
+        "- Parsing uses JSON `strict=False` because captured ACP/tool text may contain raw control characters.",
+        "- Multiple concatenated top-level JSON documents are accepted and flattened.",
         "",
     ]
 
