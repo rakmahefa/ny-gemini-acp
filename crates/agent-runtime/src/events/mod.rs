@@ -9,7 +9,7 @@ mod tool_sink;
 pub use bus::EventBus;
 pub use context::{EventContext, ToolEventContext};
 pub use emitter::TurnEventEmitter;
-pub use event::AcpSemanticEvent;
+pub use event::AcpSemanticEvent as SemanticEvent;
 pub use stream::EventStream;
 
 #[cfg(test)]
