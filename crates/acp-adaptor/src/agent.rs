@@ -3,6 +3,7 @@ use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::{AppState, EncapsError, ToolProvider, TurnManager};
+use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_store = state.store.clone();
@@ -61,13 +62,12 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     fallback_tools
                                 };
                             let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
-                            let interactive =
-                                gemini_acp_tools::tools::interactive::InteractiveContext {
-                                    cx: turn_cx.clone(),
-                                    session_id,
-                                };
+                            let interactive_context = interactive::InteractiveContext {
+                                cx: turn_cx.clone(),
+                                session_id,
+                            };
 
-                            gemini_acp_tools::tools::interactive::scope(interactive, async move {
+                            interactive::scope(interactive_context, async move {
                                 let mut semantic =
                                     TurnEventEmitter::new(events, sid.clone(), turn_id);
                                 semantic.turn_started();
