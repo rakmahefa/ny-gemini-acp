@@ -11,7 +11,7 @@ pub struct LlmRequest {
     pub refs: Vec<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct LlmStream {
     receiver: mpsc::Receiver<Result<String, LlmError>>,
 }
@@ -32,12 +32,6 @@ pub enum LlmError {
     Provider(String),
 }
 
-impl From<anyhow::Error> for LlmError {
-    fn from(error: anyhow::Error) -> Self {
-        Self::Provider(error.to_string())
-    }
-}
-
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -45,8 +39,8 @@ pub trait LlmProvider: Send + Sync {
     async fn stream(&self, request: LlmRequest) -> Result<LlmStream, LlmError>;
 }
 
-impl fmt::Debug for LlmStream {
+impl fmt::Display for LlmStream {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.debug_struct("LlmStream").finish_non_exhaustive()
+        formatter.write_str("<llm stream>")
     }
 }
