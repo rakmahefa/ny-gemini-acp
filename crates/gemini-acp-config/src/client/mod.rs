@@ -115,6 +115,27 @@ impl LlmProvider for Client {
         "gemini"
     }
 
+    fn is_thinking_model(&self, model: &str) -> bool {
+        crate::core::models::resolve(model, &self.inner.config.default_model)
+            .map(|resolved| crate::core::models::is_thinking_mode(resolved.mode))
+            .unwrap_or(false)
+    }
+
+    async fn upload_images(
+        &self,
+        images: &[(String, String)],
+    ) -> Result<Vec<String>, LlmError> {
+        let mut refs = Vec::with_capacity(images.len());
+        for (base64, mime) in images {
+            refs.push(
+                self.upload_image(base64, mime)
+                    .await
+                    .map_err(|error| LlmError::Provider(error.to_string()))?,
+            );
+        }
+        Ok(refs)
+    }
+
     async fn stream(&self, request: LlmRequest) -> Result<LlmStream, LlmError> {
         let receiver = self
             .stream(&request.prompt, &request.model, request.thinking, &request.refs)
