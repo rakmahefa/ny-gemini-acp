@@ -246,7 +246,6 @@ impl McpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::McpTransportKind;
 
     #[test]
