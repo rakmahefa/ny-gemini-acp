@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use llm_provider::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind};
+use crate::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind};
 use super::common::{tool_call_block, ToolChoice};
 
 const INSTRUCTION_OPENAI: &str = "You have access to tools. To call a tool, respond with:\n\\
