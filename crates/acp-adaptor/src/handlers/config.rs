@@ -1,15 +1,9 @@
-//! Handler `session/set_config_option` (refactor M9 §6.1 — extrait de `main.rs`).
-//!
-//! Émet `ConfigOptionUpdate` après mise à jour (refactor M7 §3.6).
-//!
-//! **BUG-03** : utilise `store.update_session` (persistance seule) au lieu
-//! de `store.end_turn` (persistance + libération du verrou busy), pour
-//! éviter de créer une course condition avec un tour actif.
+//! Handler `session/set_config_option`.
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
-use gemini_acp_llm::config::config_options::build_config_options;
+use crate::config::config_options::build_config_options;
 use gemini_acp_runtime::state::Session;
 use gemini_acp_runtime::AppState;
 
@@ -28,7 +22,6 @@ pub async fn handle(
 
     let config_id = req.config_id.0.clone();
     let value = req.value.clone();
-
     let session = match state
         .store
         .update_session(&req.session_id.0, move |s: &mut Session| {
@@ -71,11 +64,9 @@ pub async fn handle(
     };
 
     let options = build_config_options(&session.model, session.think, session.tools_enabled);
-
     cx.send_notification(SessionNotification::new(
         req.session_id.clone(),
         SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options.clone())),
     ))?;
-
     responder.respond(SetSessionConfigOptionResponse::new(options))
 }
