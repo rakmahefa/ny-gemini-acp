@@ -5,7 +5,7 @@ fn test_session() -> Session {
         "sess_test".into(),
         "/home/dev/projet".into(),
         vec!["/home/dev/lib".into()],
-        "gemini-3.6-flash",
+        "test-model",
     )
 }
 
