@@ -1,12 +1,14 @@
 use super::*;
 use std::path::Path;
 
+const TEST_MODEL: &str = "test-model";
+
 #[tokio::test]
 async fn cycle_create_persist_reload() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec!["/other".into()], "gemini-3.6-flash")
+        .create("/tmp".into(), vec!["/other".into()], TEST_MODEL)
         .await
         .unwrap();
     assert!(s.id.starts_with("sess_"));
@@ -30,7 +32,7 @@ async fn annulation_declenche_le_jeton() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let (_, mut rx, _) = store.begin_turn(&s.id).await.unwrap();
@@ -53,7 +55,7 @@ async fn tour_concurrent_renvoie_erreur() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let (_, _, gen) = store.begin_turn(&s.id).await.unwrap();
@@ -74,7 +76,7 @@ async fn cancel_ne_libere_pas_le_verrou_avant_fin_du_tour() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let (session, _, gen) = store.begin_turn(&s.id).await.unwrap();
@@ -107,11 +109,11 @@ async fn cancel_all_declenche_tous_les_jetons_sans_liberer_busy() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s1 = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let s2 = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let (session1, mut rx1, gen1) = store.begin_turn(&s1.id).await.unwrap();
@@ -145,7 +147,7 @@ async fn partial_output_est_persiste_sur_annulation() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
@@ -169,7 +171,7 @@ async fn partial_output_n_est_pas_duplique_sur_fin_normale() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
@@ -195,7 +197,7 @@ async fn snapshot_cree_avant_chaque_tour() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let mut sess = store.get(&s.id).await.unwrap();
@@ -216,7 +218,7 @@ async fn restore_snapshot_remplace_la_session() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let mut sess = store.get(&s.id).await.unwrap();
@@ -239,7 +241,7 @@ async fn prune_snapshots_garde_10_derniers() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     for i in 0..12 {
@@ -258,7 +260,7 @@ async fn list_ignore_les_snapshots() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
+        .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
     let mut sess = store.get(&s.id).await.unwrap();
