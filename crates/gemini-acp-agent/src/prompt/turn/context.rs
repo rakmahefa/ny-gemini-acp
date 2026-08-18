@@ -3,6 +3,7 @@ use agent_client_protocol::schema::v1::{
     ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Client, ConnectionTo};
+use gemini_acp_llm::LlmProvider;
 use gemini_acp_runtime::state::Role;
 
 use gemini_acp_runtime::tools::executor::safe_session_update;
@@ -73,46 +74,56 @@ pub(crate) fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars:
 }
 
 pub(crate) async fn upload_images(
-    client: &gemini_acp_config::client::Client,
+    provider: &dyn LlmProvider,
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     images: &[(String, String)],
 ) -> Result<Vec<String>, ()> {
-    let mut refs = Vec::new();
-    if images.is_empty() {
-        return Ok(refs);
-    }
+    let refs = if images.is_empty() {
+        Vec::new()
+    } else {
+        let total = images.len();
+        let upload_call_id = ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple()));
+        safe_session_update(
+            cx,
+            session_id,
+            SessionUpdate::ToolCall(
+                ToolCall::new(upload_call_id.clone(), format!("Upload {total} image(s) (Scotty)"))
+                    .kind(ToolKind::Fetch)
+                    .status(ToolCallStatus::InProgress),
+            ),
+        );
 
-    let total = images.len();
-    let upload_call_id = ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple()));
-    safe_session_update(
-        cx,
-        session_id,
-        SessionUpdate::ToolCall(
-            ToolCall::new(upload_call_id.clone(), format!("Upload {total} image(s) (Scotty)"))
-                .kind(ToolKind::Fetch)
-                .status(ToolCallStatus::InProgress),
-        ),
-    );
-
-    for (index, (base64, mime)) in images.iter().enumerate() {
-        match client.upload_image(base64, mime).await {
-            Ok(reference) => refs.push(reference),
-            Err(error) => {
+        match provider.upload_images(images).await {
+            Ok(refs) => {
                 let content = vec![ToolCallContent::Content(
                     agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(
-                        TextContent::new(format!(
-                            "Upload image {}/{} échoué: {error:#}",
-                            index + 1,
-                            total
-                        )),
+                        TextContent::new(format!("{total} image(s) uploadée(s) avec succès")),
                     )),
                 )];
                 safe_session_update(
                     cx,
                     session_id,
                     SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                        upload_call_id.clone(),
+                        upload_call_id,
+                        ToolCallUpdateFields::new()
+                            .status(ToolCallStatus::Completed)
+                            .content(content),
+                    )),
+                );
+                refs
+            }
+            Err(error) => {
+                let content = vec![ToolCallContent::Content(
+                    agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(
+                        TextContent::new(format!("Upload image(s) échoué: {error}")),
+                    )),
+                )];
+                safe_session_update(
+                    cx,
+                    session_id,
+                    SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                        upload_call_id,
                         ToolCallUpdateFields::new()
                             .status(ToolCallStatus::Failed)
                             .content(content),
@@ -121,23 +132,7 @@ pub(crate) async fn upload_images(
                 return Err(());
             }
         }
-    }
-
-    let content = vec![ToolCallContent::Content(
-        agent_client_protocol::schema::v1::Content::new(ContentBlock::Text(TextContent::new(
-            format!("{total} image(s) uploadée(s) avec succès"),
-        ))),
-    )];
-    safe_session_update(
-        cx,
-        session_id,
-        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-            upload_call_id,
-            ToolCallUpdateFields::new()
-                .status(ToolCallStatus::Completed)
-                .content(content),
-        )),
-    );
+    };
 
     Ok(refs)
 }
