@@ -1,13 +1,18 @@
 [workspace]
 resolver = "2"
-members = ["crates/gemini-acp-config", "crates/gemini-acp-runtime", "crates/gemini-acp-agent", "crates/gemini-acp-encaps"]
+members = [
+    "crates/acp-adaptor",
+    "crates/agent-runtime",
+    "crates/llm-provider",
+    "crates/tools-provider",
+]
 
 [workspace.package]
 version = "0.2.2"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/rakmahefa/ny-workspace"
-homepage = "https://github.com/rakmahefa/ny-workspace"
+repository = "https://github.com/rakmahefa/ny-gemini-acp"
+homepage = "https://github.com/rakmahefa/ny-gemini-acp"
 authors = ["gemini-acp contributors"]
 rust-version = "1.82"
 

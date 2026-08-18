@@ -1,0 +1,1 @@
+Tool provider crate. Builtin, interactive, sandboxed and MCP-backed tools live here; runtime orchestration remains outside.

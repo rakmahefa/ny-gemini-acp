@@ -1,0 +1,1 @@
+ACP adapter crate. Protocol-facing handlers and transport live here; orchestration belongs to agent-runtime.
