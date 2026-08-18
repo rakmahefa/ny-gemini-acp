@@ -14,8 +14,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use tracing_subscriber::EnvFilter;
 
-use crate::client::{Client, Config as ClientConfig};
-use crate::core::models;
+use llm_provider::client::{Client, Config as ClientConfig};
+use llm_provider::core::models;
 use crate::http::AppState;
 
 #[tokio::main]
