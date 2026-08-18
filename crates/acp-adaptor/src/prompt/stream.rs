@@ -31,7 +31,7 @@ pub struct StreamResult {
     pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
-fn handle_text_delta(
+async fn handle_text_delta(
     text: &str,
     thought_stream: &mut crate::thought::ThoughtStream,
     stream_contract: &mut SemanticStreamContract,
@@ -72,7 +72,16 @@ fn handle_text_delta(
                     semantic.thinking_completed();
                     *thinking_active = false;
                 }
-                let delta = handle_response_chunk(&text, stream_contract, follow_up_stream, assistant, semantic, cx, session_id, message_id)?;
+                let delta = handle_response_chunk(
+                    &text,
+                    stream_contract,
+                    follow_up_stream,
+                    assistant,
+                    semantic,
+                    cx,
+                    session_id,
+                    message_id,
+                )?;
                 tool_calls.extend(delta.tool_calls);
                 interaction_groups.extend(delta.interaction_groups);
             }
@@ -106,7 +115,20 @@ pub async fn consume(
                 let Some(item) = item else { break StreamOutcome::Complete };
                 match item {
                     Ok(ModelEvent::TextDelta(delta)) => {
-                        handle_text_delta(&delta, &mut thought_stream, &mut stream_contract, &mut follow_up_stream, &mut assistant, &mut tool_calls, &mut interaction_groups, &mut thinking_active, semantic, cx, session_id, message_id)?;
+                        handle_text_delta(
+                            &delta,
+                            &mut thought_stream,
+                            &mut stream_contract,
+                            &mut follow_up_stream,
+                            &mut assistant,
+                            &mut tool_calls,
+                            &mut interaction_groups,
+                            &mut thinking_active,
+                            semantic,
+                            cx,
+                            session_id,
+                            message_id,
+                        ).await?;
                     }
                     Ok(ModelEvent::ReasoningDelta(text)) => {
                         if !thinking_active {
@@ -154,7 +176,16 @@ pub async fn consume(
                     semantic.thinking_completed();
                     thinking_active = false;
                 }
-                let delta = handle_response_chunk(&text, &mut stream_contract, &mut follow_up_stream, &mut assistant, semantic, cx, session_id, message_id)?;
+                let delta = handle_response_chunk(
+                    &text,
+                    &mut stream_contract,
+                    &mut follow_up_stream,
+                    &mut assistant,
+                    semantic,
+                    cx,
+                    session_id,
+                    message_id,
+                )?;
                 tool_calls.extend(delta.tool_calls);
                 interaction_groups.extend(delta.interaction_groups);
             }
