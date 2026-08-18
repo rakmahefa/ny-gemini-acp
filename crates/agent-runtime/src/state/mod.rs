@@ -5,11 +5,6 @@ use std::sync::Arc;
 use anyhow::{bail, Result};
 use tokio::sync::{watch, RwLock};
 
-use crate::tools::lifecycle::{
-    begin_partial_output, bind_session_cancellation, take_partial_output,
-    unbind_session_cancellation,
-};
-use crate::tools::ToolCancellation;
 use crate::Cancellation;
 
 mod busy;
@@ -44,10 +39,9 @@ impl Store {
             let gen = entry.generation;
             entry.cancel = Cancellation::new();
             let rx = entry.cancel.subscribe();
-            bind_session_cancellation(id, ToolCancellation::from_receiver(rx.clone()));
-            begin_partial_output(id);
             return Ok((entry.session.clone(), rx, gen));
         }
+
         let session = self
             .read(id)
             .await
@@ -57,8 +51,6 @@ impl Store {
             .map_err(|_| TurnError::AlreadyRunning)?;
         let cancellation = Cancellation::new();
         let rx = cancellation.subscribe();
-        bind_session_cancellation(id, ToolCancellation::from_receiver(rx.clone()));
-        begin_partial_output(id);
         live.insert(
             id.to_string(),
             Live {
@@ -109,12 +101,12 @@ impl Store {
             }
         }
 
-        let partial = take_partial_output(id);
+        let partial = super::turn_support::take_partial_output(id);
         if !partial.trim().is_empty() && matches!(session.messages.last(), Some((Role::User, _))) {
             session.messages.push((Role::Assistant, partial));
         }
 
-        session.updated_at = gemini_acp_config::core::time::now_iso();
+        session.updated_at = crate::time::now_iso();
         session.turn_count += 1;
         if let Some(current) = self.get(id).await {
             if !current.messages.is_empty() {
@@ -130,7 +122,6 @@ impl Store {
             entry.session = session.clone();
             entry.busy = false;
         }
-        unbind_session_cancellation(id);
         self.release_busy(id).await;
         persist_result
     }
@@ -158,8 +149,7 @@ impl Store {
         }
         live.remove(id);
         drop(live);
-        let _ = take_partial_output(id);
-        unbind_session_cancellation(id);
+        let _ = super::turn_support::take_partial_output(id);
         self.release_busy(id).await;
         existed
     }
