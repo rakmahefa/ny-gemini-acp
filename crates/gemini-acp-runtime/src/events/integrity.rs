@@ -27,7 +27,7 @@ pub(super) struct IntegrityError {
 }
 
 impl IntegrityError {
-    fn new(message: impl Into<String>) -> Self {
+    pub(super) fn new(message: impl Into<String>) -> Self {
         Self { message: message.into() }
     }
 }

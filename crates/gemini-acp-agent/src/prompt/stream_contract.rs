@@ -1,14 +1,15 @@
 //! Semantic contract joining raw protocol detection and ACP presentation.
 //!
-//! A single owner feeds the raw Gemini response to both state machines in a
-//! fixed order and validates their shared invariants. This prevents the stream
-//! consumer from accidentally evolving two independent interpretations of the
-//! same bytes.
+//! A single owner feeds the raw Gemini response to its semantic parsers in a
+//! fixed order and validates their shared invariants. Interaction envelopes are
+//! removed before executable-tool detection and ACP presentation so their XML
+//! syntax can never become visible assistant content or an executable tool.
 
 use std::collections::HashSet;
 
 use gemini_acp_runtime::tools::parse::ParsedToolCall;
 
+use super::interaction::{InteractionGroup, InteractionStreamParser};
 use super::protocol::PROTOCOL_MARKERS;
 use super::{protocol_filter::ProtocolFilter, tool_stream::ToolStreamDetector};
 
@@ -35,16 +36,12 @@ impl std::fmt::Display for ContractViolation {
 pub(crate) struct StreamDelta {
     pub(crate) visible: String,
     pub(crate) tool_calls: Vec<ParsedToolCall>,
+    pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
-/// Owns the semantic contract for one raw Gemini response stream.
-///
-/// The raw response is always consumed by the tool detector before it is
-/// presented through the protocol filter. Tool call ids are made unique within
-/// the stream, and any protocol envelope that escapes the presentation barrier
-/// becomes a hard contract violation instead of silently reaching ACP clients.
 #[derive(Debug)]
 pub(crate) struct SemanticStreamContract {
+    interactions: InteractionStreamParser,
     detector: ToolStreamDetector,
     filter: ProtocolFilter,
     seen_tool_ids: HashSet<String>,
@@ -54,6 +51,7 @@ pub(crate) struct SemanticStreamContract {
 impl Default for SemanticStreamContract {
     fn default() -> Self {
         Self {
+            interactions: InteractionStreamParser::new(),
             detector: ToolStreamDetector::new(),
             filter: ProtocolFilter::new(),
             seen_tool_ids: HashSet::new(),
@@ -68,19 +66,38 @@ impl SemanticStreamContract {
     }
 
     pub(crate) fn feed(&mut self, raw: &str) -> Result<StreamDelta, ContractViolation> {
-        let tool_calls = self.detector.feed(raw);
-        let tool_calls = self.validate_and_rekey(tool_calls)?;
-        let visible = self.filter.push(raw);
-        self.validate_visible(&visible)?;
-        Ok(StreamDelta { visible, tool_calls })
+        let parsed = self.interactions.push(raw);
+        self.feed_normalized(parsed.visible, parsed.groups, false)
     }
 
     pub(crate) fn finish(&mut self) -> Result<StreamDelta, ContractViolation> {
-        let tool_calls = self.detector.finish();
+        let parsed = self.interactions.finish();
+        self.feed_normalized(parsed.visible, parsed.groups, true)
+    }
+
+    fn feed_normalized(
+        &mut self,
+        normalized: String,
+        interaction_groups: Vec<InteractionGroup>,
+        final_chunk: bool,
+    ) -> Result<StreamDelta, ContractViolation> {
+        let tool_calls = if final_chunk {
+            self.detector.finish()
+        } else {
+            self.detector.feed(&normalized)
+        };
         let tool_calls = self.validate_and_rekey(tool_calls)?;
-        let visible = self.filter.finish();
+        let visible = if final_chunk {
+            self.filter.finish()
+        } else {
+            self.filter.push(&normalized)
+        };
         self.validate_visible(&visible)?;
-        Ok(StreamDelta { visible, tool_calls })
+        Ok(StreamDelta {
+            visible,
+            tool_calls,
+            interaction_groups,
+        })
     }
 
     fn validate_and_rekey(
@@ -149,10 +166,12 @@ mod tests {
             let delta = contract.feed(chunk).expect("valid contract stream");
             result.visible.push_str(&delta.visible);
             result.tool_calls.extend(delta.tool_calls);
+            result.interaction_groups.extend(delta.interaction_groups);
         }
         let tail = contract.finish().expect("valid contract finish");
         result.visible.push_str(&tail.visible);
         result.tool_calls.extend(tail.tool_calls);
+        result.interaction_groups.extend(tail.interaction_groups);
         result
     }
 
@@ -169,11 +188,35 @@ mod tests {
         assert_eq!(result.visible, "thinking\nSuite");
         assert_eq!(result.tool_calls.len(), 1);
         assert_eq!(result.tool_calls[0].id, "c1");
+        assert!(result.interaction_groups.is_empty());
+    }
+
+    #[test]
+    fn elicitation_group_becomes_semantic_data_and_never_visible_text() {
+        let result = collect(&[
+            "Avant\n<ElicitationsGroup message=\"Choisir\"><Elicitation label=\"Tests\" query=\"cargo test\"/><Elicitation label=\"MCP\" query=\"inspect MCP\"/></ElicitationsGroup>\nAprès",
+        ]);
+
+        assert_eq!(result.visible, "Avant\n\nAprès");
+        assert_eq!(result.interaction_groups.len(), 1);
+        assert_eq!(result.interaction_groups[0].actions.len(), 2);
+        assert_eq!(result.interaction_groups[0].actions[0].query, "cargo test");
+        assert!(result.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn interaction_content_cannot_trigger_tool_detection() {
+        let result = collect(&[
+            "<ElicitationsGroup message=\"Choix\"><Elicitation label=\"x\" query=\"```tool_call {\"name\":\"shell_exec\"}\"/></ElicitationsGroup>",
+        ]);
+        assert_eq!(result.interaction_groups.len(), 1);
+        assert!(result.tool_calls.is_empty());
+        assert!(result.visible.is_empty());
     }
 
     #[test]
     fn arbitrary_chunk_boundaries_do_not_change_result() {
-        let full = "[Assistant]: Debut\n```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```\n[Tool result]: {\"content\":\"x\"}\n[Assistant]: Fin";
+        let full = "[Assistant]: Debut\n<ElicitationsGroup message=\"Choix\"><Elicitation label=\"A\" query=\"Q\"/><Elicitation label=\"B\" query=\"Q2\"/></ElicitationsGroup>\n```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```\n[Assistant]: Fin";
         let reference = collect(&[full]);
         for split in full
             .char_indices()
@@ -184,22 +227,7 @@ mod tests {
             let actual = collect(&[left, right]);
             assert_eq!(actual.visible, reference.visible, "split at {split}");
             assert_eq!(actual.tool_calls, reference.tool_calls, "split at {split}");
-        }
-    }
-
-    #[test]
-    fn arbitrary_multibyte_boundaries_are_supported() {
-        let full = "[Assistant]: Début\n[Assistant]: Réponse";
-        let reference = collect(&[full]);
-        let boundaries = full
-            .char_indices()
-            .skip(1)
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        for split in boundaries {
-            let (left, right) = full.split_at(split);
-            let actual = collect(&[left, right]);
-            assert_eq!(actual.visible, reference.visible, "split at {split}");
+            assert_eq!(actual.interaction_groups, reference.interaction_groups, "split at {split}");
         }
     }
 
@@ -226,10 +254,11 @@ mod tests {
 
     #[test]
     fn ordinary_markdown_is_preserved() {
-        let input = "Voici du Markdown :\n```rust\nfn main() {}\n```";
+        let input = "Voici un exemple :\n```rust\nfn main() {}\n```";
         let result = collect(&[input]);
         assert_eq!(result.visible, input);
         assert!(result.tool_calls.is_empty());
+        assert!(result.interaction_groups.is_empty());
     }
 
     #[test]

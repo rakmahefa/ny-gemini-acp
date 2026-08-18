@@ -1,0 +1,2229 @@
+[
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "66ffe5e3-d4f9-458f-a971-f4763c78b42b",
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "toolCall": {
+        "toolCallId": "gemini_call_2",
+        "kind": "edit",
+        "status": "pending",
+        "title": "Write test_tool_result.txt",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "claudeCode": {
+            "toolName": "file_write",
+            "permission": {
+              "kind": "write",
+              "risk": "medium",
+              "warnings": []
+            }
+          }
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_once",
+          "name": "Autoriser cette fois",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow_always",
+          "name": "Toujours autoriser",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject_once",
+          "name": "Refuser",
+          "kind": "reject_once"
+        },
+        {
+          "optionId": "reject_always",
+          "name": "Toujours refuser",
+          "kind": "reject_always"
+        }
+      ],
+      "_meta": {
+        "claudeCode": {
+          "toolName": "file_write",
+          "permission": {
+            "kind": "write",
+            "risk": "medium",
+            "warnings": []
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "66ffe5e3-d4f9-458f-a971-f4763c78b42b",
+    "method": "session/request_permission",
+    "params": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_once"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_2",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_write"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_2",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n🟢 completed  ·  🔐 permission  ·  ⚠️ medium\n\n**Output**\n```text\nFichier écrit: /run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_tool_result.txt\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_tool_result.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 3
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_write"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_call_3",
+        "title": "Write test_backticks.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n⏳ pending  ·  🔐 permission  ·  ⚠️ medium\n\n**Input**\n```text\ntest_backticks.txt  ·  3 chars\n```"
+            }
+          },
+          {
+            "type": "diff",
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_backticks.txt",
+            "newText": "```"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_backticks.txt"
+          }
+        ],
+        "rawInput": {
+          "content": "```",
+          "path": "test_backticks.txt"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Write test_backticks.txt"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:06.805160Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m147\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_runtime::tools::executor::permission\u001b[0m\u001b[2m:\u001b[0m envoi session/request_permission \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mfile_write \u001b[3mkind\u001b[0m\u001b[2m=\u001b[0mWrite \u001b[3mrisk\u001b[0m\u001b[2m=\u001b[0mmedium \u001b[3msummary\u001b[0m\u001b[2m=\u001b[0mWrite test_backticks.txt \u001b[3mdetail\u001b[0m\u001b[2m=\u001b[0mWrite test_backticks.txt"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_3",
+        "status": "pending",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "permission",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_write"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "⚠️ medium \u001b[3mwarnings\u001b[0m\u001b[2m=\u001b[0m[]"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "38d9fe5b-92d0-444e-8942-8f1afabf2050",
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "toolCall": {
+        "toolCallId": "gemini_call_3",
+        "kind": "edit",
+        "status": "pending",
+        "title": "Write test_backticks.txt",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "claudeCode": {
+            "toolName": "file_write",
+            "permission": {
+              "kind": "write",
+              "risk": "medium",
+              "warnings": []
+            }
+          }
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_once",
+          "name": "Autoriser cette fois",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow_always",
+          "name": "Toujours autoriser",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject_once",
+          "name": "Refuser",
+          "kind": "reject_once"
+        },
+        {
+          "optionId": "reject_always",
+          "name": "Toujours refuser",
+          "kind": "reject_always"
+        }
+      ],
+      "_meta": {
+        "claudeCode": {
+          "toolName": "file_write",
+          "permission": {
+            "kind": "write",
+            "risk": "medium",
+            "warnings": []
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "38d9fe5b-92d0-444e-8942-8f1afabf2050",
+    "method": "session/request_permission",
+    "params": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_once"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_3",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_write"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_3",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n🟢 completed  ·  🔐 permission  ·  ⚠️ medium\n\n**Output**\n```text\nFichier écrit: /run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_backticks.txt\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_backticks.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 3
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_write"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " maintenant lire ces trois fichiers en parallèle avec `file_read` afin de comparer"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " leurs retours.\n\n"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:10.147056Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mgemini_acp_agent::prompt::stream_contract\u001b[0m\u001b[2m:\u001b[0m rekeying duplicate streamed tool call id \u001b[3moriginal_id\u001b[0m\u001b[2m=\u001b[0mgemini_call_0 \u001b[3mreplacement_id\u001b[0m\u001b[2m=\u001b[0mgemini_stream_call_0 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mfile_read"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:11.273432Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m147\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_agent::prompt::stream_contract\u001b[0m\u001b[2m:\u001b[0m rekeying duplicate streamed tool call id \u001b[3moriginal_id\u001b[0m\u001b[2m=\u001b[0mgemini_call_0 \u001b[3mreplacement_id\u001b[0m\u001b[2m=\u001b[0mgemini_stream_call_1 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mfile_read"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:11.273459Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m147\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_agent::prompt::turn::rounds\u001b[0m\u001b[2m:\u001b[0m tool calls détectés — exécution via ToolExecutor \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mround\u001b[0m\u001b[2m=\u001b[0m2 \u001b[3mtool_count\u001b[0m\u001b[2m=\u001b[0m3"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:11.273541Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m147\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_fe121b5e675d4f26873e643490a3e9bc \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool call gemini_call_0 was already requested"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:11.273565Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m147\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_fe121b5e675d4f26873e643490a3e9bc \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool_execution_started for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_call_0",
+        "title": "Read test_empty.txt (1-500)",
+        "kind": "read",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\ntest_empty.txt  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_empty.txt",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "path": "test_empty.txt"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Read test_empty.txt (1-500)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T06:12:11.273886Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_888160aed29a462c81e78df884868492 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_fe121b5e675d4f26873e643490a3e9bc \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool_result_received for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_empty.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_stream_call_0",
+        "title": "Read test_tool_result.txt (1-500)",
+        "kind": "read",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\ntest_tool_result.txt  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_tool_result.txt",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "path": "test_tool_result.txt"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Read test_tool_result.txt (1-500)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_0",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t[Tool result]:\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_tool_result.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_stream_call_1",
+        "title": "Read test_backticks.txt (1-500)",
+        "kind": "read",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\ntest_backticks.txt  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_backticks.txt",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "path": "test_backticks.txt"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Read test_backticks.txt (1-500)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_1",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_1",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t```\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/test_backticks.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Les trois"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " fichiers ont été lus. Voici la comparaison des résultats obtenus via l'outil `file"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "_read` :\n\n* **Fichier vide (`test_empty.txt`)** : \n  L'outil retourne une chaîne de"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " caractères entièrement vide (`\"\"`). Aucun contenu ni saut de ligne n'est présent.\n* **Fichier avec `[Tool result]:"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "` (`test_tool_result.txt`)** : \n  L'outil retourne exactement la chaîne brute `[Tool result]:`."
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Bien que ce texte corresponde au format d'en-tête de retour d'outil dans l'environnement, il"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " est traité comme du texte brut dans le contenu du fichier.\n* **Fichier avec "
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "``` (`test_backticks.txt`)** : \n  L'outil retourne la chaîne brute ```. Les trois backticks sont lus tels quels sans provoquer"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " de problème de fermeture de bloc Markdown lors de l'extraction par l'outil.\n\n**Résumé des résultats :**\n\n| F"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ichier | Contenu du fichier | Résultat de `file_read` |\n| :--- | :--- | :--- |\n|"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `test_empty.txt` | *(vide)* | `\"\"` |\n| `test_tool_result.txt"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "` | `[Tool result]:` | `\"[Tool result]:\"` |\n| `test_backticks.txt` |"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " "
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "```` ``` ```` | `\"` ``` `\"` |"
+        },
+        "messageId": "msg_ec37350e146940ca906c3dd12d0bc6cb"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_888160aed29a462c81e78df884868492",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 3332,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "049c931e-87af-46fc-b967-a9242420de36",
+    "method": "session/prompt",
+    "params": {
+      "stopReason": "end_turn"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "b8dfb36c-8598-4fc6-9d1d-f07bb7e8579e",
+    "method": "initialize",
+    "params": {
+      "protocolVersion": 1,
+      "clientCapabilities": {
+        "fs": {
+          "readTextFile": true,
+          "writeTextFile": true
+        },
+        "terminal": true,
+        "session": {
+          "configOptions": {
+            "boolean": {}
+          }
+        },
+        "auth": {
+          "terminal": true
+        },
+        "elicitation": {
+          "form": {},
+          "url": {}
+        },
+        "_meta": {
+          "terminal_output": true,
+          "terminal-auth": true
+        }
+      },
+      "clientInfo": {
+        "name": "zed",
+        "title": "Zed",
+        "version": "1.13.2+stable"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "b8dfb36c-8598-4fc6-9d1d-f07bb7e8579e",
+    "method": "initialize",
+    "params": {
+      "protocolVersion": 1,
+      "agentCapabilities": {
+        "loadSession": true,
+        "promptCapabilities": {
+          "image": false,
+          "audio": false,
+          "embeddedContext": false
+        },
+        "mcpCapabilities": {
+          "http": false,
+          "sse": false
+        },
+        "sessionCapabilities": {
+          "list": {},
+          "delete": {},
+          "fork": {},
+          "resume": {},
+          "close": {}
+        },
+        "auth": {}
+      },
+      "authMethods": [],
+      "agentInfo": {
+        "name": "gemini-acp",
+        "title": "Gemini (Web)",
+        "version": "0.2.2"
+      }
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "2722fbdb-8a42-4e7c-a110-013a2ca9b83a",
+    "method": "session/load",
+    "params": {
+      "mcpServers": [
+        {
+          "name": "mcp-libre",
+          "command": "uv",
+          "args": [
+            "run",
+            "--directory",
+            "/home/neko/Documents/GD-IGP/mcp-libre",
+            "python",
+            "src/main.py"
+          ],
+          "env": []
+        }
+      ],
+      "cwd": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace",
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "81aa4385-ed95-406e-8b58-44c8613ce114",
+    "method": "session/new",
+    "params": {
+      "cwd": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace",
+      "mcpServers": [
+        {
+          "name": "mcp-libre",
+          "command": "uv",
+          "args": [
+            "run",
+            "--directory",
+            "/home/neko/Documents/GD-IGP/mcp-libre",
+            "python",
+            "src/main.py"
+          ],
+          "env": []
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:50:31.398013Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[1mconnection\u001b[0m\u001b[1m{\u001b[0m\u001b[3mname\u001b[0m\u001b[2m=\u001b[0m\"gemini-acp\"\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_agent::handlers::session\u001b[0m\u001b[2m:\u001b[0m session/new received mcp_servers, but Gemini ACP does not wire them yet \u001b[3mcount\u001b[0m\u001b[2m=\u001b[0m1"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Réponds exactement : Bonjour"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Réponds exactement : Bonjour"
+        },
+        "messageId": "msg_0"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Bonjour"
+        },
+        "messageId": "msg_1"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Réponds avec 5 lignes numérotées."
+        },
+        "messageId": "msg_2"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "1. Ligne 1\n2. Ligne 2\n3. Ligne 3\n4. Ligne 4\n5. Ligne 5"
+        },
+        "messageId": "msg_3"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Réponds avec du Markdown et un bloc ```rust ... ```."
+        },
+        "messageId": "msg_4"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Voici un exemple de code Rust basique :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```"
+        },
+        "messageId": "msg_5"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Dis-moi : \"bonjour\", 'salut', …, é, ç, 日本語"
+        },
+        "messageId": "msg_6"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "\"bonjour\", 'salut', …, é, ç, 日本語"
+        },
+        "messageId": "msg_7"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Ne fais aucun outil, réponds simplement OK."
+        },
+        "messageId": "msg_8"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "OK"
+        },
+        "messageId": "msg_9"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Liste les fichiers du projet."
+        },
+        "messageId": "msg_10"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais lister les fichiers présents dans le répertoire de travail actuel pour vous montrer le contenu du projet."
+        },
+        "messageId": "msg_11"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_0",
+        "title": "Find paths `**/*`",
+        "kind": "search",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**🧭 Glob**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\npattern `**/*`  ·  path .  ·  max 100\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/."
+          }
+        ],
+        "rawInput": {
+          "pattern": "**/*"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**🧭 Glob**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n[Tool result]: {\"tool\":\"glob\",\"content\":\"Aucun chemin correspondant.\"}\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/[Tool result]: {\"tool\":\"glob\",\"content\":\"Aucun chemin correspondant.\"}"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais vérifier le contenu du répertoire courant en listant les fichiers et dossiers avec la commande `shell_exec`."
+        },
+        "messageId": "msg_13"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_1",
+        "title": "ls -la",
+        "kind": "execute",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n⏳ pending  ·  🔐 permission  ·  ✅ low\n\n**Input**\n```text\nls -la\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "command": "ls -la"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_1",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n🟢 completed  ·  🔐 permission  ·  ✅ low\n\n**Output**\n```text\n[Tool result]: {\"tool\":\"shell_exec\",\"content\":\"total 8\\ndrwxr-xr-x 2 neko neko 4096 Aog 17 23:42 .\\ndrwxr-xr-x 7 neko neko 4096 Aog 17 14:14 ..\\n\\n\"}\n```"
+            }
+          }
+        ],
+        "locations": []
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Le répertoire courant (`/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace`) est totalement vide. Aucun fichier ni dossier n'est présent pour le moment."
+        },
+        "messageId": "msg_15"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "cree un fichier qui contenant du Markdown, des quotes et des ``` si possible"
+        },
+        "messageId": "msg_16"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais créer un fichier Markdown nommé `example.md` contenant du Markdown standard, des guillemets/quotes, et des blocs de code avec triples backticks."
+        },
+        "messageId": "msg_17"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_2",
+        "title": "Write example.md",
+        "kind": "edit",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n⏳ pending  ·  🔐 permission  ·  ⚠️ medium\n\n**Input**\n```text\nexample.md  ·  677 chars\n```"
+            }
+          },
+          {
+            "type": "diff",
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md",
+            "oldText": "# Exemple de document Markdown\n\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n\n## Citation (Quote)\n\n> \"La simplicité est la sophistication suprême.\"\n> — Leonardo da Vinci\n\n## Exemples de guillemets\n\n- Guillemets simples : 'exemple'\n- Guillemets doubles : \"exemple\"\n- Guillemets français : « exemple »\n\n## Blocs de code (Code Blocks)\n\nVoici un exemple de code Python :\n\n```python\ndef saluer(nom: str) -> None:\n    \"\"\"Affiche un message de salutation.\"\"\"\n    print(f\"Bonjour, {nom} !\")\n\nif __name__ == \"__main__\":\n    saluer(\"Monde\")\n```\n\nEt un exemple en Rust :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```\n",
+            "newText": "# Exemple de document Markdown\n\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n\n## Citation (Quote)\n\n> \"La simplicité est la sophistication suprême.\"\n> — Leonardo da Vinci\n\n## Exemples de guillemets\n\n- Guillemets simples : 'exemple'\n- Guillemets doubles : \"exemple\"\n- Guillemets français : « exemple »\n\n## Blocs de code (Code Blocks)\n\nVoici un exemple de code Python :\n\n```python\ndef saluer(nom: str) -> None:\n    \"\"\"Affiche un message de salutation.\"\"\"\n    print(f\"Bonjour, {nom} !\")\n\nif __name__ == \"__main__\":\n    saluer(\"Monde\")\n```\n\nEt un exemple en Rust :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```\n"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md"
+          }
+        ],
+        "rawInput": {
+          "content": "# Exemple de document Markdown\n\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n\n## Citation (Quote)\n\n> \"La simplicité est la sophistication suprême.\"\n> — Leonardo da Vinci\n\n## Exemples de guillemets\n\n- Guillemets simples : 'exemple'\n- Guillemets doubles : \"exemple\"\n- Guillemets français : « exemple »\n\n## Blocs de code (Code Blocks)\n\nVoici un exemple de code Python :\n\n```python\ndef saluer(nom: str) -> None:\n    \"\"\"Affiche un message de salutation.\"\"\"\n    print(f\"Bonjour, {nom} !\")\n\nif __name__ == \"__main__\":\n    saluer(\"Monde\")\n```\n\nEt un exemple en Rust :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```\n",
+          "path": "example.md"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_2",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n🟢 completed  ·  🔐 permission  ·  ⚠️ medium\n\n**Output**\n```text\n[Tool result]: {\"tool\":\"file_write\",\"content\":\"Fichier écrit: /run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md\"}\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Le fichier `example.md` a été créé avec succès.\n\n**Fichier créé :** `example.md`\n**Contenu :**\n```markdown\n# Exemple de document Markdown\n\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n\n## Citation (Quote)\n\n> \"La simplicité est la sophistication suprême.\"\n> — Leonardo da Vinci\n\n## Exemples de guillemets\n\n- Guillemets simples : 'exemple'\n- Guillemets doubles : \"exemple\"\n- Guillemets français : « exemple »\n\n## Blocs de code (Code Blocks)\n\nVoici un exemple de code Python :\n\n```python\ndef saluer(nom: str) -> None:\n    \"\"\"Affiche un message de salutation.\"\"\"\n    print(f\"Bonjour, {nom} !\")\n\nif __name__ == \"__main__\":\n    saluer(\"Monde\")\n```\n\nEt un exemple en Rust :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```\n```"
+        },
+        "messageId": "msg_19"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "lis un fichier contenant du Markdown, des quotes et des ``` si possible"
+        },
+        "messageId": "msg_20"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais lire le fichier `example.md` que nous venons de créer pour afficher son contenu exact."
+        },
+        "messageId": "msg_21"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_3",
+        "title": "Read example.md (1-500)",
+        "kind": "read",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\nexample.md  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "limit": 500,
+          "offset": 1,
+          "path": "example.md"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_3",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t[Tool result]: {\"tool\":\"file_read\",\"content\":\"# Exemple de document Markdown\\n\\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\\n\\n## Citation (Quote)\\n\\n> \\\"La simplicité est la sophistication suprême.\\\"\\n> — Leonardo da Vinci\\n\\n## Exemples de guillemets\\n\\n- Guillemets simples : 'exemple'\\n- Guillemets doubles : \\\"exemple\\\"\\n- Guillemets français : « exemple »\\n\\n## Blocs de code (Code Blocks)\\n\\nVoici un exemple de code Python :\\n\\n```python\\ndef saluer(nom: str) -> None:\\n    \\\"\\\"\\\"Affiche un message de salutation.\\\"\\\"\\\"\\n    print(f\\\"Bonjour, {nom} !\\\")\\n\\nif __name__ == \\\"__main__\\\":\\n    saluer(\\\"Monde\\\")\\n```\\n\\nEt un exemple en Rust :\\n\\n```rust\\nfn main() {\\n    println!(\\\"Hello, World!\\\");\\n}\\n```\"}\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Voici le contenu lu depuis le fichier `example.md` (lignes 1 à 33) :\n\n```markdown\n# Exemple de document Markdown\n\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n\n## Citation (Quote)\n\n> \"La simplicité est la sophistication suprême.\"\n> — Leonardo da Vinci\n\n## Exemples de guillemets\n\n- Guillemets simples : 'exemple'\n- Guillemets doubles : \"exemple\"\n- Guillemets français : « exemple »\n\n## Blocs de code (Code Blocks)\n\nVoici un exemple de code Python :\n\n```python\ndef saluer(nom: str) -> None:\n    \"\"\"Affiche un message de salutation.\"\"\"\n    print(f\"Bonjour, {nom} !\")\n\nif __name__ == \"__main__\":\n    saluer(\"Monde\")\n```\n\nEt un exemple en Rust :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```\n```"
+        },
+        "messageId": "msg_23"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_4",
+        "title": "Follow-up · Ajouter un script d'exécution pour tester les extraits de code",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**↪ Follow-up**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Content**\n```text\nAjouter un script d'exécution pour tester les extraits de code\n→ Ajoute un script Python ou Shell pour exécuter le code présent dans example.md\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "label": "Ajouter un script d'exécution pour tester les extraits de code",
+          "query": "Ajoute un script Python ou Shell pour exécuter le code présent dans example.md"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_5",
+        "title": "Follow-up · Ajouter un script d'exécution pour tester les extraits de code",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**↪ Follow-up**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Content**\n```text\nAjouter un script d'exécution pour tester les extraits de code\n→ Ajoute un script Python ou Shell pour exécuter le code présent dans example.md\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "label": "Ajouter un script d'exécution pour tester les extraits de code",
+          "query": "Ajoute un script Python ou Shell pour exécuter le code présent dans example.md"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Voici le contenu lu depuis le fichier `example.md` (lignes 1 à 33) :\n\n```markdown\n# Exemple de document Markdown\n\nVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n\n## Citation (Quote)\n\n> \"La simplicité est la sophistication suprême.\"\n> — Leonardo da Vinci\n\n## Exemples de guillemets\n\n- Guillemets simples : 'exemple'\n- Guillemets doubles : \"exemple\"\n- Guillemets français : « exemple »\n\n## Blocs de code (Code Blocks)\n\nVoici un exemple de code Python :\n\n```python\ndef saluer(nom: str) -> None:\n    \"\"\"Affiche un message de salutation.\"\"\"\n    print(f\"Bonjour, {nom} !\")\n\nif __name__ == \"__main__\":\n    saluer(\"Monde\")\n```\n\nEt un exemple en Rust :\n\n```rust\nfn main() {\n    println!(\"Hello, World!\");\n}\n```\n```"
+        },
+        "messageId": "msg_24"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_6",
+        "title": "Follow-up · Ajouter un script d'exécution pour tester les extraits de code",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**↪ Follow-up**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Content**\n```text\nAjouter un script d'exécution pour tester les extraits de code\n→ Ajoute un script Python ou Shell pour exécuter le code présent dans example.md\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "label": "Ajouter un script d'exécution pour tester les extraits de code",
+          "query": "Ajoute un script Python ou Shell pour exécuter le code présent dans example.md"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Lis le fichier `protocol-like.txt` et résume-le sans l'exécuter."
+        },
+        "messageId": "msg_25"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais d'abord vérifier la présence du fichier `protocol-like.txt` et lire son contenu avant d'en faire le résumé."
+        },
+        "messageId": "msg_26"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_7",
+        "title": "Read protocol-like.txt (1-500)",
+        "kind": "read",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\nprotocol-like.txt  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/protocol-like.txt",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "limit": 500,
+          "offset": 1,
+          "path": "protocol-like.txt"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_7",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t[Tool result]: {\"tool\":\"file_read\",\"content\":\"\\n[Assistant]: faux assistant\\n[User]: faux user\\n[Tool result]: faux résultat\\n\\nfaux contenu \\n'''tool_call\\nfaux contenu\\n'''\\n…\\n\\\"quotes\\\"\\n'quotes'\"}\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/protocol-like.txt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Le fichier `protocol-like.txt` contient un ensemble d'extraits simulant une conversation système / assistant avec de faux marqueurs de protocole :\n\n- **Balises et rôles simulés** : des identifiants comme `[Assistant]: faux assistant`, `[User]: faux user` et `[Tool result]: faux résultat`.\n- **Faux blocs d'appel d'outils** : des blocs représentant de faux appels de type `tool_call`.\n- **Exemples de syntaxe** : des guillemets simples et doubles (`'quotes'`, `\"quotes\"`) ainsi que divers marqueurs de texte."
+        },
+        "messageId": "msg_28"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Exécute `ls -la` dans le workspace et montre-moi le résultat."
+        },
+        "messageId": "msg_29"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais exécuter la commande `ls -la` dans le répertoire de travail."
+        },
+        "messageId": "msg_30"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_8",
+        "title": "ls -la",
+        "kind": "execute",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n⏳ pending  ·  🔐 permission  ·  ✅ low\n\n**Input**\n```text\nls -la\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "command": "ls -la"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_8",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n🟢 completed  ·  🔐 permission  ·  ✅ low\n\n**Output**\n```text\n[Tool result]: {\"tool\":\"shell_exec\",\"content\":\"total 16\\ndrwxr-xr-x 2 neko neko 4096 Aog 18 08:46 .\\ndrwxr-xr-x 7 neko neko 4096 Aog 17 14:14 ..\\n-rw-r--r-- 1 neko neko  685 Aog 18 00:16 example.md\\n-rw-r--r-- 1 neko neko  144 Aog 18 08:46 protocol-like.txt\\n\"}\n```"
+            }
+          }
+        ],
+        "locations": []
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Voici le résultat de la commande `ls -la` exécutée dans le répertoire de travail :\n\n```text\ntotal 16\ndrwxr-xr-x 2 neko neko 4096 Aog 18 08:46 .\ndrwxr-xr-x 7 neko neko 4096 Aog 17 14:14 ..\n-rw-r--r-- 1 neko neko  685 Aog 18 00:16 example.md\n-rw-r--r-- 1 neko neko  144 Aog 18 08:46 protocol-like.txt\n```"
+        },
+        "messageId": "msg_32"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Crée `permission-test.txt` contenant exactement `permission ok`."
+        },
+        "messageId": "msg_33"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais écrire le texte `permission ok` dans le fichier `permission-test.txt`."
+        },
+        "messageId": "msg_34"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_9",
+        "title": "Write permission-test.txt",
+        "kind": "edit",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n⏳ pending  ·  🔐 permission  ·  ⚠️ medium\n\n**Input**\n```text\npermission-test.txt  ·  13 chars\n```"
+            }
+          },
+          {
+            "type": "diff",
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/permission-test.txt",
+            "oldText": "permission ok",
+            "newText": "permission ok"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/permission-test.txt"
+          }
+        ],
+        "rawInput": {
+          "content": "permission ok",
+          "path": "permission-test.txt"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_9",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📝 File Write**\n🟢 completed  ·  🔐 permission  ·  ⚠️ medium\n\n**Output**\n```text\n[Tool result]: {\"tool\":\"file_write\",\"content\":\"Fichier écrit: /run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/permission-test.txt\"}\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/permission-test.txt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Le fichier `permission-test.txt` a été créé avec succès.\n\n**Fichier créé :** `permission-test.txt`\n**Contenu :**\n```text\npermission ok\n```"
+        },
+        "messageId": "msg_36"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Exécute `printf 'should not run'` dans le shell"
+        },
+        "messageId": "msg_37"
+      }
+    }
+  }
+]

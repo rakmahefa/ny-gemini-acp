@@ -1,0 +1,2686 @@
+[
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais exécuter la commande `printf 'should not run'` dans le shell."
+        },
+        "messageId": "msg_38"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "replay_call_10",
+        "title": "printf 'should not run'",
+        "kind": "execute",
+        "status": "failed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n⏳ pending  ·  🔐 permission  ·  ✅ low\n\n**Input**\n```text\nprintf 'should not run'\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "command": "printf 'should not run'"
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "replay_call_10",
+        "status": "failed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n🔴 failed  ·  🔐 permission  ·  ✅ low\n\n**Output**\n```text\n⚠️\n[Tool result]: {\"tool\":\"shell_exec\",\"content\":\"execute (printf 'should not run') refusé par l'utilisateur.\"}\n```"
+            }
+          }
+        ],
+        "locations": []
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "La commande `printf 'should not run'` n'a pas pu être exécutée car elle a été refusée par l'utilisateur.\n\nSi vous souhaitez exécuter une autre commande ou continuer, faites-le moi savoir !"
+        },
+        "messageId": "msg_40"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Rappelle-moi exactement ce que tu viens de faire dans cette session"
+        },
+        "messageId": "msg_41"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Voici un résumé chronologique des actions effectuées durant cette session :\n\n* **Exploration initiale du répertoire :** Exécution de la commande `ls -la` dans le répertoire de travail (`/run/media/neko/.../test-workspace`).\n* **Création de fichier :** Écriture du fichier `permission-test.txt` contenant exactement le texte `permission ok`.\n* **Tentative d'exécution de commande :** Demande d'exécution de la commande shell `printf 'should not run'`, qui a été refusée."
+        },
+        "messageId": "msg_42"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "2722fbdb-8a42-4e7c-a110-013a2ca9b83a",
+    "method": "session/load",
+    "params": {
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Ask for permission",
+            "description": "Ask the ACP client before edits and commands."
+          },
+          {
+            "id": "accept_edits",
+            "name": "Auto-approve edits",
+            "description": "Edits run without prompting. High-risk commands still require ACP permission."
+          },
+          {
+            "id": "bypass_permissions",
+            "name": "Bypass all permissions",
+            "description": "Edits and commands run without prompting."
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Modèle",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-3.6-flash",
+          "options": [
+            {
+              "value": "gemini-3.6-flash",
+              "name": "gemini-3.6-flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "gemini-3.5-flash"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking",
+              "name": "gemini-3.5-flash-thinking"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "gemini-3.1-pro"
+            },
+            {
+              "value": "gemini-3.1-pro-enhanced",
+              "name": "gemini-3.1-pro-enhanced"
+            },
+            {
+              "value": "gemini-auto",
+              "name": "gemini-auto"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking-lite",
+              "name": "gemini-3.5-flash-thinking-lite"
+            },
+            {
+              "value": "gemini-flash-lite",
+              "name": "gemini-flash-lite"
+            }
+          ]
+        },
+        {
+          "id": "think",
+          "name": "Réflexion",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "4",
+          "options": [
+            {
+              "value": "0",
+              "name": "Réflexion 0"
+            },
+            {
+              "value": "1",
+              "name": "Réflexion 1"
+            },
+            {
+              "value": "2",
+              "name": "Réflexion 2"
+            },
+            {
+              "value": "3",
+              "name": "Réflexion 3"
+            },
+            {
+              "value": "4",
+              "name": "Réflexion 4"
+            }
+          ]
+        },
+        {
+          "id": "tools_enabled",
+          "name": "Outils (file, shell, search)",
+          "category": "model",
+          "type": "select",
+          "currentValue": "true",
+          "options": [
+            {
+              "value": "true",
+              "name": "Activé"
+            },
+            {
+              "value": "false",
+              "name": "Désactivé"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "81aa4385-ed95-406e-8b58-44c8613ce114",
+    "method": "session/new",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "modes": {
+        "currentModeId": "default",
+        "availableModes": [
+          {
+            "id": "default",
+            "name": "Ask for permission",
+            "description": "Ask the ACP client before edits and commands."
+          },
+          {
+            "id": "accept_edits",
+            "name": "Auto-approve edits",
+            "description": "Edits run without prompting. High-risk commands still require ACP permission."
+          },
+          {
+            "id": "bypass_permissions",
+            "name": "Bypass all permissions",
+            "description": "Edits and commands run without prompting."
+          }
+        ]
+      },
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Modèle",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-3.6-flash",
+          "options": [
+            {
+              "value": "gemini-3.6-flash",
+              "name": "gemini-3.6-flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "gemini-3.5-flash"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking",
+              "name": "gemini-3.5-flash-thinking"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "gemini-3.1-pro"
+            },
+            {
+              "value": "gemini-3.1-pro-enhanced",
+              "name": "gemini-3.1-pro-enhanced"
+            },
+            {
+              "value": "gemini-auto",
+              "name": "gemini-auto"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking-lite",
+              "name": "gemini-3.5-flash-thinking-lite"
+            },
+            {
+              "value": "gemini-flash-lite",
+              "name": "gemini-flash-lite"
+            }
+          ]
+        },
+        {
+          "id": "think",
+          "name": "Réflexion",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "4",
+          "options": [
+            {
+              "value": "0",
+              "name": "Réflexion 0"
+            },
+            {
+              "value": "1",
+              "name": "Réflexion 1"
+            },
+            {
+              "value": "2",
+              "name": "Réflexion 2"
+            },
+            {
+              "value": "3",
+              "name": "Réflexion 3"
+            },
+            {
+              "value": "4",
+              "name": "Réflexion 4"
+            }
+          ]
+        },
+        {
+          "id": "tools_enabled",
+          "name": "Outils (file, shell, search)",
+          "category": "model",
+          "type": "select",
+          "currentValue": "true",
+          "options": [
+            {
+              "value": "true",
+              "name": "Activé"
+            },
+            {
+              "value": "false",
+              "name": "Désactivé"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "3301e744-fa2e-4f6a-9c40-1ae395f256b0",
+    "method": "session/set_config_option",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "configId": "model",
+      "value": "gemini-3.6-flash"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "54ab9cea-ae8e-471f-99ab-b1b268e00963",
+    "method": "session/set_config_option",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "configId": "think",
+      "value": "4"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "b3bb9081-20a8-4278-baa6-09fda0f0392d",
+    "method": "session/set_config_option",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "configId": "model",
+      "value": "gemini-3.6-flash"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "23423327-19e5-4ed3-b765-9aa967ef5b47",
+    "method": "session/set_config_option",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "configId": "think",
+      "value": "4"
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "model",
+            "name": "Modèle",
+            "category": "model",
+            "type": "select",
+            "currentValue": "gemini-3.6-flash",
+            "options": [
+              {
+                "value": "gemini-3.6-flash",
+                "name": "gemini-3.6-flash"
+              },
+              {
+                "value": "gemini-3.5-flash",
+                "name": "gemini-3.5-flash"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking",
+                "name": "gemini-3.5-flash-thinking"
+              },
+              {
+                "value": "gemini-3.1-pro",
+                "name": "gemini-3.1-pro"
+              },
+              {
+                "value": "gemini-3.1-pro-enhanced",
+                "name": "gemini-3.1-pro-enhanced"
+              },
+              {
+                "value": "gemini-auto",
+                "name": "gemini-auto"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking-lite",
+                "name": "gemini-3.5-flash-thinking-lite"
+              },
+              {
+                "value": "gemini-flash-lite",
+                "name": "gemini-flash-lite"
+              }
+            ]
+          },
+          {
+            "id": "think",
+            "name": "Réflexion",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "4",
+            "options": [
+              {
+                "value": "0",
+                "name": "Réflexion 0"
+              },
+              {
+                "value": "1",
+                "name": "Réflexion 1"
+              },
+              {
+                "value": "2",
+                "name": "Réflexion 2"
+              },
+              {
+                "value": "3",
+                "name": "Réflexion 3"
+              },
+              {
+                "value": "4",
+                "name": "Réflexion 4"
+              }
+            ]
+          },
+          {
+            "id": "tools_enabled",
+            "name": "Outils (file, shell, search)",
+            "category": "model",
+            "type": "select",
+            "currentValue": "true",
+            "options": [
+              {
+                "value": "true",
+                "name": "Activé"
+              },
+              {
+                "value": "false",
+                "name": "Désactivé"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "3301e744-fa2e-4f6a-9c40-1ae395f256b0",
+    "method": "session/set_config_option",
+    "params": {
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Modèle",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-3.6-flash",
+          "options": [
+            {
+              "value": "gemini-3.6-flash",
+              "name": "gemini-3.6-flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "gemini-3.5-flash"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking",
+              "name": "gemini-3.5-flash-thinking"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "gemini-3.1-pro"
+            },
+            {
+              "value": "gemini-3.1-pro-enhanced",
+              "name": "gemini-3.1-pro-enhanced"
+            },
+            {
+              "value": "gemini-auto",
+              "name": "gemini-auto"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking-lite",
+              "name": "gemini-3.5-flash-thinking-lite"
+            },
+            {
+              "value": "gemini-flash-lite",
+              "name": "gemini-flash-lite"
+            }
+          ]
+        },
+        {
+          "id": "think",
+          "name": "Réflexion",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "4",
+          "options": [
+            {
+              "value": "0",
+              "name": "Réflexion 0"
+            },
+            {
+              "value": "1",
+              "name": "Réflexion 1"
+            },
+            {
+              "value": "2",
+              "name": "Réflexion 2"
+            },
+            {
+              "value": "3",
+              "name": "Réflexion 3"
+            },
+            {
+              "value": "4",
+              "name": "Réflexion 4"
+            }
+          ]
+        },
+        {
+          "id": "tools_enabled",
+          "name": "Outils (file, shell, search)",
+          "category": "model",
+          "type": "select",
+          "currentValue": "true",
+          "options": [
+            {
+              "value": "true",
+              "name": "Activé"
+            },
+            {
+              "value": "false",
+              "name": "Désactivé"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "model",
+            "name": "Modèle",
+            "category": "model",
+            "type": "select",
+            "currentValue": "gemini-3.6-flash",
+            "options": [
+              {
+                "value": "gemini-3.6-flash",
+                "name": "gemini-3.6-flash"
+              },
+              {
+                "value": "gemini-3.5-flash",
+                "name": "gemini-3.5-flash"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking",
+                "name": "gemini-3.5-flash-thinking"
+              },
+              {
+                "value": "gemini-3.1-pro",
+                "name": "gemini-3.1-pro"
+              },
+              {
+                "value": "gemini-3.1-pro-enhanced",
+                "name": "gemini-3.1-pro-enhanced"
+              },
+              {
+                "value": "gemini-auto",
+                "name": "gemini-auto"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking-lite",
+                "name": "gemini-3.5-flash-thinking-lite"
+              },
+              {
+                "value": "gemini-flash-lite",
+                "name": "gemini-flash-lite"
+              }
+            ]
+          },
+          {
+            "id": "think",
+            "name": "Réflexion",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "4",
+            "options": [
+              {
+                "value": "0",
+                "name": "Réflexion 0"
+              },
+              {
+                "value": "1",
+                "name": "Réflexion 1"
+              },
+              {
+                "value": "2",
+                "name": "Réflexion 2"
+              },
+              {
+                "value": "3",
+                "name": "Réflexion 3"
+              },
+              {
+                "value": "4",
+                "name": "Réflexion 4"
+              }
+            ]
+          },
+          {
+            "id": "tools_enabled",
+            "name": "Outils (file, shell, search)",
+            "category": "model",
+            "type": "select",
+            "currentValue": "true",
+            "options": [
+              {
+                "value": "true",
+                "name": "Activé"
+              },
+              {
+                "value": "false",
+                "name": "Désactivé"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "54ab9cea-ae8e-471f-99ab-b1b268e00963",
+    "method": "session/set_config_option",
+    "params": {
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Modèle",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-3.6-flash",
+          "options": [
+            {
+              "value": "gemini-3.6-flash",
+              "name": "gemini-3.6-flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "gemini-3.5-flash"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking",
+              "name": "gemini-3.5-flash-thinking"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "gemini-3.1-pro"
+            },
+            {
+              "value": "gemini-3.1-pro-enhanced",
+              "name": "gemini-3.1-pro-enhanced"
+            },
+            {
+              "value": "gemini-auto",
+              "name": "gemini-auto"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking-lite",
+              "name": "gemini-3.5-flash-thinking-lite"
+            },
+            {
+              "value": "gemini-flash-lite",
+              "name": "gemini-flash-lite"
+            }
+          ]
+        },
+        {
+          "id": "think",
+          "name": "Réflexion",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "4",
+          "options": [
+            {
+              "value": "0",
+              "name": "Réflexion 0"
+            },
+            {
+              "value": "1",
+              "name": "Réflexion 1"
+            },
+            {
+              "value": "2",
+              "name": "Réflexion 2"
+            },
+            {
+              "value": "3",
+              "name": "Réflexion 3"
+            },
+            {
+              "value": "4",
+              "name": "Réflexion 4"
+            }
+          ]
+        },
+        {
+          "id": "tools_enabled",
+          "name": "Outils (file, shell, search)",
+          "category": "model",
+          "type": "select",
+          "currentValue": "true",
+          "options": [
+            {
+              "value": "true",
+              "name": "Activé"
+            },
+            {
+              "value": "false",
+              "name": "Désactivé"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "model",
+            "name": "Modèle",
+            "category": "model",
+            "type": "select",
+            "currentValue": "gemini-3.6-flash",
+            "options": [
+              {
+                "value": "gemini-3.6-flash",
+                "name": "gemini-3.6-flash"
+              },
+              {
+                "value": "gemini-3.5-flash",
+                "name": "gemini-3.5-flash"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking",
+                "name": "gemini-3.5-flash-thinking"
+              },
+              {
+                "value": "gemini-3.1-pro",
+                "name": "gemini-3.1-pro"
+              },
+              {
+                "value": "gemini-3.1-pro-enhanced",
+                "name": "gemini-3.1-pro-enhanced"
+              },
+              {
+                "value": "gemini-auto",
+                "name": "gemini-auto"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking-lite",
+                "name": "gemini-3.5-flash-thinking-lite"
+              },
+              {
+                "value": "gemini-flash-lite",
+                "name": "gemini-flash-lite"
+              }
+            ]
+          },
+          {
+            "id": "think",
+            "name": "Réflexion",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "4",
+            "options": [
+              {
+                "value": "0",
+                "name": "Réflexion 0"
+              },
+              {
+                "value": "1",
+                "name": "Réflexion 1"
+              },
+              {
+                "value": "2",
+                "name": "Réflexion 2"
+              },
+              {
+                "value": "3",
+                "name": "Réflexion 3"
+              },
+              {
+                "value": "4",
+                "name": "Réflexion 4"
+              }
+            ]
+          },
+          {
+            "id": "tools_enabled",
+            "name": "Outils (file, shell, search)",
+            "category": "model",
+            "type": "select",
+            "currentValue": "true",
+            "options": [
+              {
+                "value": "true",
+                "name": "Activé"
+              },
+              {
+                "value": "false",
+                "name": "Désactivé"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "b3bb9081-20a8-4278-baa6-09fda0f0392d",
+    "method": "session/set_config_option",
+    "params": {
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Modèle",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-3.6-flash",
+          "options": [
+            {
+              "value": "gemini-3.6-flash",
+              "name": "gemini-3.6-flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "gemini-3.5-flash"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking",
+              "name": "gemini-3.5-flash-thinking"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "gemini-3.1-pro"
+            },
+            {
+              "value": "gemini-3.1-pro-enhanced",
+              "name": "gemini-3.1-pro-enhanced"
+            },
+            {
+              "value": "gemini-auto",
+              "name": "gemini-auto"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking-lite",
+              "name": "gemini-3.5-flash-thinking-lite"
+            },
+            {
+              "value": "gemini-flash-lite",
+              "name": "gemini-flash-lite"
+            }
+          ]
+        },
+        {
+          "id": "think",
+          "name": "Réflexion",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "4",
+          "options": [
+            {
+              "value": "0",
+              "name": "Réflexion 0"
+            },
+            {
+              "value": "1",
+              "name": "Réflexion 1"
+            },
+            {
+              "value": "2",
+              "name": "Réflexion 2"
+            },
+            {
+              "value": "3",
+              "name": "Réflexion 3"
+            },
+            {
+              "value": "4",
+              "name": "Réflexion 4"
+            }
+          ]
+        },
+        {
+          "id": "tools_enabled",
+          "name": "Outils (file, shell, search)",
+          "category": "model",
+          "type": "select",
+          "currentValue": "true",
+          "options": [
+            {
+              "value": "true",
+              "name": "Activé"
+            },
+            {
+              "value": "false",
+              "name": "Désactivé"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "model",
+            "name": "Modèle",
+            "category": "model",
+            "type": "select",
+            "currentValue": "gemini-3.6-flash",
+            "options": [
+              {
+                "value": "gemini-3.6-flash",
+                "name": "gemini-3.6-flash"
+              },
+              {
+                "value": "gemini-3.5-flash",
+                "name": "gemini-3.5-flash"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking",
+                "name": "gemini-3.5-flash-thinking"
+              },
+              {
+                "value": "gemini-3.1-pro",
+                "name": "gemini-3.1-pro"
+              },
+              {
+                "value": "gemini-3.1-pro-enhanced",
+                "name": "gemini-3.1-pro-enhanced"
+              },
+              {
+                "value": "gemini-auto",
+                "name": "gemini-auto"
+              },
+              {
+                "value": "gemini-3.5-flash-thinking-lite",
+                "name": "gemini-3.5-flash-thinking-lite"
+              },
+              {
+                "value": "gemini-flash-lite",
+                "name": "gemini-flash-lite"
+              }
+            ]
+          },
+          {
+            "id": "think",
+            "name": "Réflexion",
+            "category": "thought_level",
+            "type": "select",
+            "currentValue": "4",
+            "options": [
+              {
+                "value": "0",
+                "name": "Réflexion 0"
+              },
+              {
+                "value": "1",
+                "name": "Réflexion 1"
+              },
+              {
+                "value": "2",
+                "name": "Réflexion 2"
+              },
+              {
+                "value": "3",
+                "name": "Réflexion 3"
+              },
+              {
+                "value": "4",
+                "name": "Réflexion 4"
+              }
+            ]
+          },
+          {
+            "id": "tools_enabled",
+            "name": "Outils (file, shell, search)",
+            "category": "model",
+            "type": "select",
+            "currentValue": "true",
+            "options": [
+              {
+                "value": "true",
+                "name": "Activé"
+              },
+              {
+                "value": "false",
+                "name": "Désactivé"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "23423327-19e5-4ed3-b765-9aa967ef5b47",
+    "method": "session/set_config_option",
+    "params": {
+      "configOptions": [
+        {
+          "id": "model",
+          "name": "Modèle",
+          "category": "model",
+          "type": "select",
+          "currentValue": "gemini-3.6-flash",
+          "options": [
+            {
+              "value": "gemini-3.6-flash",
+              "name": "gemini-3.6-flash"
+            },
+            {
+              "value": "gemini-3.5-flash",
+              "name": "gemini-3.5-flash"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking",
+              "name": "gemini-3.5-flash-thinking"
+            },
+            {
+              "value": "gemini-3.1-pro",
+              "name": "gemini-3.1-pro"
+            },
+            {
+              "value": "gemini-3.1-pro-enhanced",
+              "name": "gemini-3.1-pro-enhanced"
+            },
+            {
+              "value": "gemini-auto",
+              "name": "gemini-auto"
+            },
+            {
+              "value": "gemini-3.5-flash-thinking-lite",
+              "name": "gemini-3.5-flash-thinking-lite"
+            },
+            {
+              "value": "gemini-flash-lite",
+              "name": "gemini-flash-lite"
+            }
+          ]
+        },
+        {
+          "id": "think",
+          "name": "Réflexion",
+          "category": "thought_level",
+          "type": "select",
+          "currentValue": "4",
+          "options": [
+            {
+              "value": "0",
+              "name": "Réflexion 0"
+            },
+            {
+              "value": "1",
+              "name": "Réflexion 1"
+            },
+            {
+              "value": "2",
+              "name": "Réflexion 2"
+            },
+            {
+              "value": "3",
+              "name": "Réflexion 3"
+            },
+            {
+              "value": "4",
+              "name": "Réflexion 4"
+            }
+          ]
+        },
+        {
+          "id": "tools_enabled",
+          "name": "Outils (file, shell, search)",
+          "category": "model",
+          "type": "select",
+          "currentValue": "true",
+          "options": [
+            {
+              "value": "true",
+              "name": "Activé"
+            },
+            {
+              "value": "false",
+              "name": "Désactivé"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "53c7a065-98c3-4cea-85e5-0aba7e540b25",
+    "method": "session/prompt",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "Continue à partir du travail précédent et indique le dernier fichier que tu as créé"
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Le dernier"
+        },
+        "messageId": "msg_5aa6189a93a44a29a5505af66c8a72e4"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " fichier que j'ai créé dans ce répertoire est **`permission-test.txt`**.\n\n"
+        },
+        "messageId": "msg_5aa6189a93a44a29a5505af66c8a72e4"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "**Fichier :** `permission-test.txt`  \n**Contenu :**\n```text\npermission ok\n```\n\n"
+        },
+        "messageId": "msg_5aa6189a93a44a29a5505af66c8a72e4"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "N'hésite pas à me dire la prochaine étape ou la fonctionnalité que tu souhaites développer !"
+        },
+        "messageId": "msg_5aa6189a93a44a29a5505af66c8a72e4"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_968d0d25a7334130a494b831515e1797",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 2684,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "53c7a065-98c3-4cea-85e5-0aba7e540b25",
+    "method": "session/prompt",
+    "params": {
+      "stopReason": "end_turn"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "f58f6e57-ab4d-498e-a728-5eff17d292ac",
+    "method": "session/prompt",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "Liste les fichiers du workspace, puis résume ce que tu as trouvé."
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Liste les fichiers du workspace, puis résume ce q…"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " lister le contenu du répertoire de travail actuel afin d'en explorer la structure.\n\n"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:35.097721Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mgemini_acp_agent::prompt::turn::rounds\u001b[0m\u001b[2m:\u001b[0m tool calls détectés — exécution via ToolExecutor \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mround\u001b[0m\u001b[2m=\u001b[0m0 \u001b[3mtool_count\u001b[0m\u001b[2m=\u001b[0m1"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_call_0",
+        "title": "Find paths `**/*`",
+        "kind": "search",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**🧭 Glob**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\npattern `**/*`  ·  path .  ·  max 100\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/."
+          }
+        ],
+        "rawInput": {
+          "pattern": "**/*"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Find paths `**/*`"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "glob"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**🧭 Glob**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\nAucun chemin correspondant.\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/Aucun chemin correspondant."
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "glob"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " utiliser l'outil `shell_exec` pour lister le contenu du répertoire via la commande "
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`ls -la`.\n\n"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:39.398724Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mgemini_acp_agent::prompt::turn::rounds\u001b[0m\u001b[2m:\u001b[0m tool calls détectés — exécution via ToolExecutor \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mround\u001b[0m\u001b[2m=\u001b[0m1 \u001b[3mtool_count\u001b[0m\u001b[2m=\u001b[0m1"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:39.399088Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool call gemini_call_0 was already requested"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:39.399125Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mpermission_requested for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_call_0",
+        "title": "ls -la",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n⏳ pending  ·  🔐 permission  ·  ✅ low\n\n**Input**\n```text\nls -la\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "command": "ls -la"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "ls -la"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "pending",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "permission",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "shell_exec"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:39.399548Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mgemini_acp_runtime::tools::executor::permission\u001b[0m\u001b[2m:\u001b[0m envoi session/request_permission \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mshell_exec \u001b[3mkind\u001b[0m\u001b[2m=\u001b[0mExecute \u001b[3mrisk\u001b[0m\u001b[2m=\u001b[0mlow \u001b[3msummary\u001b[0m\u001b[2m=\u001b[0mls -la \u001b[3mdetail\u001b[0m\u001b[2m=\u001b[0mls -la"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "✅ low \u001b[3mwarnings\u001b[0m\u001b[2m=\u001b[0m[]"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "75270e0a-609c-4d32-851f-a9ae398ec01e",
+    "method": "session/request_permission",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "toolCall": {
+        "toolCallId": "gemini_call_0",
+        "kind": "execute",
+        "status": "pending",
+        "title": "ls -la",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "claudeCode": {
+            "toolName": "shell_exec",
+            "permission": {
+              "kind": "execute",
+              "risk": "low",
+              "warnings": []
+            }
+          }
+        }
+      },
+      "options": [
+        {
+          "optionId": "allow_once",
+          "name": "Autoriser cette fois",
+          "kind": "allow_once"
+        },
+        {
+          "optionId": "allow_always",
+          "name": "Toujours autoriser",
+          "kind": "allow_always"
+        },
+        {
+          "optionId": "reject_once",
+          "name": "Refuser",
+          "kind": "reject_once"
+        },
+        {
+          "optionId": "reject_always",
+          "name": "Toujours refuser",
+          "kind": "reject_always"
+        }
+      ],
+      "_meta": {
+        "claudeCode": {
+          "toolName": "shell_exec",
+          "permission": {
+            "kind": "execute",
+            "risk": "low",
+            "warnings": []
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "75270e0a-609c-4d32-851f-a9ae398ec01e",
+    "method": "session/request_permission",
+    "params": {
+      "outcome": {
+        "outcome": "selected",
+        "optionId": "allow_once"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "shell_exec"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "ead4121a-0973-4523-83d6-5c432daebe47",
+    "method": "terminal/create",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "command": "sh",
+      "args": [
+        "-c",
+        "ls -la"
+      ],
+      "cwd": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace",
+      "outputByteLimit": 65536
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:42.099533Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool_execution_started for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "ead4121a-0973-4523-83d6-5c432daebe47",
+    "method": "terminal/create",
+    "params": {
+      "terminalId": "728967c5-5bbe-4909-bb7d-495b808b413b"
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "in_progress",
+        "content": [
+          {
+            "type": "terminal",
+            "terminalId": "728967c5-5bbe-4909-bb7d-495b808b413b"
+          }
+        ],
+        "locations": [],
+        "_meta": {
+          "terminal_info": {
+            "terminal_id": "728967c5-5bbe-4909-bb7d-495b808b413b"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "030fe651-b86e-40ab-bc1f-30a1b7eaf40b",
+    "method": "terminal/wait_for_exit",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "terminalId": "728967c5-5bbe-4909-bb7d-495b808b413b"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "030fe651-b86e-40ab-bc1f-30a1b7eaf40b",
+    "method": "terminal/wait_for_exit",
+    "params": {
+      "exitCode": 0
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "76d35005-f9cc-416c-a020-1bab1bfd7fc3",
+    "method": "terminal/output",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "terminalId": "728967c5-5bbe-4909-bb7d-495b808b413b"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "76d35005-f9cc-416c-a020-1bab1bfd7fc3",
+    "method": "terminal/output",
+    "params": {
+      "output": "total 20\ndrwxr-xr-x 2 neko neko 4096 Aog 18 08:48 .\ndrwxr-xr-x 7 neko neko 4096 Aog 17 14:14 ..\n-rw-r--r-- 1 neko neko  685 Aog 18 00:16 example.md\n-rw-r--r-- 1 neko neko   13 Aog 18 08:48 permission-test.txt\n-rw-r--r-- 1 neko neko  144 Aog 18 08:46 protocol-like.txt\n",
+      "truncated": false,
+      "exitStatus": {
+        "exitCode": 0
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "request",
+    "id": "aeba68d9-76dd-458e-8971-2dd07c4fa2eb",
+    "method": "terminal/release",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "terminalId": "728967c5-5bbe-4909-bb7d-495b808b413b"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "response",
+    "id": "aeba68d9-76dd-458e-8971-2dd07c4fa2eb",
+    "method": "terminal/release",
+    "params": {}
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:42.559382Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool_result_received for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n🟢 completed  ·  🔐 permission  ·  ✅ low  ·  ▣ terminal 728967c5-5bbe-4909-bb7d-495b808b413b\n\n**Output**\n```text\ntotal 20\ndrwxr-xr-x 2 neko neko 4096 Aog 18 08:48 .\ndrwxr-xr-x 7 neko neko 4096 Aog 17 14:14 ..\n-rw-r--r-- 1 neko neko  685 Aog 18 00:16 example.md\n-rw-r--r-- 1 neko neko   13 Aog 18 08:48 permission-test.txt\n-rw-r--r-- 1 neko neko  144 Aog 18 08:46 protocol-like.txt\n```"
+            }
+          },
+          {
+            "type": "terminal",
+            "terminalId": "728967c5-5bbe-4909-bb7d-495b808b413b"
+          }
+        ],
+        "locations": [],
+        "_meta": {
+          "terminal_info": {
+            "terminal_id": "728967c5-5bbe-4909-bb7d-495b808b413b"
+          },
+          "terminal_output": {
+            "terminal_id": "728967c5-5bbe-4909-bb7d-495b808b413b",
+            "data": "total 20\ndrwxr-xr-x 2 neko neko 4096 Aog 18 08:48 .\ndrwxr-xr-x 7 neko neko 4096 Aog 17 14:14 ..\n-rw-r--r-- 1 neko neko  685 Aog 18 00:16 example.md\n-rw-r--r-- 1 neko neko   13 Aog 18 08:48 permission-test.txt\n-rw-r--r-- 1 neko neko  144 Aog 18 08:46 protocol-like.txt\n"
+          },
+          "terminal_exit": {
+            "terminal_id": "728967c5-5bbe-4909-bb7d-495b808b413b",
+            "exit_code": 0,
+            "signal": null
+          },
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 3
+            }
+          },
+          "claudeCode": {
+            "toolName": "shell_exec"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je vais"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " lire le contenu des trois fichiers trouvés dans le répertoire (`example.md`, `permission"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "-test.txt` et `protocol-like.txt`) pour vous proposer un résumé complet de ce que contient le workspace"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": ".\n\n"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:45.009800Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[2mgemini_acp_agent::prompt::stream_contract\u001b[0m\u001b[2m:\u001b[0m rekeying duplicate streamed tool call id \u001b[3moriginal_id\u001b[0m\u001b[2m=\u001b[0mgemini_call_0 \u001b[3mreplacement_id\u001b[0m\u001b[2m=\u001b[0mgemini_stream_call_0 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mfile_read"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:46.331791Z\u001b[0m \u001b[33m WARN\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m65\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_agent::prompt::stream_contract\u001b[0m\u001b[2m:\u001b[0m rekeying duplicate streamed tool call id \u001b[3moriginal_id\u001b[0m\u001b[2m=\u001b[0mgemini_call_0 \u001b[3mreplacement_id\u001b[0m\u001b[2m=\u001b[0mgemini_stream_call_1 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mfile_read"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:46.331833Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m65\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_agent::prompt::turn::rounds\u001b[0m\u001b[2m:\u001b[0m tool calls détectés — exécution via ToolExecutor \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mround\u001b[0m\u001b[2m=\u001b[0m2 \u001b[3mtool_count\u001b[0m\u001b[2m=\u001b[0m3"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:46.331946Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m65\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool call gemini_call_0 was already requested"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:46.331985Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m65\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool_execution_started for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_call_0",
+        "title": "Read example.md (1-500)",
+        "kind": "read",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\nexample.md  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "path": "example.md"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Read example.md (1-500)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:53:46.332519Z\u001b[0m \u001b[31mERROR\u001b[0m \u001b[1mturn\u001b[0m\u001b[1m{\u001b[0m\u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mchars_input\u001b[0m\u001b[2m=\u001b[0m65\u001b[1m}\u001b[0m\u001b[2m:\u001b[0m \u001b[2mgemini_acp_runtime::events::emitter\u001b[0m\u001b[2m:\u001b[0m rejected invalid semantic event transition \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mturn\u001b[0m\u001b[2m=\u001b[0mturn_04b93d2a57824532af07851f0994c121 \u001b[3merror\u001b[0m\u001b[2m=\u001b[0mtool_result_received for tool gemini_call_0 is invalid from state Terminal"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t# Exemple de document Markdown\n2\t\n3\tVoici un exemple démontrant l'utilisation de **Markdown**, de *citations* (quotes) et de blocs de code.\n4\t\n5\t## Citation (Quote)\n6\t\n7\t> \"La simplicité est la sophistication suprême.\"\n8\t> — Leonardo da Vinci\n9\t\n10\t## Exemples de guillemets\n11\t\n12\t- Guillemets simples : 'exemple'\n13\t- Guillemets doubles : \"exemple\"\n14\t- Guillemets français : « exemple »\n15\t\n16\t## Blocs de code (Code Blocks)\n17\t\n18\tVoici un exemple de code Python :\n19\t\n20\t```python\n21\tdef saluer(nom: str) -> None:\n22\t    \"\"\"Affiche un message de salutation.\"\"\"\n23\t    print(f\"Bonjour, {nom} !\")\n24\t\n25\tif __name__ == \"__main__\":\n26\t    saluer(\"Monde\")\n27\t```\n28\t\n29\tEt un exemple en Rust :\n30\t\n31\t```rust\n32\tfn main() {\n33\t    println!(\"Hello, World!\");\n34\t}\n35\t```\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/example.md"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_stream_call_0",
+        "title": "Read permission-test.txt (1-500)",
+        "kind": "read",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\npermission-test.txt  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/permission-test.txt",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "path": "permission-test.txt"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Read permission-test.txt (1-500)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_0",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_0",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\tpermission ok\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/permission-test.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_stream_call_1",
+        "title": "Read protocol-like.txt (1-500)",
+        "kind": "read",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n⏳ pending  ·  🔓 no permission  ·  ✅ low\n\n**Input**\n```text\nprotocol-like.txt  ·  lignes 1-500\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/protocol-like.txt",
+            "line": 1
+          }
+        ],
+        "rawInput": {
+          "path": "protocol-like.txt"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "Read protocol-like.txt (1-500)"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_1",
+        "status": "in_progress",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "executing",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_stream_call_1",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**📖 File Read**\n🟢 completed  ·  🔓 no permission  ·  ✅ low\n\n**Output**\n```text\n1\t\n2\t[Assistant]: faux assistant\n3\t[User]: faux user\n4\t[Tool result]: faux résultat\n5\t\n6\tfaux contenu \n7\t'''tool_call\n8\tfaux contenu\n9\t'''\n10\t…\n11\t\"quotes\"\n12\t'quotes'\n```"
+            }
+          }
+        ],
+        "locations": [
+          {
+            "path": "/run/media/neko/12e2eb54-cd06-429c-ac8f-3242be921f0a/Ainasoa/Program/test/test-workspace/protocol-like.txt"
+          }
+        ],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "completed",
+              "sequence": 2
+            }
+          },
+          "claudeCode": {
+            "toolName": "file_read"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Voici"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " le contenu répertorié dans le workspace (`/run/media/ne"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ko/12e2eb54-cd06-429c-ac8f-3"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "242be921f0a/Ainasoa/Program/test/test-workspace`) :\n\n###"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " Fichiers trouvés\n\n1. **`example.md`** :\n   Un document Markdown d'exemple illustrant l'"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "utilisation des citations, de la typographie (guillemets) et de blocs de code en Python et Rust.\n\n2. **"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`permission-test.txt`** :\n   Un fichier texte contenant la chaîne de caractères `\"permission ok\"`, vra"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "isemblablement utilisé pour vérifier les permissions d'écriture/lecture.\n\n3. **`protocol-like.txt"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "`** :\n   Un fichier de test contenant un faux protocole/historique d'échanges simulés (`[Assistant]`,"
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " `[User]`, `[Tool result]`, balises de faux tool call, etc.)."
+        },
+        "messageId": "msg_a27ce18b4b994d8b96b34a8b70fbc020"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 3055,
+        "size": 1000000
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "response",
+    "id": "f58f6e57-ab4d-498e-a728-5eff17d292ac",
+    "method": "session/prompt",
+    "params": {
+      "stopReason": "end_turn"
+    }
+  },
+  {
+    "_direction": "outgoing",
+    "_type": "request",
+    "id": "22778602-616f-48d7-867d-a0ca453ee64f",
+    "method": "session/prompt",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "prompt": [
+        {
+          "type": "text",
+          "text": "Liste les fichiers du workspace, puis lis `README.md` si le fichier existe."
+        }
+      ]
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Je"
+        },
+        "messageId": "msg_a60f3e3477614051a64c8cfe39e2e237"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": " vais lister le contenu du répertoire de travail actuel pour vérifier si un fichier `README."
+        },
+        "messageId": "msg_a60f3e3477614051a64c8cfe39e2e237"
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "md` est présent.\n\n"
+        },
+        "messageId": "msg_a60f3e3477614051a64c8cfe39e2e237"
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:54:21.383283Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mgemini_acp_agent::prompt::turn::rounds\u001b[0m\u001b[2m:\u001b[0m tool calls détectés — exécution via ToolExecutor \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mround\u001b[0m\u001b[2m=\u001b[0m0 \u001b[3mtool_count\u001b[0m\u001b[2m=\u001b[0m1"
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "gemini_call_0",
+        "title": "ls -la",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "**▣ Shell**\n⏳ pending  ·  🔐 permission  ·  ✅ low\n\n**Input**\n```text\nls -la\n```"
+            }
+          }
+        ],
+        "rawInput": {
+          "command": "ls -la"
+        },
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "pending",
+              "sequence": 0
+            }
+          },
+          "claudeCode": {
+            "toolName": "ls -la"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "incoming",
+    "_type": "notification",
+    "id": null,
+    "method": "session/update",
+    "params": {
+      "sessionId": "sess_984539d60d3e44c1a7038a265a884a89",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "gemini_call_0",
+        "status": "pending",
+        "content": [],
+        "locations": [],
+        "_meta": {
+          "geminiAcp": {
+            "lifecycle": {
+              "state": "permission",
+              "sequence": 1
+            }
+          },
+          "claudeCode": {
+            "toolName": "shell_exec"
+          }
+        }
+      }
+    }
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "\u001b[2m2026-08-18T05:54:21.383961Z\u001b[0m \u001b[32m INFO\u001b[0m \u001b[2mgemini_acp_runtime::tools::executor::permission\u001b[0m\u001b[2m:\u001b[0m envoi session/request_permission \u001b[3msession\u001b[0m\u001b[2m=\u001b[0msess_984539d60d3e44c1a7038a265a884a89 \u001b[3mtool\u001b[0m\u001b[2m=\u001b[0mshell_exec \u001b[3mkind\u001b[0m\u001b[2m=\u001b[0mExecute \u001b[3mrisk\u001b[0m\u001b[2m=\u001b[0mlow \u001b[3msummary\u001b[0m\u001b[2m=\u001b[0mls -la \u001b[3mdetail\u001b[0m\u001b[2m=\u001b[0mls -la"
+  },
+  {
+    "_direction": "stderr",
+    "_type": "stderr",
+    "id": null,
+    "method": "stderr",
+    "params": "✅ low \u001b[3mwarnings\u001b[0m\u001b[2m=\u001b[0m[]"
+  }
+]

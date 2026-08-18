@@ -1,6 +1,4 @@
-use std::{
-    collections::HashMap,
-};
+use std::collections::HashMap;
 
 use reqwest::header::CONTENT_TYPE;
 use tokio::{
@@ -10,7 +8,7 @@ use tokio::{
 
 use super::{
     protocol::{parse_json_rpc_response, parse_sse_rpc_response, serialize_request_line, serialize_request_payload, RpcRequest, RpcResponse},
-    McpError, McpServerConfig, McpTransportKind, IO_TIMEOUT, MAX_MESSAGE_BYTES, MCP_PROTOCOL_VERSION,
+    McpError, McpServerConfig, IO_TIMEOUT, MAX_MESSAGE_BYTES, MCP_PROTOCOL_VERSION,
     REQUEST_TIMEOUT,
 };
 
@@ -248,7 +246,7 @@ impl McpTransport {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::super::McpTransportKind;
 
     #[test]
     fn invalid_transport_kind_is_not_used_directly() {

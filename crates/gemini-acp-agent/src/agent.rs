@@ -18,6 +18,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_store = state.store.clone();
     let h_client = state.client.clone();
     let h_tools = state.tools.clone();
+    let h_sessions = state.sessions.clone();
     let h_events = state.events.clone();
     let turn_manager = TurnManager::new();
 
@@ -47,13 +48,15 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             {
                 let store = h_store.clone();
                 let client = h_client.clone();
-                let tools = h_tools.clone();
+                let fallback_tools = h_tools.clone();
+                let sessions = h_sessions.clone();
                 let events = h_events.clone();
                 let turn_manager = turn_manager.clone();
                 async move |req: PromptRequest, responder, cx| {
                     let store = store.clone();
                     let client = client.clone();
-                    let tools = tools.clone();
+                    let fallback_tools = fallback_tools.clone();
+                    let sessions = sessions.clone();
                     let events = events.clone();
                     let turn_manager = turn_manager.clone();
                     let turn_cx = cx.clone();
@@ -62,6 +65,10 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
 
                     turn_manager
                         .start(sid.clone(), move |_cancellation| async move {
+                            let tools = sessions
+                                .tools_for(&sid)
+                                .await
+                                .unwrap_or(fallback_tools);
                             let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
                             let interactive =
                                 gemini_acp_runtime::tools::interactive::InteractiveContext {
