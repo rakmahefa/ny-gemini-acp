@@ -1,5 +1,6 @@
 use agent_client_protocol::schema::v1::{MessageId, SessionId, StopReason};
 use agent_client_protocol::{Client, ConnectionTo};
+use gemini_acp_llm::{LlmProvider, LlmRequest};
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::state::{Role, Session};
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, ToolExecutor};
@@ -24,7 +25,7 @@ pub(crate) struct RoundOutcome {
 }
 
 pub(crate) struct RoundContext<'a> {
-    pub(crate) client: &'a gemini_acp_config::client::Client,
+    pub(crate) provider: &'a dyn LlmProvider,
     pub(crate) cx: &'a ConnectionTo<Client>,
     pub(crate) session_id: &'a SessionId,
     pub(crate) sid: &'a str,
@@ -70,12 +71,14 @@ pub(crate) async fn run(
         }
 
         let prompt = crate::prompt::build::build_prompt(ctx.session, Some(ctx.registry));
-        let rx = match ctx
-            .client
-            .stream(&prompt, &ctx.session.model, ctx.session.think, ctx.refs)
-            .await
-        {
-            Ok(rx) => rx,
+        let request = LlmRequest {
+            prompt,
+            model: ctx.session.model.clone(),
+            thinking: ctx.session.think,
+            refs: ctx.refs.to_vec(),
+        };
+        let mut stream = match ctx.provider.stream(request).await {
+            Ok(stream) => stream,
             Err(error) => {
                 let note = actionable_error_message(&error);
                 let is_overflow = error.to_string().contains("context")
@@ -93,7 +96,7 @@ pub(crate) async fn run(
                         ctx.cx,
                         ctx.session_id,
                         ctx.message_id,
-                        &format!("Context overflow persisted after emergency compaction: {error:#}"),
+                        &format!("Context overflow persisted after emergency compaction: {error}"),
                     );
                     ctx.semantic.turn_failed();
                     ctx.span.record("outcome", "refusal_start");
@@ -107,15 +110,10 @@ pub(crate) async fn run(
             }
         };
 
-        let is_thinking_model = gemini_acp_config::core::models::resolve(
-            &ctx.session.model,
-            gemini_acp_config::core::models::DEFAULT_MODEL,
-        )
-        .map(|resolved| gemini_acp_config::core::models::is_thinking_mode(resolved.mode))
-        .unwrap_or(false);
+        let is_thinking_model = ctx.provider.is_thinking_model(&ctx.session.model);
 
         let streamed = stream::consume(
-            rx,
+            &mut stream,
             ctx.cancel,
             ctx.cx,
             ctx.session_id,
@@ -191,6 +189,7 @@ pub(crate) async fn run(
             round,
             tool_count = executable_calls.len(),
             follow_up_count = follow_up_calls.len(),
+            provider = ctx.provider.name(),
             "stream protocol actions normalized"
         );
 
