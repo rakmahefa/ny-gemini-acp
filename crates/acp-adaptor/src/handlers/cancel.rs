@@ -2,8 +2,8 @@
 
 use agent_client_protocol::schema::v1::CancelNotification;
 use agent_client_protocol::Error as AcpError;
-use gemini_acp_encaps::TurnManager;
 use gemini_acp_runtime::AppState;
+use gemini_acp_runtime::TurnManager;
 
 pub async fn handle(
     notif: CancelNotification,
