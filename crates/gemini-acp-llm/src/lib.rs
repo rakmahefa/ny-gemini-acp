@@ -11,7 +11,6 @@ pub struct LlmRequest {
     pub refs: Vec<String>,
 }
 
-#[derive(Debug)]
 pub struct LlmStream {
     receiver: mpsc::Receiver<Result<String, LlmError>>,
 }
@@ -30,6 +29,9 @@ impl LlmStream {
 pub enum LlmError {
     #[error("provider error: {0}")]
     Provider(String),
+
+    #[error("provider capability is not supported: {0}")]
+    UnsupportedCapability(String),
 }
 
 #[async_trait]
@@ -44,7 +46,9 @@ pub trait LlmProvider: Send + Sync {
         &self,
         _images: &[(String, String)],
     ) -> Result<Vec<String>, LlmError> {
-        Ok(Vec::new())
+        Err(LlmError::UnsupportedCapability(
+            "image upload".to_owned(),
+        ))
     }
 
     async fn stream(&self, request: LlmRequest) -> Result<LlmStream, LlmError>;
