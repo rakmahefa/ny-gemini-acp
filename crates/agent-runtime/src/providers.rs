@@ -1,6 +1,6 @@
 //! Provider-neutral contracts owned by the agent runtime.
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -89,6 +89,12 @@ impl McpServerConfig {
             headers,
         }
     }
+}
+
+/// Boundary hook for protocol adapters that need to translate an external
+/// MCP representation into the runtime-owned configuration model.
+pub trait IntoMcpServerConfig: Send {
+    fn into_runtime_mcp(self, session_cwd: &Path) -> Result<McpServerConfig, String>;
 }
 
 #[derive(Debug)]
