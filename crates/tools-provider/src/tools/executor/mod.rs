@@ -10,9 +10,10 @@ use agent_client_protocol::schema::v1::{SessionId, ToolCallId, ToolCallStatus};
 use agent_client_protocol::{Client, ConnectionTo};
 use agent_runtime::{ToolCallRequest, ToolEventSink, ToolProvider};
 use serde_json::{Map, Value};
+use tokio::sync::watch;
 
-use super::contracts::ToolPermissionMode;
-use super::lifecycle::{session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolLifecycleState};
+use super::contracts::{ToolCancellation, ToolPermissionMode};
+use super::lifecycle::{bind_session_cancellation, session_cancelled, unbind_session_cancellation, wait_for_session_cancel, ToolLifecycle, ToolLifecycleState};
 use super::tool_ux::{classify_risk, result_update, ToolInfo};
 
 pub use mapping::map_stop_reason;
@@ -50,10 +51,15 @@ pub struct ToolExecutor<'a> {
 
 impl<'a> ToolExecutor<'a> {
     pub fn new(
-        cx: &'a ConnectionTo<Client>, session_id: &'a SessionId, registry: &'a dyn ToolProvider,
-        cwd: &'a Path, additional_dirs: &'a [PathBuf],
+        cx: &'a ConnectionTo<Client>,
+        session_id: &'a SessionId,
+        registry: &'a dyn ToolProvider,
+        cwd: &'a Path,
+        additional_dirs: &'a [PathBuf],
         get_mode: &'a (dyn Fn() -> ToolPermissionMode + Send + Sync),
-    ) -> Self { Self { cx, session_id, registry, cwd, additional_dirs, get_mode } }
+    ) -> Self {
+        Self { cx, session_id, registry, cwd, additional_dirs, get_mode }
+    }
 
     pub async fn execute_with_call_id_and_events(&self, call_id: ToolCallId, tool_name: &str, arguments: &Value, semantic: &mut dyn ToolEventSink) -> ToolResult {
         self.execute_inner(call_id, tool_name, arguments, Some(semantic)).await
@@ -129,7 +135,15 @@ impl<'a> ToolExecutor<'a> {
     }
 
     async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
-        let request = ToolCallRequest { name: tool_name.to_owned(), arguments: arguments.clone(), cwd: self.cwd.to_path_buf(), additional_dirs: self.additional_dirs.to_vec() };
+        let (cancellation, _) = watch::channel(false);
+        let request = ToolCallRequest {
+            session_id: self.session_id.0.to_string(),
+            name: tool_name.to_owned(),
+            arguments: arguments.clone(),
+            cwd: self.cwd.to_path_buf(),
+            additional_dirs: self.additional_dirs.to_vec(),
+            cancellation,
+        };
         let result = tokio::select! {
             value = self.registry.call(request) => value,
             _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true }
