@@ -36,4 +36,4 @@ phase-X/
 
 ## Current priority
 
-Phase 0 remains active. The latest Zed captures demonstrate working ACP handshake, session/config negotiation, multi-chunk assistant streaming, real file write/read, ordinary tool execution, and Markdown/Unicode preservation. They also expose concrete gaps: forwarded MCP servers are not wired, and the semantic event emitter reports invalid lifecycle transitions during a repeated tool round.
+P0 hardening is now layered around semantic lifecycle isolation and content integrity. H4 MCP forwarding is implemented on `agent/zed-baseline`; the remaining H4 evidence item is real-Zed validation of `mcpServers` in session setup and execution, not the runtime wiring itself. See [`H4_MCP_FORWARDING.md`](H4_MCP_FORWARDING.md).
