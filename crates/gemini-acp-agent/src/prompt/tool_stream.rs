@@ -52,7 +52,8 @@ enum Mode {
     },
 }
 
-/// Streaming detector for executable tool protocol.
+/// Streaming detector for executable tool protocol and non-executable
+/// FollowUp actions.
 #[derive(Debug)]
 pub(crate) struct ToolStreamDetector {
     mode: Mode,
@@ -87,6 +88,9 @@ impl ToolStreamDetector {
 
     pub(crate) fn finish(&mut self) -> Vec<ParsedToolCall> {
         let mut calls = Vec::new();
+        if let Some(tag) = self.follow_up.take() {
+            calls.extend(parse_complete_follow_ups(&tag));
+        }
         if !self.line.is_empty() {
             let line = std::mem::take(&mut self.line);
             self.finish_line(line, &mut calls);
@@ -197,9 +201,9 @@ impl ToolStreamDetector {
                 self.follow_up = None;
                 return;
             }
-            if tag.contains('>') {
-                let tag = std::mem::take(tag);
-                calls.extend(parse_tool_calls(&tag).1);
+            if parse_complete_follow_ups(tag).len() > 0 {
+                let candidate = std::mem::take(tag);
+                calls.extend(parse_complete_follow_ups(&candidate));
             }
             self.at_stream_start = false;
             return;
@@ -210,8 +214,8 @@ impl ToolStreamDetector {
                 return;
             };
             let candidate = &text[start..];
-            if candidate.contains('>') {
-                calls.extend(parse_tool_calls(candidate).1);
+            if let Some(parsed) = parse_follow_up_candidates(candidate) {
+                calls.extend(parsed);
             } else if candidate.len() <= MAX_FOLLOW_UP {
                 self.follow_up = Some(candidate.to_owned());
             }
@@ -228,6 +232,51 @@ impl ToolStreamDetector {
             }
         }
     }
+}
+
+fn parse_complete_follow_ups(text: &str) -> Vec<ParsedToolCall> {
+    parse_follow_up_candidates(text).unwrap_or_default()
+}
+
+/// Parse every complete FollowUp tag in a buffered candidate. `None` means
+/// at least one tag starts but is incomplete, so the caller must retain the
+/// whole candidate for the next stream chunk.
+fn parse_follow_up_candidates(text: &str) -> Option<Vec<ParsedToolCall>> {
+    let mut cursor = 0;
+    let mut calls = Vec::new();
+    let mut found = false;
+
+    while let Some(relative_start) = text[cursor..].find(FOLLOW_UP_PREFIX) {
+        found = true;
+        let start = cursor + relative_start;
+        let after_marker = start + FOLLOW_UP_PREFIX.len();
+        let end = find_tag_end(&text[after_marker..])?;
+        let absolute_end = after_marker + end;
+        let tag = &text[start..=absolute_end];
+        let (_, parsed) = parse_tool_calls(tag);
+        calls.extend(parsed.into_iter().filter(ParsedToolCall::is_action));
+        cursor = absolute_end + 1;
+    }
+
+    if found {
+        Some(calls)
+    } else {
+        Some(Vec::new())
+    }
+}
+
+fn find_tag_end(input: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, byte) in input.as_bytes().iter().copied().enumerate() {
+        match quote {
+            Some(current) if byte == current => quote = None,
+            Some(_) => {}
+            None if byte == b'\'' || byte == b'"' => quote = Some(byte),
+            None if byte == b'>' => return Some(index),
+            None => {}
+        }
+    }
+    None
 }
 
 fn parse_block(kind: BlockKind, body: &str) -> Vec<ParsedToolCall> {
@@ -344,6 +393,33 @@ mod tests {
         ]);
         assert_eq!(calls.len(), 1);
         assert!(calls[0].is_action());
+    }
+
+    #[test]
+    fn detects_multiple_follow_ups_in_one_line() {
+        let calls = collect(&[
+            "<FollowUp label=\"One\" query=\"cargo test\" /><FollowUp label=\"Two\" query=\"cargo check\" />",
+        ]);
+        assert_eq!(calls.len(), 2);
+        assert!(calls.iter().all(ParsedToolCall::is_action));
+        assert_eq!(calls[0].arguments["label"], "One");
+        assert_eq!(calls[1].arguments["label"], "Two");
+    }
+
+    #[test]
+    fn detects_multiple_follow_ups_when_the_second_tag_is_split() {
+        let calls = collect(&[
+            "<FollowUp label=\"One\" query=\"one\" /><FollowUp label=\"Two\" ",
+            "query=\"two\" />",
+        ]);
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1].arguments["query"], "two");
+    }
+
+    #[test]
+    fn malformed_follow_up_does_not_create_a_tool_call() {
+        let calls = collect(&["<FollowUp label=\"missing query\" />"]);
+        assert!(calls.is_empty());
     }
 
     #[test]
