@@ -1,13 +1,13 @@
-//! Streaming Gemini -> ACP output orchestration.
+//! Provider stream -> ACP output orchestration.
 //!
-//! This module owns semantic stream lifecycle emission. `turn.rs` only
-//! coordinates the turn and consumes the normalized stream result.
-
-use std::fmt::Display;
+//! Le provider produit un flux neutre. Ce module reste responsable de la
+//! projection sémantique vers ACP : pensée, texte visible, tool calls et
+//! intégrité de stream.
 
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
-use tokio::sync::{mpsc, watch};
+use gemini_acp_llm::LlmStream;
+use tokio::sync::watch;
 
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::tools::executor::emit_error_chunk;
@@ -34,8 +34,8 @@ pub struct StreamResult {
     pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
-pub async fn consume<E: Display>(
-    mut rx: mpsc::Receiver<Result<String, E>>,
+pub async fn consume(
+    rx: &mut LlmStream,
     cancel: &mut watch::Receiver<bool>,
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -106,7 +106,6 @@ pub async fn consume<E: Display>(
         }
     };
 
-    drop(rx);
     for event in thought_stream.finish() {
         match event {
             crate::thought::ThoughtEvent::ThoughtStart => {
