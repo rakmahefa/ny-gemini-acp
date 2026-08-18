@@ -1,15 +1,12 @@
 //! Gemini implementation of the provider-neutral runtime LLM contract.
 use std::sync::Arc;
 
-use gemini_acp_runtime::{LlmModelInfo, LlmProvider, LlmRequest, LlmStream};
-
+use agent_runtime::{LlmModelInfo, LlmProvider, LlmRequest, LlmStream};
 use crate::client::{Client, Config};
 use crate::config::AgentConfig;
 
 #[derive(Clone)]
-pub struct GeminiProvider {
-    client: Arc<Client>,
-}
+pub struct GeminiProvider { client: Arc<Client> }
 
 impl GeminiProvider {
     pub async fn from_agent_config(config: &AgentConfig) -> anyhow::Result<Self> {
