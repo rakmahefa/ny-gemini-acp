@@ -5,10 +5,7 @@ use std::path::Path;
 async fn cycle_create_persist_reload() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec!["/other".into()], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec!["/other".into()], "gemini-3.6-flash").await.unwrap();
     assert!(s.id.starts_with("sess_"));
     assert_eq!(s.messages.len(), 0);
     let mut s2 = store.get(&s.id).await.unwrap();
@@ -29,22 +26,12 @@ async fn cycle_create_persist_reload() {
 async fn annulation_declenche_le_jeton() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let (_, mut rx, _) = store.begin_turn(&s.id).await.unwrap();
     assert!(!*rx.borrow());
     store.cancel(&s.id).await;
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(500), rx.changed())
-            .await
-            .is_ok()
-    );
-    store
-        .end_turn(&s.id, store.get(&s.id).await.unwrap(), 1)
-        .await
-        .unwrap();
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(500), rx.changed()).await.is_ok());
+    store.end_turn(&s.id, store.get(&s.id).await.unwrap(), 1).await.unwrap();
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -52,19 +39,10 @@ async fn annulation_declenche_le_jeton() {
 async fn tour_concurrent_renvoie_erreur() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let (_, _, gen) = store.begin_turn(&s.id).await.unwrap();
-    assert!(matches!(
-        store.begin_turn(&s.id).await,
-        Err(TurnError::AlreadyRunning)
-    ));
-    store
-        .end_turn(&s.id, store.get(&s.id).await.unwrap(), gen)
-        .await
-        .unwrap();
+    assert!(matches!(store.begin_turn(&s.id).await, Err(TurnError::AlreadyRunning)));
+    store.end_turn(&s.id, store.get(&s.id).await.unwrap(), gen).await.unwrap();
     assert!(store.begin_turn(&s.id).await.is_ok());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -73,16 +51,10 @@ async fn tour_concurrent_renvoie_erreur() {
 async fn cancel_ne_libere_pas_le_verrou_avant_fin_du_tour() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let (session, _, gen) = store.begin_turn(&s.id).await.unwrap();
     store.cancel(&s.id).await;
-    assert!(matches!(
-        store.begin_turn(&s.id).await,
-        Err(TurnError::AlreadyRunning)
-    ));
+    assert!(matches!(store.begin_turn(&s.id).await, Err(TurnError::AlreadyRunning)));
     store.end_turn(&s.id, session, gen).await.unwrap();
     assert!(store.begin_turn(&s.id).await.is_ok());
     std::fs::remove_dir_all(&dir).ok();
@@ -92,11 +64,7 @@ async fn cancel_ne_libere_pas_le_verrou_avant_fin_du_tour() {
 async fn cleanup_tmp_orphelins_au_demarrage() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(dir.join("sessions")).unwrap();
-    std::fs::write(
-        dir.join("sessions").join("orphelin.json.tmp"),
-        r#"{"incomplete": true}"#,
-    )
-    .unwrap();
+    std::fs::write(dir.join("sessions").join("orphelin.json.tmp"), r#"{"incomplete": true}"#).unwrap();
     let _store = Store::open(&dir).await.unwrap();
     assert!(!dir.join("sessions").join("orphelin.json.tmp").exists());
     std::fs::remove_dir_all(&dir).ok();
@@ -106,35 +74,15 @@ async fn cleanup_tmp_orphelins_au_demarrage() {
 async fn cancel_all_declenche_tous_les_jetons_sans_liberer_busy() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s1 = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
-    let s2 = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s1 = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
+    let s2 = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let (session1, mut rx1, gen1) = store.begin_turn(&s1.id).await.unwrap();
     let (session2, mut rx2, gen2) = store.begin_turn(&s2.id).await.unwrap();
     store.cancel_all().await;
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(500), rx1.changed())
-            .await
-            .is_ok()
-    );
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(500), rx2.changed())
-            .await
-            .is_ok()
-    );
-    assert!(matches!(
-        store.begin_turn(&s1.id).await,
-        Err(TurnError::AlreadyRunning)
-    ));
-    assert!(matches!(
-        store.begin_turn(&s2.id).await,
-        Err(TurnError::AlreadyRunning)
-    ));
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(500), rx1.changed()).await.is_ok());
+    assert!(tokio::time::timeout(std::time::Duration::from_millis(500), rx2.changed()).await.is_ok());
+    assert!(matches!(store.begin_turn(&s1.id).await, Err(TurnError::AlreadyRunning)));
+    assert!(matches!(store.begin_turn(&s2.id).await, Err(TurnError::AlreadyRunning)));
     store.end_turn(&s1.id, session1, gen1).await.unwrap();
     store.end_turn(&s2.id, session2, gen2).await.unwrap();
     std::fs::remove_dir_all(&dir).ok();
@@ -144,25 +92,14 @@ async fn cancel_all_declenche_tous_les_jetons_sans_liberer_busy() {
 async fn partial_output_est_persiste_sur_annulation() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
     session.messages.push((Role::User, "bonjour".into()));
-    crate::tools::lifecycle::record_partial_output(&s.id, "Réponse partielle");
-
+    crate::state::turn_support::record_partial_output(&s.id, "Réponse partielle");
     store.end_turn(&s.id, session, generation).await.unwrap();
-
     let persisted = store.get(&s.id).await.unwrap();
-    assert_eq!(
-        persisted.messages,
-        vec![
-            (Role::User, "bonjour".into()),
-            (Role::Assistant, "Réponse partielle".into()),
-        ]
-    );
-    assert_eq!(crate::tools::lifecycle::take_partial_output(&s.id), "");
+    assert_eq!(persisted.messages, vec![(Role::User, "bonjour".into()), (Role::Assistant, "Réponse partielle".into())]);
+    assert_eq!(crate::state::turn_support::take_partial_output(&s.id), "");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -170,27 +107,14 @@ async fn partial_output_est_persiste_sur_annulation() {
 async fn partial_output_n_est_pas_duplique_sur_fin_normale() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let (mut session, _, generation) = store.begin_turn(&s.id).await.unwrap();
     session.messages.push((Role::User, "bonjour".into()));
-    session
-        .messages
-        .push((Role::Assistant, "Réponse complète".into()));
-    crate::tools::lifecycle::record_partial_output(&s.id, "Réponse complète");
-
+    session.messages.push((Role::Assistant, "Réponse complète".into()));
+    crate::state::turn_support::record_partial_output(&s.id, "Réponse complète");
     store.end_turn(&s.id, session, generation).await.unwrap();
-
     let persisted = store.get(&s.id).await.unwrap();
-    assert_eq!(
-        persisted.messages,
-        vec![
-            (Role::User, "bonjour".into()),
-            (Role::Assistant, "Réponse complète".into()),
-        ]
-    );
+    assert_eq!(persisted.messages, vec![(Role::User, "bonjour".into()), (Role::Assistant, "Réponse complète".into())]);
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -198,10 +122,7 @@ async fn partial_output_n_est_pas_duplique_sur_fin_normale() {
 async fn snapshot_cree_avant_chaque_tour() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let mut sess = store.get(&s.id).await.unwrap();
     sess.messages.push((Role::User, "Q1".into()));
     sess.messages.push((Role::Assistant, "R1".into()));
@@ -219,10 +140,7 @@ async fn snapshot_cree_avant_chaque_tour() {
 async fn restore_snapshot_remplace_la_session() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let mut sess = store.get(&s.id).await.unwrap();
     sess.messages.push((Role::User, "Q1".into()));
     sess.messages.push((Role::Assistant, "R1".into()));
@@ -242,10 +160,7 @@ async fn restore_snapshot_remplace_la_session() {
 async fn prune_snapshots_garde_10_derniers() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     for i in 0..12 {
         let mut sess = store.get(&s.id).await.unwrap();
         sess.messages.push((Role::User, format!("Q{i}")));
@@ -261,10 +176,7 @@ async fn prune_snapshots_garde_10_derniers() {
 async fn list_ignore_les_snapshots() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
-    let s = store
-        .create("/tmp".into(), vec![], "gemini-3.6-flash")
-        .await
-        .unwrap();
+    let s = store.create("/tmp".into(), vec![], "gemini-3.6-flash").await.unwrap();
     let mut sess = store.get(&s.id).await.unwrap();
     sess.messages.push((Role::User, "Q1".into()));
     sess.messages.push((Role::Assistant, "R1".into()));
