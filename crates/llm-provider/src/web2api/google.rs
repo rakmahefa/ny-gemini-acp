@@ -8,9 +8,8 @@ use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
-use llm_provider::client::StreamItem;
-use llm_provider::core::models::Resolved;
-use llm_provider::core::models;
+use crate::client::StreamItem;
+use crate::core::models::{self, Resolved};
 
 pub async fn models_list() -> Response {
     let model_names: Vec<Value> = models::MODEL_KEYS
