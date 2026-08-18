@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use serde_json::Value;
 use tokio::sync::mpsc;
 
 use crate::events::TurnEventEmitter;
 use crate::state::{Role, Session};
 use crate::{
     Cancellation, GenerationOptions, LlmError, LlmProvider, ModelEvent, ModelRequest,
-    ToolCallRequest, ToolProvider,
+    ToolCallRequest, ToolCallResult, ToolProvider,
 };
 
 const DEFAULT_MAX_ROUNDS: usize = 20;
@@ -63,7 +62,7 @@ pub enum AgentLoopError {
     Llm(#[source] LlmError),
     #[error("LLM stream produced no observable events")]
     EmptyStream,
-    #[error("LLM stream closed after producing no final output")]
+    #[error("LLM stream produced no final text or tool call")]
     NoProgress,
     #[error("agent loop exceeded the maximum of {0} model rounds")]
     MaxRounds(usize),
@@ -71,18 +70,17 @@ pub enum AgentLoopError {
     ToolCallLimit { actual: usize, limit: usize },
     #[error("invalid tool call: {0}")]
     InvalidToolCall(String),
-    #[error("tool provider rejected call `{name}`: {reason}")]
-    ToolExecution { name: String, reason: String },
+    #[error("tool execution was unavailable for `{0}`")]
+    ToolsUnavailable(String),
     #[error("semantic event emission was rejected")]
     SemanticEventRejected,
 }
 
 /// Provider-neutral model/tool orchestration for one logical agent turn.
 ///
-/// The loop deliberately knows nothing about ACP, Gemini, MCP, or presentation.
-/// Prompt construction is injected by the caller while the runtime owns round
-/// bounds, cancellation, stream lifecycle, tool execution, and persistence-safe
-/// history updates.
+/// The loop knows nothing about ACP, Gemini, MCP, or presentation. Prompt
+/// construction is injected by the caller while the runtime owns round bounds,
+/// cancellation, stream lifecycle, tool execution, and history updates.
 pub struct AgentLoop {
     llm: Arc<dyn LlmProvider>,
     tools: Arc<dyn ToolProvider>,
@@ -106,11 +104,10 @@ impl AgentLoop {
         self.config
     }
 
-    /// Runs the model/tool cycle until the model produces a final text response.
+    /// Runs the model/tool cycle until the model produces final text.
     ///
-    /// `build_prompt` is evaluated once per model round. This keeps prompt/context
-    /// assembly outside the loop while guaranteeing that every tool result becomes
-    /// visible to the next model request.
+    /// `build_prompt` is evaluated once per model round, ensuring that tool
+    /// results appended to the session become visible to the next request.
     pub async fn run<F>(
         &self,
         session: &mut Session,
@@ -131,7 +128,6 @@ impl AgentLoop {
         }
 
         let tools = self.tools.for_session(&session.id).await;
-        let mut last_output = String::new();
         let mut total_tool_calls = 0usize;
 
         for round in 0..self.config.max_rounds {
@@ -140,9 +136,8 @@ impl AgentLoop {
                 return Err(AgentLoopError::Cancelled);
             }
 
-            let prompt = build_prompt(session, &*tools);
             let request = ModelRequest {
-                prompt,
+                prompt: build_prompt(session, &*tools),
                 model: session.model.clone(),
                 generation: GenerationOptions {
                     reasoning_budget: session.think,
@@ -176,38 +171,32 @@ impl AgentLoop {
                 });
             }
 
-            last_output = round_result.text.clone();
             if round_result.tool_calls.is_empty() {
-                if last_output.trim().is_empty() {
+                if round_result.text.trim().is_empty() {
                     let _ = emitter.turn_failed();
                     return Err(AgentLoopError::NoProgress);
                 }
+
                 session
                     .messages
-                    .push((Role::Assistant, last_output.clone()));
-                if !emitter.assistant_started() {
-                    let _ = emitter.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
-                if !emitter.assistant_completed() {
-                    let _ = emitter.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
+                    .push((Role::Assistant, round_result.text.clone()));
                 if !emitter.turn_completed() {
                     let _ = emitter.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
+
                 return Ok(AgentLoopOutcome {
-                    output: last_output,
+                    output: round_result.text,
                     rounds: round + 1,
                     tool_calls: total_tool_calls,
                 });
             }
 
-            total_tool_calls = total_tool_calls.saturating_add(round_result.tool_calls.len());
+            total_tool_calls = total_tool_calls
+                .saturating_add(round_result.tool_calls.len());
 
-            // Persist the model's tool intent before execution so an interrupted
-            // turn cannot silently lose the causal assistant message.
+            // Persist the model's tool intent before executing calls so an
+            // interrupted turn cannot lose the causal assistant message.
             let history = format_tool_calls(&round_result.text, &round_result.tool_calls);
             if !history.is_empty() {
                 session.messages.push((Role::Assistant, history));
@@ -241,16 +230,23 @@ impl AgentLoop {
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
 
-                let result = tools
-                    .call(ToolCallRequest {
-                        session_id: session.id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                        cwd: session.cwd.clone(),
-                        additional_dirs: session.additional_directories.clone(),
-                        cancellation: cancellation.subscribe(),
-                    })
-                    .await;
+                let result = if session.tools_enabled && tools.has_tools() {
+                    tools
+                        .call(ToolCallRequest {
+                            session_id: session.id.clone(),
+                            name: call.name.clone(),
+                            arguments: call.arguments.clone(),
+                            cwd: session.cwd.clone(),
+                            additional_dirs: session.additional_directories.clone(),
+                            cancellation: cancellation.subscribe(),
+                        })
+                        .await
+                } else {
+                    ToolCallResult::error(format!(
+                        "tool execution disabled for session: {}",
+                        call.name
+                    ))
+                };
 
                 if !emitter.tool_result_received(call.id.clone(), result.content.clone()) {
                     let _ = emitter.turn_failed();
@@ -269,9 +265,17 @@ impl AgentLoop {
     }
 }
 
+#[derive(Debug)]
+struct PendingToolCall {
+    id: String,
+    name: String,
+    arguments: serde_json::Value,
+}
+
+#[derive(Debug)]
 struct RoundResult {
     text: String,
-    tool_calls: Vec<crate::ToolCallRequestEvent>,
+    tool_calls: Vec<PendingToolCall>,
     event_count: usize,
 }
 
@@ -334,7 +338,7 @@ async fn consume_stream(
                     }
                     thinking_active = true;
                 }
-                if !emitter.thinking_delta(delta.clone()) {
+                if !emitter.thinking_delta(delta) {
                     let _ = emitter.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
@@ -361,11 +365,7 @@ async fn consume_stream(
                 text.push_str(&delta);
             }
             ModelEvent::ToolCall { id, name, arguments } => {
-                tool_calls.push(crate::ToolCallRequestEvent {
-                    id,
-                    name,
-                    arguments,
-                });
+                tool_calls.push(PendingToolCall { id, name, arguments });
             }
             ModelEvent::Usage { .. } => {}
         }
@@ -374,9 +374,6 @@ async fn consume_stream(
     if thinking_active && !emitter.thinking_completed() {
         let _ = emitter.turn_failed();
         return Err(AgentLoopError::SemanticEventRejected);
-    }
-    if thinking_active {
-        thinking_active = false;
     }
     if assistant_active && !emitter.assistant_completed() {
         let _ = emitter.turn_failed();
@@ -390,7 +387,7 @@ async fn consume_stream(
     })
 }
 
-fn format_tool_calls(text: &str, calls: &[crate::ToolCallRequestEvent]) -> String {
+fn format_tool_calls(text: &str, calls: &[PendingToolCall]) -> String {
     let mut result = String::new();
     if !text.trim().is_empty() {
         result.push_str(text.trim());
@@ -409,7 +406,7 @@ fn format_tool_calls(text: &str, calls: &[crate::ToolCallRequestEvent]) -> Strin
     result
 }
 
-fn canonical_tool_result(name: &str, result: &crate::ToolCallResult) -> String {
+fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
     let status = if result.is_ok { "ok" } else { "error" };
     format!("[tool_result {name} status={status}] {}", result.content)
 }
@@ -432,7 +429,9 @@ mod tests {
             let items = self.rounds.lock().unwrap().pop_front().unwrap_or_default();
             let (tx, rx) = mpsc::channel(items.len().max(1));
             for item in items {
-                tx.send(item).await.map_err(|_| LlmError::Provider("fake channel closed".into()))?;
+                tx.send(item)
+                    .await
+                    .map_err(|_| LlmError::Provider("fake channel closed".into()))?;
             }
             drop(tx);
             Ok(rx)
@@ -469,8 +468,8 @@ mod tests {
 
         async fn clear_session(&self, _: &str) {}
 
-        fn definitions(&self) -> Vec<Value> {
-            vec![]
+        fn definitions(&self) -> Vec<serde_json::Value> {
+            Vec::new()
         }
 
         fn prompt_fragment(&self) -> Option<String> {
@@ -481,8 +480,8 @@ mod tests {
             true
         }
 
-        async fn call(&self, request: ToolCallRequest) -> crate::ToolCallResult {
-            crate::ToolCallResult {
+        async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
+            ToolCallResult {
                 content: format!("{} ok", request.name),
                 is_ok: true,
                 executed: true,
@@ -499,14 +498,22 @@ mod tests {
         )
     }
 
-    fn emitter() -> (crate::EventBus, TurnEventEmitter) {
+    fn emitter() -> TurnEventEmitter {
         let bus = crate::EventBus::new();
-        let emitter = TurnEventEmitter::new(
-            bus.clone(),
+        TurnEventEmitter::new(
+            bus,
             "sess_0123456789abcdef0123456789abcdef",
             "turn_test",
-        );
-        (bus, emitter)
+        )
+    }
+
+    fn prompt(session: &Session) -> String {
+        session
+            .messages
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     #[tokio::test]
@@ -518,14 +525,14 @@ mod tests {
         ]);
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
-        let (_bus, mut emitter) = emitter();
+        let mut emitter = emitter();
         let outcome = loop_
             .run(
                 &mut session,
                 &[],
                 Cancellation::new(),
                 &mut emitter,
-                |session, _| session.messages.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join("\n"),
+                |session, _| prompt(session),
             )
             .await
             .unwrap();
@@ -537,33 +544,34 @@ mod tests {
     #[tokio::test]
     async fn executes_tool_then_runs_next_round() {
         let llm = Arc::new(FakeLlm::default());
-        llm.rounds.lock().unwrap().push_back(vec![
-            Ok(ModelEvent::ToolCall {
-                id: "call-1".into(),
-                name: "search".into(),
-                arguments: json!({"q": "rust"}),
-            }),
-        ]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
+            id: "call-1".into(),
+            name: "search".into(),
+            arguments: json!({"q": "rust"}),
+        })]);
         llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta(
             "result".into(),
         ))]);
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
-        let (_bus, mut emitter) = emitter();
+        let mut emitter = emitter();
         let outcome = loop_
             .run(
                 &mut session,
                 &[],
                 Cancellation::new(),
                 &mut emitter,
-                |session, _| session.messages.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join("\n"),
+                |session, _| prompt(session),
             )
             .await
             .unwrap();
         assert_eq!(outcome.rounds, 2);
         assert_eq!(outcome.tool_calls, 1);
         assert_eq!(outcome.output, "result");
-        assert!(session.messages.iter().any(|(role, text)| *role == Role::Tool && text.contains("search")));
+        assert!(session
+            .messages
+            .iter()
+            .any(|(role, text)| *role == Role::Tool && text.contains("search")));
     }
 
     #[tokio::test]
@@ -572,7 +580,7 @@ mod tests {
         llm.rounds.lock().unwrap().push_back(vec![]);
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
-        let (_bus, mut emitter) = emitter();
+        let mut emitter = emitter();
         let error = loop_
             .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
             .await
@@ -605,7 +613,7 @@ mod tests {
         )
         .unwrap();
         let mut session = session();
-        let (_bus, mut emitter) = emitter();
+        let mut emitter = emitter();
         let error = loop_
             .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
             .await
@@ -620,11 +628,14 @@ mod tests {
     async fn enforces_round_limit() {
         let llm = Arc::new(FakeLlm::default());
         for id in ["a", "b"] {
-            llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
-                id: id.into(),
-                name: "loop".into(),
-                arguments: json!({}),
-            })]);
+            llm.rounds
+                .lock()
+                .unwrap()
+                .push_back(vec![Ok(ModelEvent::ToolCall {
+                    id: id.into(),
+                    name: "loop".into(),
+                    arguments: json!({}),
+                })]);
         }
         let loop_ = AgentLoop::new(
             llm,
@@ -636,7 +647,7 @@ mod tests {
         )
         .unwrap();
         let mut session = session();
-        let (_bus, mut emitter) = emitter();
+        let mut emitter = emitter();
         let error = loop_
             .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
             .await
@@ -653,10 +664,37 @@ mod tests {
         ]);
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
-        let (_bus, mut emitter) = emitter();
-        loop_
+        let mut emitter = emitter();
+        let outcome = loop_
             .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
             .await
             .unwrap();
+        assert_eq!(outcome.output, "answer");
+    }
+
+    #[tokio::test]
+    async fn disabled_tools_are_not_executed() {
+        let llm = Arc::new(FakeLlm::default());
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
+            id: "call-1".into(),
+            name: "dangerous".into(),
+            arguments: json!({}),
+        })]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta(
+            "done".into(),
+        ))]);
+        let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
+        let mut session = session();
+        session.tools_enabled = false;
+        let mut emitter = emitter();
+        let outcome = loop_
+            .run(&mut session, &[], Cancellation::new(), &mut emitter, |session, _| prompt(session))
+            .await
+            .unwrap();
+        assert_eq!(outcome.output, "done");
+        assert!(session
+            .messages
+            .iter()
+            .any(|(role, text)| *role == Role::Tool && text.contains("disabled")));
     }
 }
