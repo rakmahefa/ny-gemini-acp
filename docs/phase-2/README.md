@@ -2,6 +2,12 @@
 
 Phase 2 hardens the raw streaming boundary after lifecycle defects are closed.
 
+## Phase artifacts
+
+- [`README.md`](README.md) — scope and exit criteria
+- [`PROMPT_TEST.md`](PROMPT_TEST.md) — prompts and fixture-driven scenarios for adversarial content tests
+- [`ACP_LOG.md`](ACP_LOG.md) — raw ACP evidence captured from real Zed
+
 ## Primary scope
 
 - arbitrary valid chunk boundaries
