@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::client::DEFAULT_BL;
-use crate::core::models::DEFAULT_MODEL;
+use llm_provider::client::DEFAULT_BL;
+use llm_provider::core::models::DEFAULT_MODEL;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -51,7 +51,7 @@ fn apply_env(config: &mut Config) {
     if let Some(v) = get("RETRY_DELAY_SEC") { if let Ok(n) = v.parse() { config.retry_delay_sec = n; } }
     if let Some(v) = get("REQUEST_TIMEOUT_SEC") { if let Ok(n) = v.parse() { config.request_timeout_sec = n; } }
     if let Some(v) = get("GEMINI_BL") { config.gemini_bl = v; }
-    if let Some(v) = get("AUTH_USER") { config.auth_user = v.parse().ok(); }
+    if let Some(v) = get("AUTH_USER") { if let Ok(n) = v.parse() { config.auth_user = Some(n); } }
     if let Some(v) = get("XSRF_TOKEN") { config.xsrf_token = Some(v); }
     if let Some(v) = get("DEFAULT_MODEL") { config.default_model = v; }
     if let Some(v) = get("LOG_REQUESTS") { config.log_requests = v != "0" && v != "false"; }
