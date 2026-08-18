@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use gemini_acp_llm::{LlmError, LlmProvider, LlmRequest, LlmStream};
+use crate::llm::{LlmError, LlmProvider, LlmRequest, LlmStream};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -38,11 +38,7 @@ impl Client {
                 debug!(
                     "cookies chargés: {} paires, SAPISID {}",
                     n,
-                    if cookies.sapisid().is_some() {
-                        "présent"
-                    } else {
-                        "absent"
-                    }
+                    if cookies.sapisid().is_some() { "présent" } else { "absent" }
                 );
             }
             None => warn!(
@@ -111,9 +107,7 @@ impl Client {
 
 #[async_trait::async_trait]
 impl LlmProvider for Client {
-    fn name(&self) -> &'static str {
-        "gemini"
-    }
+    fn name(&self) -> &'static str { "gemini" }
 
     fn is_thinking_model(&self, model: &str) -> bool {
         crate::core::models::resolve(model, &self.inner.config.default_model)
@@ -121,10 +115,7 @@ impl LlmProvider for Client {
             .unwrap_or(false)
     }
 
-    async fn upload_images(
-        &self,
-        images: &[(String, String)],
-    ) -> Result<Vec<String>, LlmError> {
+    async fn upload_images(&self, images: &[(String, String)]) -> Result<Vec<String>, LlmError> {
         let mut refs = Vec::with_capacity(images.len());
         for (base64, mime) in images {
             refs.push(
@@ -146,9 +137,7 @@ impl LlmProvider for Client {
             let mut receiver = receiver;
             while let Some(item) = receiver.recv().await {
                 let mapped_item = item.map_err(LlmError::Provider);
-                if tx.send(mapped_item).await.is_err() {
-                    break;
-                }
+                if tx.send(mapped_item).await.is_err() { break; }
             }
         });
         Ok(LlmStream::new(mapped))
