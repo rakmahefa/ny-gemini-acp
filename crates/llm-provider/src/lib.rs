@@ -7,13 +7,17 @@ pub mod provider;
 pub mod settings;
 pub mod web2api;
 
-/// Temporary local compatibility namespace for the historical implementation
-/// paths used by the web2api port. It is internal to this crate and does not
-/// recreate the removed workspace crate.
+/// Temporary local compatibility namespace for historical implementation
+/// paths still used by the web2api port. It is internal to this crate and does
+/// not recreate the removed workspace crate.
 pub(crate) mod gemini_acp_config {
     pub(crate) use crate::client;
     pub(crate) use crate::core;
 }
+
+/// Temporary local name for the provider-neutral runtime dependency. This is
+/// only a source-compatibility alias used by the Gemini provider implementation.
+pub(crate) use agent_runtime as gemini_acp_runtime;
 
 pub use client::{Client as GeminiClient, Config as ClientConfig};
 pub use config::AgentConfig;
