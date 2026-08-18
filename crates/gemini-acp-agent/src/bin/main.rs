@@ -1,21 +1,16 @@
 //! Binaire `gemini-acp` : bootstrap Gemini + runtime + transport ACP.
-//!
-//! La composition des providers appartient au bootstrap. Le runtime ne connaît
-//! que le contrat `LlmProvider`, ce qui permet de remplacer Gemini sans toucher
-//! aux sessions, outils ou au protocole ACP.
 
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
-use gemini_acp_agent::run_agent;
+use acp_adaptor::run_agent;
 use gemini_acp_config::{client::Client, AgentConfig};
 use gemini_acp_runtime::AgentRuntime;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     init_tracing();
-
     let config = AgentConfig::from_env();
     let provider = Arc::new(
         Client::new(gemini_acp_config::client::Config {
@@ -39,7 +34,6 @@ async fn main() -> Result<()> {
             tracing::info!("shutdown gracieux terminé");
         }
     }
-
     Ok(())
 }
 
@@ -56,34 +50,22 @@ async fn wait_for_shutdown_signal() {
     #[cfg(unix)]
     {
         use tokio::signal::unix::{signal, SignalKind};
-
         let mut sigterm = match signal(SignalKind::terminate()) {
             Ok(signal) => signal,
-            Err(error) => {
-                tracing::error!(%error, "installation du handler SIGTERM impossible");
-                return;
-            }
+            Err(error) => { tracing::error!(%error, "installation du handler SIGTERM impossible"); return; }
         };
         let mut sigint = match signal(SignalKind::interrupt()) {
             Ok(signal) => signal,
-            Err(error) => {
-                tracing::error!(%error, "installation du handler SIGINT impossible");
-                return;
-            }
+            Err(error) => { tracing::error!(%error, "installation du handler SIGINT impossible"); return; }
         };
-
         tokio::select! {
             _ = sigterm.recv() => tracing::info!("SIGTERM reçu"),
             _ = sigint.recv() => tracing::info!("SIGINT reçu"),
         }
     }
-
     #[cfg(not(unix))]
     {
-        if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error, "installation du handler Ctrl-C impossible");
-        } else {
-            tracing::info!("Ctrl-C reçu");
-        }
+        if let Err(error) = tokio::signal::ctrl_c().await { tracing::error!(%error, "installation du handler Ctrl-C impossible"); }
+        else { tracing::info!("Ctrl-C reçu"); }
     }
 }
