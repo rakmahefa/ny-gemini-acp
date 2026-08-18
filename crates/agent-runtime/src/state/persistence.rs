@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use gemini_acp_encaps::Cancellation;
+use crate::Cancellation;
 
 use super::{Live, Session, Store};
 
