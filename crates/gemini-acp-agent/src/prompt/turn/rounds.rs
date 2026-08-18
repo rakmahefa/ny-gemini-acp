@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 use super::context::{compact_messages, COMPACTION_THRESHOLD_CHARS, EMERGENCY_COMPACTION_CHARS};
 use crate::prompt::error::actionable_error_message;
-use crate::prompt::follow_up::{request_action, FollowUpError, FollowUpOutcome};
+use crate::prompt::follow_up::{replace_components, request_action, FollowUpError, FollowUpOutcome};
 use crate::prompt::stream;
 use gemini_acp_runtime::tools::lifecycle::clear_partial_output;
 
@@ -143,7 +143,7 @@ pub(crate) async fn run(
             return Err(RoundError::Stop(map_stop_reason_from_error(error)));
         }
 
-        let clean_text = gemini_acp_runtime::tools::parse::sanitize_assistant_text(&assistant);
+        let clean_text = replace_components(&assistant);
         let follow_up_calls = tool_calls.iter().filter(|call| call.is_action()).collect::<Vec<_>>();
         let executable_calls = tool_calls
             .iter()
@@ -290,8 +290,7 @@ pub(crate) async fn run(
                     return Err(RoundError::Stop(StopReason::Cancelled));
                 }
                 Err(error) => {
-                    let is_invalid_input =
-                        matches!(&error, FollowUpError::InvalidInput(_));
+                    let is_invalid_input = matches!(&error, FollowUpError::InvalidInput(_));
                     tracing::warn!(
                         session = %ctx.session_id,
                         action_id = %call.id,
