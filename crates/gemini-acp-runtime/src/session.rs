@@ -37,7 +37,9 @@ impl SessionManager {
 
     /// Configure MCP for one ACP session.
     ///
-    /// The forwarded ACP configuration is normalized and fully discovered before
+    /// The session workspace is resolved from persisted session state so every
+    /// call site gets identical stdio working-directory semantics. The
+    /// forwarded ACP configuration is normalized and fully discovered before
     /// replacing the previous registry. Empty configuration explicitly removes
     /// any prior session override and makes the prompt fall back to global/env
     /// MCP configuration through the agent's fallback registry.
@@ -45,14 +47,18 @@ impl SessionManager {
         &self,
         id: &str,
         servers: Vec<McpServer>,
-        session_cwd: &Path,
     ) -> std::result::Result<(), crate::tools::McpError> {
         if servers.is_empty() {
             self.clear_mcp(id).await;
             return Ok(());
         }
 
-        let configs = McpServerConfig::from_acp_servers(servers, session_cwd)?;
+        let session = self
+            .store
+            .get(id)
+            .await
+            .ok_or_else(|| crate::tools::McpError::Config(format!("session introuvable: {id}")))?;
+        let configs = McpServerConfig::from_acp_servers(servers, &session.cwd)?;
         let catalog = McpCatalog::from_configs(configs).await?;
         let mut registry = ToolRegistry::builtin();
         registry.register_mcp(Arc::new(catalog));
@@ -62,7 +68,7 @@ impl SessionManager {
             .write()
             .await
             .insert(id.to_owned(), registry);
-        tracing::info!(session = %id, cwd = %session_cwd.display(), "forwarded MCP configuration activated for session");
+        tracing::info!(session = %id, cwd = %session.cwd.display(), "forwarded MCP configuration activated for session");
         Ok(())
     }
     pub fn validate_id(id: &str) -> Result<()> {
