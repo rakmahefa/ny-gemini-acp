@@ -1,5 +1,5 @@
 //! Session lifecycle and persistence.
-use crate::providers::{IntoMcpServerConfig, NullToolProvider, SharedToolProvider, ToolProvider};
+use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider};
 use crate::state::{Session, SessionMode, Store};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -27,22 +27,17 @@ impl SessionManager {
     pub async fn clear_mcp(&self, id: &str) {
         self.tools.clear_session(id).await
     }
-    pub async fn configure_mcp<S>(&self, id: &str, servers: Vec<S>) -> Result<(), String>
-    where
-        S: IntoMcpServerConfig,
-    {
+    pub async fn configure_mcp(
+        &self,
+        id: &str,
+        servers: Vec<crate::providers::McpServerConfig>,
+    ) -> Result<(), String> {
         let session = self
             .store
             .get(id)
             .await
             .ok_or_else(|| format!("session introuvable: {id}"))?;
-        let configs = servers
-            .into_iter()
-            .map(|server| server.into_runtime_mcp(&session.cwd))
-            .collect::<Result<Vec<_>, _>>()?;
-        self.tools
-            .configure_session(id, session.cwd, configs)
-            .await
+        self.tools.configure_session(id, session.cwd, servers).await
     }
     pub fn validate_id(id: &str) -> Result<()> {
         let Some(rest) = id.strip_prefix(SESSION_ID_PREFIX) else {
