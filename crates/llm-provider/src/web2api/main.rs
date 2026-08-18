@@ -1,15 +1,4 @@
-//! Face API — port Rust de `gemini-web2api` (spec §5) : serveur axum servant
-//! le même backend Gemini web. Endpoints :
-//!
-//! - `GET  /` → statut + modèles.
-//! - `GET  /v1/models` → liste au format OpenAI.
-//! - `POST /v1/chat/completions` (OpenAI, streaming SSE).
-//! - `POST /v1/responses` (Codex CLI, streaming SSE).
-//! - `GET  /v1beta/models` + `POST /v1beta/models/{model}:generateContent`
-//!   (`:streamGenerateContent`) — Gemini CLI.
-//!
-//! Configuration : `config.json` (./config.json ou ~/.config/gemini-web2api/)
-//! puis env `GEMINI_WEB2API_*` (spec §5.1). Les logs vont sur stderr.
+//! Face API — serveur axum exposant les formats OpenAI/Codex/Google sur le client Gemini web.
 
 mod chat;
 mod config;
@@ -18,8 +7,6 @@ mod google;
 mod http;
 mod responses;
 
-use std::time::Duration;
-
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::middleware;
@@ -27,6 +14,8 @@ use axum::routing::{get, post};
 use axum::Router;
 use tracing_subscriber::EnvFilter;
 
+use crate::client::{Client, Config as ClientConfig};
+use crate::core::models;
 use crate::http::AppState;
 
 #[tokio::main]
@@ -39,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let config = std::sync::Arc::new(config::load());
     convert::warn_xsrf_ignored(config.xsrf_token.as_deref());
 
-    let client = gemini_acp_config::client::Client::new(gemini_acp_config::client::Config {
+    let client = Client::new(ClientConfig {
         cookie_file: config
             .cookie_file
             .clone()
@@ -48,9 +37,9 @@ async fn main() -> anyhow::Result<()> {
         auth_user: config.auth_user,
         proxy: config.proxy.clone(),
         bl: config.gemini_bl.clone(),
-        request_timeout: Duration::from_secs(config.request_timeout_sec),
+        request_timeout: std::time::Duration::from_secs(config.request_timeout_sec),
         retry_attempts: config.retry_attempts,
-        retry_delay: Duration::from_secs(config.retry_delay_sec),
+        retry_delay: std::time::Duration::from_secs(config.retry_delay_sec),
     })
     .await?;
 
@@ -63,10 +52,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/responses", post(responses::handler))
         .route("/v1beta/models/{model}", post(google::generate))
         .fallback(not_found)
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            http::cors_auth,
-        ))
+        .layer(middleware::from_fn_with_state(state.clone(), http::cors_auth))
         .with_state(state.clone());
 
     let addr = format!("{}:{}", state.config.host, state.config.port);
@@ -80,23 +66,18 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `GET /` → `{"status": "ok", "version": …, "models": […]}`.
 async fn root(State(state): State<AppState>) -> axum::response::Response {
-    let models: Vec<String> = gemini_acp_config::core::models::MODEL_KEYS
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    let models_list: Vec<String> = models::MODEL_KEYS.iter().map(|s| s.to_string()).collect();
     http::json_ok(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
-        "models": models,
+        "models": models_list,
         "defaultModel": state.config.default_model,
     }))
 }
 
-/// `GET /v1/models` (port du vendor : `object: "list"` + `data` descripteurs).
 async fn openai_models() -> axum::response::Response {
-    let data: Vec<serde_json::Value> = gemini_acp_config::core::models::MODEL_KEYS
+    let data: Vec<serde_json::Value> = models::MODEL_KEYS
         .iter()
         .map(|name| {
             serde_json::json!({
@@ -111,10 +92,6 @@ async fn openai_models() -> axum::response::Response {
     http::json_ok(serde_json::json!({ "object": "list", "data": data }))
 }
 
-/// 404 au format du vendor (`{"error": "not found"}`).
 async fn not_found() -> axum::response::Response {
-    http::json_response(
-        StatusCode::NOT_FOUND,
-        serde_json::json!({"error": "not found"}),
-    )
+    http::json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not found"}))
 }
