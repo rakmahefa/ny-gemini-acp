@@ -64,3 +64,7 @@ pub fn notify_usage(
         SessionUpdate::UsageUpdate(usage_update(prompt, assistant)),
     ))
 }
+
+#[cfg(test)]
+#[path = "../test/notify.rs"]
+mod tests;

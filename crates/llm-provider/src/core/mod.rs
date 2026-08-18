@@ -1,7 +1,7 @@
 //! Provider-local Gemini core utilities.
 //!
-//! These modules implement Gemini authentication, cookies, framing, models,
-//! tool prompt helpers and time utilities. They are not runtime contracts.
+//! Cookies, authentication, response framing, model resolution, typed errors
+//! and time helpers remain implementation details of the Gemini provider.
 pub mod auth;
 pub mod cookies;
 pub mod errors;
@@ -13,3 +13,5 @@ pub mod tool_prompt;
 pub use auth::sapisid_hash;
 pub use cookies::CookieJar;
 pub use errors::{GeminiError, GeminiResult};
+pub use models::resolve as resolve_model;
+pub use time::{now_iso, now_unix, now_unix_u64};
