@@ -23,7 +23,7 @@ jobs:
       uses: Swatinem/rust-cache@v2
 
     - name: Check formatting
-      run: cargo fmt
+      run: cargo fmt --check
       
   test:
     name: Test
@@ -58,4 +58,4 @@ jobs:
         uses: Swatinem/rust-cache@v2
       
       - name: Cargo Clippy Workspace
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings

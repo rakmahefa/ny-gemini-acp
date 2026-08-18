@@ -3,17 +3,17 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use crate::{AcpTurn, AcpTurnHandle, Cancellation, EncapsError, TurnState};
+use crate::{AgentTurn, AgentTurnHandle, Cancellation, RuntimeError, TurnState};
 
 /// Coordinates turns so a session has at most one active turn at a time.
 ///
-/// The manager owns the reservation, while `AcpTurn` owns the execution
+/// The manager owns the reservation, while `AgentTurn` owns the execution
 /// lifecycle. A reservation is installed before the worker is spawned, making
 /// concurrent `start` calls deterministic: exactly one wins the session slot.
 #[derive(Clone, Default)]
 pub struct TurnManager {
     sessions: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
-    active: Arc<Mutex<HashMap<String, AcpTurnHandle>>>,
+    active: Arc<Mutex<HashMap<String, AgentTurnHandle>>>,
 }
 
 impl TurnManager {
@@ -39,18 +39,18 @@ impl TurnManager {
         &self,
         session_id: impl Into<String>,
         work: F,
-    ) -> Result<AcpTurnHandle, EncapsError>
+    ) -> Result<AgentTurnHandle, RuntimeError>
     where
         F: FnOnce(Cancellation) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<(), EncapsError>> + Send + 'static,
+        Fut: std::future::Future<Output = Result<(), RuntimeError>> + Send + 'static,
     {
         let session_id = session_id.into();
         let lock = self.session_lock(&session_id).await;
-        let (turn, handle) = AcpTurn::new();
+        let (turn, handle) = AgentTurn::new();
         {
             let mut active = self.active.lock().await;
             if active.contains_key(&session_id) {
-                return Err(EncapsError::TurnAlreadyActive);
+                return Err(RuntimeError::TurnAlreadyActive);
             }
             active.insert(session_id.clone(), handle.clone());
         }
@@ -84,7 +84,7 @@ impl TurnManager {
     ///
     /// Returning `false` means the session has no active turn; this is not an
     /// error and makes cancellation safe to race with normal completion.
-    pub async fn cancel(&self, session_id: &str) -> Result<bool, EncapsError> {
+    pub async fn cancel(&self, session_id: &str) -> Result<bool, RuntimeError> {
         let handle = self.active.lock().await.get(session_id).cloned();
         if let Some(handle) = handle {
             handle.cancel().await?;
@@ -110,7 +110,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::Notify;
 
-    async fn wait_for_terminal(handle: &AcpTurnHandle) {
+    async fn wait_for_terminal(handle: &AgentTurnHandle) {
         let mut rx = handle.subscribe_state();
         while !rx.borrow().is_terminal() {
             rx.changed().await.unwrap();
@@ -152,12 +152,10 @@ mod tests {
             .count();
         let failures = [first.as_ref(), second.as_ref()]
             .into_iter()
-            .filter(|result| matches!(result, Err(EncapsError::TurnAlreadyActive)))
+            .filter(|result| matches!(result, Err(RuntimeError::TurnAlreadyActive)))
             .count();
         assert_eq!(successes, 1);
         assert_eq!(failures, 1);
-        // The single winning start owns the worker, so its work closure is
-        // expected to begin exactly once before `start` returns.
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         if let Ok(handle) = first {
             handle.cancel().await.unwrap();

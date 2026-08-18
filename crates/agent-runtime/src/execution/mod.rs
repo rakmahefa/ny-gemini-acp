@@ -8,8 +8,8 @@ mod turn_manager;
 
 pub use cancellation::Cancellation;
 pub use command::ThreadCommand;
-pub use error::EncapsError;
+pub use error::RuntimeError;
 pub use lifecycle::ThreadState;
-pub use thread::{AcpThread, AcpThreadHandle};
-pub use turn::{AcpTurn, AcpTurnHandle, TurnState};
+pub use thread::{AgentThread, AgentThreadHandle};
+pub use turn::{AgentTurn, AgentTurnHandle, TurnState};
 pub use turn_manager::TurnManager;

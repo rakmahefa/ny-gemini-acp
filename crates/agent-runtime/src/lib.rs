@@ -9,10 +9,10 @@ pub mod session;
 pub mod state;
 pub mod time;
 
-pub use events::{AcpSemanticEvent, EventBus, EventContext, EventStream, ToolEventContext};
+pub use events::{SemanticEvent, EventBus, EventContext, EventStream, ToolEventContext};
 pub use execution::{
-    AcpThread, AcpThreadHandle, AcpTurn, AcpTurnHandle, Cancellation, EncapsError, ThreadCommand,
-    ThreadState, TurnManager, TurnState,
+    AgentThread, AgentThreadHandle, AgentTurn, AgentTurnHandle, Cancellation, RuntimeError,
+    ThreadCommand, ThreadState, TurnManager, TurnState,
 };
 pub use providers::{
     LlmModelInfo, LlmProvider, LlmRequest, LlmStream, NullLlmProvider, NullToolProvider,
