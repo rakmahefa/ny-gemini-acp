@@ -1,14 +1,8 @@
-//! Configuration de l'agent — équivalent Rust du `SettingsManager` de
-//! `vendor/claude-agent-acp`. La configuration est résolue une seule fois
-//! au démarrage (`AgentConfig::from_env`), puis injectée dans le runtime
-//! (`gemini_acp_runtime::AgentRuntime::from_config`). Les modules en aval ne
-//! lisent donc jamais directement l'environnement.
+//! Configuration de l'agent — résolution provider-local.
 //!
-//! Refactor 3-crates (spec §3.2) : la construction des dépendances
-//! applicatives (`build_state`) ne vit plus ici — elle a été déplacée dans
-//! `gemini_acp_runtime::AgentRuntime::from_config`, pour que ce crate reste
-//! la fondation (zéro dépendance vers `runtime` ou `agent`).
-
+//! La configuration est résolue une seule fois (`AgentConfig::from_env`), puis
+//! injectée vers les couches supérieures. Aucun contrat runtime ne dépend de
+//! l'environnement directement.
 pub mod config_options;
 pub mod env;
 

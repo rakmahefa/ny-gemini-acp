@@ -1,4 +1,4 @@
-/// Lifecycle of an encapsulated ACP execution thread.
+/// Lifecycle of an agent execution thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThreadState {
     Created,

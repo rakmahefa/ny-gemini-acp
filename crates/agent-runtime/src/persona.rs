@@ -1,4 +1,4 @@
-//! Persona Gemini — définition de la personnalité de l'agent.
+//! Agent persona and system-instruction policy.
 
 use crate::state::Session;
 

@@ -1,16 +1,16 @@
 use agent_client_protocol::schema::v1::{MessageId, SessionId, StopReason};
 use agent_client_protocol::{Client, ConnectionTo};
-use gemini_acp_runtime::events::TurnEventEmitter;
-use gemini_acp_runtime::state::{Role, Session, SessionMode};
-use gemini_acp_runtime::{GenerationOptions, LlmProvider, LlmRequest, ToolProvider};
+use agent_runtime::events::TurnEventEmitter;
+use agent_runtime::state::{Role, Session, SessionMode};
+use agent_runtime::{GenerationOptions, LlmProvider, ModelRequest, ToolProvider};
 use tokio::sync::watch;
+use tools_provider::tools::ToolPermissionMode;
 
 use super::context::{compact_messages, COMPACTION_THRESHOLD_CHARS, EMERGENCY_COMPACTION_CHARS};
 use crate::prompt::follow_up::{
     replace_components, request_action, FollowUpError, FollowUpOutcome,
 };
 use crate::prompt::stream;
-use gemini_acp_tools::tools::ToolPermissionMode;
 
 pub(crate) enum RoundError {
     Stop(StopReason),
@@ -78,13 +78,13 @@ pub(crate) async fn run(
         let prompt = crate::prompt::build::build_prompt(ctx.session, Some(ctx.provider));
         let rx = match ctx
             .llm
-            .stream(LlmRequest {
+            .stream(ModelRequest {
                 prompt,
                 model: ctx.session.model.clone(),
                 generation: GenerationOptions {
                     reasoning_budget: ctx.session.think,
                 },
-                refs: ctx.refs.to_vec(),
+                references: ctx.refs.to_vec(),
             })
             .await
         {
@@ -177,7 +177,7 @@ pub(crate) async fn run(
             let session_mode = ctx.session.mode;
             let mode = tool_permission_mode(session_mode);
             let mode_getter = move || mode;
-            let executor = gemini_acp_tools::tools::executor::ToolExecutor::new(
+            let executor = tools_provider::tools::executor::ToolExecutor::new(
                 ctx.cx,
                 ctx.session_id,
                 ctx.provider,
@@ -201,7 +201,7 @@ pub(crate) async fn run(
                     .await;
                 ctx.session.messages.push((
                     Role::Tool,
-                    gemini_acp_tools::tools::prompt::format_tool_result(
+                    tools_provider::tools::prompt::format_tool_result(
                         &call.name,
                         &result.content,
                     ),

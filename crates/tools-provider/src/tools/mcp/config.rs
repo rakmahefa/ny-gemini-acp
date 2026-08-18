@@ -78,13 +78,13 @@ impl McpServerConfig {
     }
 }
 
-impl From<agent_runtime::McpServerConfig> for McpServerConfig {
-    fn from(config: agent_runtime::McpServerConfig) -> Self {
+impl From<agent_runtime::ToolServerConfig> for McpServerConfig {
+    fn from(config: agent_runtime::ToolServerConfig) -> Self {
         Self {
             name: config.name,
             transport: match config.transport {
-                agent_runtime::McpTransportKind::Stdio => McpTransportKind::Stdio,
-                agent_runtime::McpTransportKind::Http => McpTransportKind::Http,
+                agent_runtime::ToolTransportKind::Process => McpTransportKind::Stdio,
+                agent_runtime::ToolTransportKind::Http => McpTransportKind::Http,
             },
             command: config.command,
             args: config.args,
@@ -133,7 +133,7 @@ impl McpToolDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime::{McpServerConfig as RuntimeMcpServerConfig, McpTransportKind as RuntimeMcpTransportKind};
+    use agent_runtime::{ToolServerConfig as RuntimeToolServerConfig, ToolTransportKind as RuntimeToolTransportKind};
 
     #[test]
     fn tool_descriptor_requires_object_input_schema() {
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn converts_stdio_runtime_configuration() {
-        let server = RuntimeMcpServerConfig::stdio(
+        let server = RuntimeToolServerConfig::process(
             "project-tools",
             "/usr/local/bin/project-mcp",
             vec!["--cwd".into(), "/tmp/project".into()],
@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn converts_http_runtime_configuration() {
-        let server = RuntimeMcpServerConfig::http(
+        let server = RuntimeToolServerConfig::http(
             "remote",
             "https://mcp.example.test",
             HashMap::from([("authorization".into(), "Bearer test".into())]),
@@ -179,10 +179,10 @@ mod tests {
     }
 
     #[test]
-    fn conversion_preserves_transport_kind_contract() {
+    fn conversion_preserves_process_transport_contract() {
         assert_eq!(
-            RuntimeMcpTransportKind::Stdio as u8,
-            agent_runtime::McpTransportKind::Stdio as u8
+            RuntimeToolTransportKind::Process as u8,
+            agent_runtime::ToolTransportKind::Process as u8
         );
     }
 }

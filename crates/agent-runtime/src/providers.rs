@@ -6,7 +6,42 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
-pub type LlmStream = mpsc::Receiver<Result<String, String>>;
+/// Canonical semantic events emitted by an LLM provider.
+///
+/// Provider wire formats are deliberately normalized before the runtime sees
+/// them. A provider may expose richer native events, but the runtime only
+/// reasons about this stable vocabulary.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelEvent {
+    TextDelta(String),
+    ReasoningDelta(String),
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: Value,
+    },
+    Usage {
+        prompt_tokens: Option<u64>,
+        completion_tokens: Option<u64>,
+        total_tokens: Option<u64>,
+    },
+}
+
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum LlmError {
+    #[error("invalid model request: {0}")]
+    InvalidRequest(String),
+    #[error("authentication failed: {0}")]
+    Authentication(String),
+    #[error("model is unavailable: {0}")]
+    Unavailable(String),
+    #[error("provider request failed: {0}")]
+    Provider(String),
+    #[error("request cancelled")]
+    Cancelled,
+}
+
+pub type LlmStream = mpsc::Receiver<Result<ModelEvent, LlmError>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct GenerationOptions {
@@ -15,12 +50,16 @@ pub struct GenerationOptions {
     pub reasoning_budget: Option<u32>,
 }
 
+/// Provider-neutral model request.
+///
+/// `prompt` is the runtime's serialized context representation. Provider
+/// adapters must not infer ACP or provider wire-format semantics from it.
 #[derive(Debug, Clone)]
-pub struct LlmRequest {
+pub struct ModelRequest {
     pub prompt: String,
     pub model: String,
     pub generation: GenerationOptions,
-    pub refs: Vec<String>,
+    pub references: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -30,21 +69,26 @@ pub struct LlmModelInfo {
 
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn stream(&self, request: LlmRequest) -> Result<LlmStream, String>;
-    async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, String>;
+    async fn stream(&self, request: ModelRequest) -> Result<LlmStream, LlmError>;
+    async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, LlmError>;
     fn model_info(&self, model: &str) -> LlmModelInfo;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum McpTransportKind {
-    Stdio,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ToolTransportKind {
+    Process,
     Http,
 }
 
+/// Session-scoped tool server configuration.
+///
+/// The runtime deliberately models a generic tool transport instead of MCP.
+/// ACP/MCP-specific representations are converted at the adapter boundary and
+/// provider-specific transports remain inside `tools-provider`.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct McpServerConfig {
+pub struct ToolServerConfig {
     pub name: String,
-    pub transport: McpTransportKind,
+    pub transport: ToolTransportKind,
     pub command: Option<String>,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
@@ -53,8 +97,8 @@ pub struct McpServerConfig {
     pub headers: HashMap<String, String>,
 }
 
-impl McpServerConfig {
-    pub fn stdio(
+impl ToolServerConfig {
+    pub fn process(
         name: impl Into<String>,
         command: impl Into<String>,
         args: Vec<String>,
@@ -63,7 +107,7 @@ impl McpServerConfig {
     ) -> Self {
         Self {
             name: name.into(),
-            transport: McpTransportKind::Stdio,
+            transport: ToolTransportKind::Process,
             command: Some(command.into()),
             args,
             env,
@@ -80,7 +124,7 @@ impl McpServerConfig {
     ) -> Self {
         Self {
             name: name.into(),
-            transport: McpTransportKind::Http,
+            transport: ToolTransportKind::Http,
             command: None,
             args: Vec::new(),
             env: HashMap::new(),
@@ -132,7 +176,7 @@ pub trait ToolProvider: Send + Sync {
         &self,
         session_id: &str,
         cwd: PathBuf,
-        servers: Vec<McpServerConfig>,
+        servers: Vec<ToolServerConfig>,
     ) -> Result<(), String>;
     async fn clear_session(&self, session_id: &str);
     fn definitions(&self) -> Vec<Value>;
@@ -153,7 +197,7 @@ impl ToolProvider for NullToolProvider {
         &self,
         _: &str,
         _: PathBuf,
-        _: Vec<McpServerConfig>,
+        _: Vec<ToolServerConfig>,
     ) -> Result<(), String> {
         Ok(())
     }
@@ -177,12 +221,12 @@ pub struct NullLlmProvider;
 
 #[async_trait::async_trait]
 impl LlmProvider for NullLlmProvider {
-    async fn stream(&self, _: LlmRequest) -> Result<LlmStream, String> {
+    async fn stream(&self, _: ModelRequest) -> Result<LlmStream, LlmError> {
         let (_tx, rx) = mpsc::channel(1);
         Ok(rx)
     }
-    async fn upload_image(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("LLM provider indisponible".into())
+    async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> {
+        Err(LlmError::Unavailable("LLM provider indisponible".into()))
     }
     fn model_info(&self, _: &str) -> LlmModelInfo {
         LlmModelInfo::default()

@@ -1,13 +1,8 @@
 //! ACP protocol adapter for the provider-neutral agent runtime.
 //!
-//! The adapter keeps temporary compatibility aliases for the historical module
-//! paths while exposing the new provider-neutral crates under their canonical
-//! names. These aliases are local to the adapter and do not recreate the old
-//! workspace crate boundaries.
-extern crate self as gemini_acp_config;
-extern crate self as gemini_acp_runtime;
-extern crate self as gemini_acp_tools;
-
+//! ACP-specific protocol and presentation code stays here; the underlying
+//! runtime and provider implementations are imported through their canonical
+//! crate boundaries.
 pub use agent_runtime::*;
 
 pub mod config;

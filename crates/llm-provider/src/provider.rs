@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use crate::client::{Client, Config};
 use crate::config::AgentConfig;
-use agent_runtime::{LlmModelInfo, LlmProvider, LlmRequest, LlmStream};
+use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest};
+use tokio::sync::mpsc;
 
 #[derive(Clone)]
 pub struct GeminiProvider {
@@ -31,23 +32,37 @@ impl GeminiProvider {
 
 #[async_trait::async_trait]
 impl LlmProvider for GeminiProvider {
-    async fn stream(&self, request: LlmRequest) -> Result<LlmStream, String> {
-        self.client
+    async fn stream(&self, request: ModelRequest) -> Result<LlmStream, LlmError> {
+        let mut upstream = self
+            .client
             .stream(
                 &request.prompt,
                 &request.model,
                 request.generation.reasoning_budget,
-                &request.refs,
+                &request.references,
             )
             .await
-            .map_err(|error| format!("{error:#}"))
+            .map_err(|error| LlmError::Provider(format!("{error:#}")))?;
+
+        let (tx, rx) = mpsc::channel(16);
+        tokio::spawn(async move {
+            while let Some(item) = upstream.recv().await {
+                let event = item
+                    .map(ModelEvent::TextDelta)
+                    .map_err(LlmError::Provider);
+                if tx.send(event).await.is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(rx)
     }
 
-    async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, String> {
+    async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, LlmError> {
         self.client
             .upload_image(base64, mime)
             .await
-            .map_err(|error| format!("{error:#}"))
+            .map_err(|error| LlmError::Provider(format!("{error:#}")))
     }
 
     fn model_info(&self, model: &str) -> LlmModelInfo {

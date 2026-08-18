@@ -3,9 +3,9 @@ use agent_client_protocol::schema::v1::{
     ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Client, ConnectionTo};
-use gemini_acp_runtime::state::Role;
-use gemini_acp_runtime::LlmProvider;
-use gemini_acp_tools::tools::executor::safe_session_update;
+use agent_runtime::state::Role;
+use agent_runtime::LlmProvider;
+use tools_provider::tools::executor::safe_session_update;
 pub(crate) const CONTEXT_WINDOW_CHARS: usize = 1_000_000;
 pub(crate) const COMPACTION_THRESHOLD_CHARS: usize = (CONTEXT_WINDOW_CHARS as f64 * 0.9) as usize;
 pub(crate) const EMERGENCY_COMPACTION_CHARS: usize = (CONTEXT_WINDOW_CHARS as f64 * 0.7) as usize;

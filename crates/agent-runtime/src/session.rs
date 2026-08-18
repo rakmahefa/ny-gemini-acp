@@ -1,5 +1,5 @@
 //! Session lifecycle and persistence.
-use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider};
+use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider, ToolServerConfig};
 use crate::state::{Session, SessionMode, Store};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -25,12 +25,12 @@ impl SessionManager {
         self.tools.for_session(id).await
     }
     pub async fn clear_mcp(&self, id: &str) {
-        self.tools.clear_session(id).await
+        self.tools.clear_session(id).await;
     }
     pub async fn configure_mcp(
         &self,
         id: &str,
-        servers: Vec<crate::providers::McpServerConfig>,
+        servers: Vec<ToolServerConfig>,
     ) -> Result<(), String> {
         let session = self
             .store

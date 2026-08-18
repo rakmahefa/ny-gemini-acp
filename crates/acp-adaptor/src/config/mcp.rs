@@ -1,19 +1,19 @@
 use std::{collections::HashMap, path::Path};
 
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer};
-use agent_runtime::{McpServerConfig, McpTransportKind};
+use agent_runtime::{ToolServerConfig, ToolTransportKind};
 
 pub fn normalize_servers(
     servers: Vec<McpServer>,
     session_cwd: &Path,
-) -> Result<Vec<McpServerConfig>, String> {
+) -> Result<Vec<ToolServerConfig>, String> {
     servers
         .into_iter()
         .map(|server| normalize_server(server, session_cwd))
         .collect()
 }
 
-fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<McpServerConfig, String> {
+fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<ToolServerConfig, String> {
     match server {
         McpServer::Stdio(server) => {
             let command = server
@@ -50,7 +50,7 @@ fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<McpServerCo
                 }
             }
 
-            Ok(McpServerConfig::stdio(
+            Ok(ToolServerConfig::process(
                 server.name,
                 command,
                 server.args,
@@ -58,7 +58,7 @@ fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<McpServerCo
                 Some(session_cwd.to_path_buf()),
             ))
         }
-        McpServer::Http(server) => Ok(McpServerConfig::http(
+        McpServer::Http(server) => Ok(ToolServerConfig::http(
             server.name,
             server.url,
             header_map(server.headers)?,
@@ -100,7 +100,7 @@ mod tests {
                 .env(vec![EnvVariable::new("TOKEN", "secret")]),
         );
         let config = normalize_servers(vec![server], Path::new("/tmp/workspace")).unwrap();
-        assert_eq!(config[0].transport, McpTransportKind::Stdio);
+        assert_eq!(config[0].transport, ToolTransportKind::Process);
         assert_eq!(config[0].command.as_deref(), Some("/usr/local/bin/project-mcp"));
         assert_eq!(config[0].args, ["--cwd", "/tmp/project"]);
         assert_eq!(config[0].env.get("TOKEN").map(String::as_str), Some("secret"));
@@ -114,7 +114,7 @@ mod tests {
                 .headers(vec![HttpHeader::new("Authorization", "Bearer test")]),
         );
         let config = normalize_servers(vec![server], Path::new("/tmp/workspace")).unwrap();
-        assert_eq!(config[0].transport, McpTransportKind::Http);
+        assert_eq!(config[0].transport, ToolTransportKind::Http);
         assert_eq!(config[0].url.as_deref(), Some("https://mcp.example.test"));
         assert_eq!(config[0].headers.get("Authorization").map(String::as_str), Some("Bearer test"));
     }
