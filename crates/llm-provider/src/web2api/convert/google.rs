@@ -2,7 +2,7 @@
 
 use serde_json::{json, Value};
 
-use llm_provider::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind, INSTRUCTION_FUNCTION_CALL};
+use crate::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind, INSTRUCTION_FUNCTION_CALL};
 
 fn function_call_block(fc:&Value)->String{format!("```function_call\n{}\n```",json!({"name":fc.get("name").and_then(Value::as_str).unwrap_or(""),"args":fc.get("args").cloned().unwrap_or_else(||json!({}))}))}
 fn google_tool_defs(req:&Value)->Vec<Value>{let mut defs=Vec::new();if let Some(tools)=req.get("tools").and_then(Value::as_array){for group in tools{if let Some(fns)=group.get("functionDeclarations").and_then(Value::as_array){for fn_ in fns{let mut td=json!({"name":fn_.get("name").and_then(Value::as_str).unwrap_or(""),"description":fn_.get("description").and_then(Value::as_str).unwrap_or("")});if let Some(p)=fn_.get("parameters").or_else(||fn_.get("parametersJsonSchema")){td["parameters"]=p.clone();}defs.push(td);}}}}defs}
