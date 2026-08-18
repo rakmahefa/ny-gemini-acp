@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
-use llm_provider::client::StreamItem;
-use llm_provider::core::models::Resolved;
+use crate::client::StreamItem;
+use crate::core::models::Resolved;
 
 pub async fn handler(State(state): State<AppState>, req: axum::extract::Request) -> Response {
     let body = match json_body(req).await {
