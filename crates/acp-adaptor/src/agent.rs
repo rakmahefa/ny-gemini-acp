@@ -1,14 +1,11 @@
 //! Construction de l'agent ACP et câblage du transport stdio.
 //!
-//! Refactor R1 — inspiré de `glm-acp-agent/src/protocol/agent.ts` :
-//! - Fork session et set mode.
-//! - Prompt serialization via `gemini-acp-encaps::TurnManager`.
-//! - Interactive tool context isolé par tour.
-//! - AppState fourni par `gemini-acp-runtime`.
+//! Responsabilités ACP : handlers, transport, permissions et conversion des
+//! notifications du runtime vers le protocole ACP.
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
-use gemini_acp_encaps::TurnManager;
+use gemini_acp_runtime::execution::TurnManager;
 use gemini_acp_runtime::{events::TurnEventEmitter, AppState};
 
 use crate::handlers;
@@ -43,7 +40,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
             },
             agent_client_protocol::on_receive_request!(),
         )
-        // session/prompt : TurnManager remplace wait_prompt_done + prompt_handle.
         .on_receive_request(
             {
                 let store = h_store.clone();
@@ -94,12 +90,9 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     )
                                     .await
                                     .map_err(|e| {
-                                        gemini_acp_encaps::EncapsError::Task(e.to_string())
+                                        gemini_acp_runtime::execution::EncapsError::Task(e.to_string())
                                     });
 
-                                    // `run_turn` owns all expected terminal outcomes. Keep a
-                                    // defensive failure transition for an unexpected orchestration
-                                    // error so an active semantic turn can never leak terminality.
                                     if result.is_err() && !semantic.is_terminal() {
                                         semantic.turn_failed();
                                     }
