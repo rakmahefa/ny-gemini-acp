@@ -60,7 +60,11 @@ impl ToolCancellation {
 
 /// Semantic events emitted by tool execution without coupling the provider to
 /// the runtime's event bus implementation.
-pub trait ToolEventSink {
+///
+/// Tool execution may cross a Tokio task boundary, so implementations must be
+/// safe to move between worker threads. `TurnEventEmitter` satisfies this bound
+/// while remaining locally mutable for one active turn.
+pub trait ToolEventSink: Send {
     fn tool_call_requested(&mut self, upstream_id: String, name: String) -> bool;
     fn permission_requested(&mut self, upstream_id: String) -> bool;
     fn tool_execution_started(&mut self, upstream_id: String) -> bool;
