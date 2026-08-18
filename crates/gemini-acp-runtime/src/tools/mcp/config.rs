@@ -166,7 +166,7 @@ fn header_map(
     for header in headers {
         if result
             .keys()
-            .any(|name: &&String| name.eq_ignore_ascii_case(&header.name))
+            .any(|name: &String| name.eq_ignore_ascii_case(&header.name))
         {
             return Err(McpError::Config(format!(
                 "duplicate MCP HTTP header '{}'",
