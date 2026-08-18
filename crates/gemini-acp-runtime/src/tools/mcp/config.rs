@@ -80,8 +80,12 @@ impl McpServerConfig {
         }
     }
 
-    /// Convert the stable ACP v1 MCP session-setup types into the runtime's
-    /// normalized transport configuration.
+    /// Convert ACP session-setup data into the runtime's normalized transport configuration.
+    ///
+    /// Stdio is mandatory in ACP and supported directly. HTTP is supported by
+    /// the runtime's request/response transport. Legacy SSE is rejected here
+    /// because the runtime does not implement its separate endpoint handshake;
+    /// advertising it would overstate H4 support.
     pub fn from_acp(server: McpServer) -> Result<Self, McpError> {
         match server {
             McpServer::Stdio(server) => {
@@ -103,6 +107,15 @@ impl McpServerConfig {
                     .to_owned();
                 let mut env = HashMap::new();
                 for variable in server.env {
+                    if variable.name.is_empty()
+                        || variable.name.contains('=')
+                        || variable.name.chars().any(|ch| ch == '\0' || ch.is_control())
+                    {
+                        return Err(McpError::Config(format!(
+                            "stdio MCP server '{}' contains invalid environment variable name '{}',",
+                            server.name, variable.name
+                        )));
+                    }
                     if env.insert(variable.name.clone(), variable.value).is_some() {
                         return Err(McpError::Config(format!(
                             "stdio MCP server '{}' contains duplicate environment variable '{}'",
@@ -131,16 +144,10 @@ impl McpServerConfig {
                 url: Some(server.url),
                 headers: header_map(server.headers)?,
             }),
-            McpServer::Sse(server) => Ok(Self {
-                name: server.name,
-                transport: McpTransportKind::Http,
-                command: None,
-                args: Vec::new(),
-                env: HashMap::new(),
-                cwd: None,
-                url: Some(server.url),
-                headers: header_map(server.headers)?,
-            }),
+            McpServer::Sse(server) => Err(McpError::Config(format!(
+                "MCP SSE transport for server '{}' is unsupported: the runtime requires MCP HTTP transport",
+                server.name
+            ))),
             _ => Err(McpError::Config(
                 "unsupported MCP transport received from ACP client".into(),
             )),
@@ -207,7 +214,9 @@ impl McpToolDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{EnvVariable, HttpHeader, McpServerHttp, McpServerStdio};
+    use agent_client_protocol::schema::v1::{
+        EnvVariable, HttpHeader, McpServerHttp, McpServerSse, McpServerStdio,
+    };
 
     #[test]
     fn tool_descriptor_requires_object_input_schema() {
@@ -259,28 +268,34 @@ mod tests {
     }
 
     #[test]
-    fn sse_is_forwarded_through_the_shared_http_transport() {
-        let server = McpServer::Sse(
-            agent_client_protocol::schema::v1::McpServerSse::new(
-                "legacy-events",
-                "https://mcp.example.test/events",
-            ),
-        );
-        let config = McpServerConfig::from_acp(server).unwrap();
-        assert_eq!(config.transport, McpTransportKind::Http);
-        assert_eq!(config.url.as_deref(), Some("https://mcp.example.test/events"));
+    fn legacy_sse_is_rejected_with_a_stable_configuration_error() {
+        let server = McpServer::Sse(McpServerSse::new(
+            "legacy-events",
+            "https://mcp.example.test/events",
+        ));
+        let error = McpServerConfig::from_acp(server).unwrap_err();
+        assert!(error.to_string().contains("unsupported"));
     }
 
     #[test]
     fn duplicate_http_header_names_are_rejected_case_insensitively() {
         let server = McpServer::Http(
-            McpServerHttp::new("remote", "https://mcp.example.test")
-                .headers(vec![
-                    HttpHeader::new("Authorization", "Bearer a"),
-                    HttpHeader::new("authorization", "Bearer b"),
-                ]),
+            McpServerHttp::new("remote", "https://mcp.example.test").headers(vec![
+                HttpHeader::new("Authorization", "Bearer a"),
+                HttpHeader::new("authorization", "Bearer b"),
+            ]),
         );
         let error = McpServerConfig::from_acp(server).unwrap_err();
         assert!(error.to_string().contains("duplicate MCP HTTP header"));
+    }
+
+    #[test]
+    fn rejects_invalid_environment_variable_names() {
+        let server = McpServer::Stdio(
+            McpServerStdio::new("project-tools", "/usr/local/bin/project-mcp")
+                .env(vec![EnvVariable::new("BAD=NAME", "secret")]),
+        );
+        let error = McpServerConfig::from_acp(server).unwrap_err();
+        assert!(error.to_string().contains("invalid environment variable name"));
     }
 }
