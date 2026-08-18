@@ -44,7 +44,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                 let session_id = req.session_id.clone();
 
                 turn_manager
-                    .start(sid.clone(), move |cancellation| async move {
+                    .start(sid.clone(), move |_cancellation| async move {
                         let tools_for_session = sessions.tools_for(&sid).await;
                         let tools: std::sync::Arc<dyn ToolProvider> =
                             if tools_for_session.has_tools() {
@@ -71,7 +71,6 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     req,
                                     responder,
                                     turn_cx,
-                                    cancellation,
                                     &mut semantic,
                                 )
                                 .await
