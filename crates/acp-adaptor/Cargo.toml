@@ -23,8 +23,8 @@ path = "src/bin/snapshot.rs"
 
 [dependencies]
 agent-client-protocol = { workspace = true }
-gemini_acp_encaps = { package = "agent-runtime", path = "../agent-runtime" }
-gemini_acp_config = { package = "llm-provider", path = "../llm-provider" }
+gemini_acp_runtime = { package = "agent-runtime", path = "../agent-runtime" }
+gemini_acp_llm = { package = "llm-provider", path = "../llm-provider" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
