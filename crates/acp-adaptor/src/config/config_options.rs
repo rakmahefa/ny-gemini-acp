@@ -2,7 +2,7 @@
 
 use agent_client_protocol::schema::v1::*;
 
-use gemini_acp_llm::core::models;
+use llm_provider::core::models;
 
 pub fn build_config_options(
     model: &str,

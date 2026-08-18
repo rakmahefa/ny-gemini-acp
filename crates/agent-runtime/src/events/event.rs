@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::{EventContext, ToolEventContext};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum AcpSemanticEvent {
+pub enum SemanticEvent {
     TurnStarted {
         context: EventContext,
     },

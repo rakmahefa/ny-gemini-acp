@@ -5,11 +5,11 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider};
+use agent_runtime::{McpServerConfig, ToolCallRequest, ToolCallResult, ToolProvider};
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
-use crate::tools::mcp::{McpCatalog, McpServerConfig};
+use crate::tools::mcp::{McpCatalog, McpServerConfig as ProviderMcpServerConfig};
 use crate::tools::registry::ToolRegistry;
 
 struct ProviderState {
@@ -65,20 +65,18 @@ impl ToolProvider for DefaultToolProvider {
     async fn configure_session(
         &self,
         session_id: &str,
-        cwd: PathBuf,
-        servers: Vec<Value>,
+        _cwd: PathBuf,
+        servers: Vec<McpServerConfig>,
     ) -> Result<(), String> {
         if servers.is_empty() {
             self.clear_session(session_id).await;
             return Ok(());
         }
-        let parsed: Vec<agent_client_protocol::schema::v1::McpServer> = servers
+
+        let configs = servers
             .into_iter()
-            .map(serde_json::from_value)
-            .collect::<Result<_, _>>()
-            .map_err(|error| format!("MCP configuration invalide: {error}"))?;
-        let configs =
-            McpServerConfig::from_acp_servers(parsed, &cwd).map_err(|error| error.to_string())?;
+            .map(ProviderMcpServerConfig::from)
+            .collect::<Vec<_>>();
         let catalog = McpCatalog::from_configs(configs)
             .await
             .map_err(|error| error.to_string())?;

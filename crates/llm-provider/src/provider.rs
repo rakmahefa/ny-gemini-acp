@@ -36,7 +36,7 @@ impl LlmProvider for GeminiProvider {
             .stream(
                 &request.prompt,
                 &request.model,
-                request.think,
+                request.generation.reasoning_budget,
                 &request.refs,
             )
             .await
@@ -51,10 +51,10 @@ impl LlmProvider for GeminiProvider {
     }
 
     fn model_info(&self, model: &str) -> LlmModelInfo {
-        let supports_thinking =
+        let supports_reasoning =
             crate::core::models::resolve(model, crate::core::models::DEFAULT_MODEL)
                 .map(|resolved| crate::core::models::is_thinking_mode(resolved.mode))
                 .unwrap_or(false);
-        LlmModelInfo { supports_thinking }
+        LlmModelInfo { supports_reasoning }
     }
 }
