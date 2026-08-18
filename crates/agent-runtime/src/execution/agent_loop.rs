@@ -150,13 +150,7 @@ impl AgentLoop {
                 AgentLoopError::Llm(error)
             })?;
 
-            let round_result = consume_stream(
-                stream,
-                &cancellation,
-                emitter,
-                self.llm.model_info(&session.model).supports_reasoning,
-            )
-            .await?;
+            let round_result = consume_stream(stream, &cancellation, emitter).await?;
 
             if round_result.event_count == 0 {
                 let _ = emitter.turn_failed();
@@ -192,8 +186,7 @@ impl AgentLoop {
                 });
             }
 
-            total_tool_calls = total_tool_calls
-                .saturating_add(round_result.tool_calls.len());
+            total_tool_calls = total_tool_calls.saturating_add(round_result.tool_calls.len());
 
             // Persist the model's tool intent before executing calls so an
             // interrupted turn cannot lose the causal assistant message.
@@ -253,10 +246,7 @@ impl AgentLoop {
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
 
-                session.messages.push((
-                    Role::Tool,
-                    canonical_tool_result(&call.name, &result),
-                ));
+                session.messages.push((Role::Tool, canonical_tool_result(&call.name, &result)));
             }
         }
 
@@ -283,7 +273,6 @@ async fn consume_stream(
     mut stream: mpsc::Receiver<Result<ModelEvent, LlmError>>,
     cancellation: &Cancellation,
     emitter: &mut TurnEventEmitter,
-    supports_reasoning: bool,
 ) -> Result<RoundResult, AgentLoopError> {
     let mut cancel_rx = cancellation.subscribe();
     let mut text = String::new();
@@ -321,9 +310,6 @@ async fn consume_stream(
 
         match event {
             ModelEvent::ReasoningDelta(delta) => {
-                if !supports_reasoning {
-                    continue;
-                }
                 if !assistant_active {
                     if !emitter.assistant_started() {
                         let _ = emitter.turn_failed();
@@ -442,9 +428,7 @@ mod tests {
         }
 
         fn model_info(&self, _: &str) -> crate::LlmModelInfo {
-            crate::LlmModelInfo {
-                supports_reasoning: true,
-            }
+            crate::LlmModelInfo { supports_reasoning: true }
         }
     }
 
@@ -453,39 +437,14 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ToolProvider for FakeTools {
-        async fn for_session(&self, _: &str) -> Arc<dyn ToolProvider> {
-            Arc::new(Self)
-        }
-
-        async fn configure_session(
-            &self,
-            _: &str,
-            _: std::path::PathBuf,
-            _: Vec<crate::ToolServerConfig>,
-        ) -> Result<(), String> {
-            Ok(())
-        }
-
+        async fn for_session(&self, _: &str) -> Arc<dyn ToolProvider> { Arc::new(Self) }
+        async fn configure_session(&self, _: &str, _: std::path::PathBuf, _: Vec<crate::ToolServerConfig>) -> Result<(), String> { Ok(()) }
         async fn clear_session(&self, _: &str) {}
-
-        fn definitions(&self) -> Vec<serde_json::Value> {
-            Vec::new()
-        }
-
-        fn prompt_fragment(&self) -> Option<String> {
-            None
-        }
-
-        fn has_tools(&self) -> bool {
-            true
-        }
-
+        fn definitions(&self) -> Vec<serde_json::Value> { Vec::new() }
+        fn prompt_fragment(&self) -> Option<String> { None }
+        fn has_tools(&self) -> bool { true }
         async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
-            ToolCallResult {
-                content: format!("{} ok", request.name),
-                is_ok: true,
-                executed: true,
-            }
+            ToolCallResult { content: format!("{} ok", request.name), is_ok: true, executed: true }
         }
     }
 
@@ -500,20 +459,11 @@ mod tests {
 
     fn emitter() -> TurnEventEmitter {
         let bus = crate::EventBus::new();
-        TurnEventEmitter::new(
-            bus,
-            "sess_0123456789abcdef0123456789abcdef",
-            "turn_test",
-        )
+        TurnEventEmitter::new(bus, "sess_0123456789abcdef0123456789abcdef", "turn_test")
     }
 
     fn prompt(session: &Session) -> String {
-        session
-            .messages
-            .iter()
-            .map(|(_, text)| text.clone())
-            .collect::<Vec<_>>()
-            .join("\n")
+        session.messages.iter().map(|(_, text)| text.clone()).collect::<Vec<_>>().join("\n")
     }
 
     #[tokio::test]
@@ -526,16 +476,7 @@ mod tests {
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
         let mut emitter = emitter();
-        let outcome = loop_
-            .run(
-                &mut session,
-                &[],
-                Cancellation::new(),
-                &mut emitter,
-                |session, _| prompt(session),
-            )
-            .await
-            .unwrap();
+        let outcome = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |session, _| prompt(session)).await.unwrap();
         assert_eq!(outcome.output, "hello world");
         assert_eq!(outcome.rounds, 1);
         assert_eq!(session.messages.last(), Some(&(Role::Assistant, "hello world".into())));
@@ -545,33 +486,17 @@ mod tests {
     async fn executes_tool_then_runs_next_round() {
         let llm = Arc::new(FakeLlm::default());
         llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
-            id: "call-1".into(),
-            name: "search".into(),
-            arguments: json!({"q": "rust"}),
+            id: "call-1".into(), name: "search".into(), arguments: json!({"q": "rust"}),
         })]);
-        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta(
-            "result".into(),
-        ))]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("result".into()))]);
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
         let mut emitter = emitter();
-        let outcome = loop_
-            .run(
-                &mut session,
-                &[],
-                Cancellation::new(),
-                &mut emitter,
-                |session, _| prompt(session),
-            )
-            .await
-            .unwrap();
+        let outcome = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |session, _| prompt(session)).await.unwrap();
         assert_eq!(outcome.rounds, 2);
         assert_eq!(outcome.tool_calls, 1);
         assert_eq!(outcome.output, "result");
-        assert!(session
-            .messages
-            .iter()
-            .any(|(role, text)| *role == Role::Tool && text.contains("search")));
+        assert!(session.messages.iter().any(|(role, text)| *role == Role::Tool && text.contains("search")));
     }
 
     #[tokio::test]
@@ -581,10 +506,7 @@ mod tests {
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
         let mut emitter = emitter();
-        let error = loop_
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
-            .await
-            .unwrap_err();
+        let error = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new()).await.unwrap_err();
         assert!(matches!(error, AgentLoopError::EmptyStream));
     }
 
@@ -592,66 +514,26 @@ mod tests {
     async fn enforces_tool_call_limit() {
         let llm = Arc::new(FakeLlm::default());
         llm.rounds.lock().unwrap().push_back(vec![
-            Ok(ModelEvent::ToolCall {
-                id: "a".into(),
-                name: "one".into(),
-                arguments: json!({}),
-            }),
-            Ok(ModelEvent::ToolCall {
-                id: "b".into(),
-                name: "two".into(),
-                arguments: json!({}),
-            }),
+            Ok(ModelEvent::ToolCall { id: "a".into(), name: "one".into(), arguments: json!({}) }),
+            Ok(ModelEvent::ToolCall { id: "b".into(), name: "two".into(), arguments: json!({}) }),
         ]);
-        let loop_ = AgentLoop::new(
-            llm,
-            Arc::new(FakeTools),
-            AgentLoopConfig {
-                max_rounds: 2,
-                max_tool_calls_per_round: 1,
-            },
-        )
-        .unwrap();
+        let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig { max_rounds: 2, max_tool_calls_per_round: 1 }).unwrap();
         let mut session = session();
         let mut emitter = emitter();
-        let error = loop_
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            error,
-            AgentLoopError::ToolCallLimit { actual: 2, limit: 1 }
-        ));
+        let error = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new()).await.unwrap_err();
+        assert!(matches!(error, AgentLoopError::ToolCallLimit { actual: 2, limit: 1 }));
     }
 
     #[tokio::test]
     async fn enforces_round_limit() {
         let llm = Arc::new(FakeLlm::default());
         for id in ["a", "b"] {
-            llm.rounds
-                .lock()
-                .unwrap()
-                .push_back(vec![Ok(ModelEvent::ToolCall {
-                    id: id.into(),
-                    name: "loop".into(),
-                    arguments: json!({}),
-                })]);
+            llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall { id: id.into(), name: "loop".into(), arguments: json!({}) })]);
         }
-        let loop_ = AgentLoop::new(
-            llm,
-            Arc::new(FakeTools),
-            AgentLoopConfig {
-                max_rounds: 2,
-                max_tool_calls_per_round: 4,
-            },
-        )
-        .unwrap();
+        let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig { max_rounds: 2, max_tool_calls_per_round: 4 }).unwrap();
         let mut session = session();
         let mut emitter = emitter();
-        let error = loop_
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
-            .await
-            .unwrap_err();
+        let error = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new()).await.unwrap_err();
         assert!(matches!(error, AgentLoopError::MaxRounds(2)));
     }
 
@@ -665,36 +547,21 @@ mod tests {
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
         let mut emitter = emitter();
-        let outcome = loop_
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new())
-            .await
-            .unwrap();
+        let outcome = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| String::new()).await.unwrap();
         assert_eq!(outcome.output, "answer");
     }
 
     #[tokio::test]
     async fn disabled_tools_are_not_executed() {
         let llm = Arc::new(FakeLlm::default());
-        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
-            id: "call-1".into(),
-            name: "dangerous".into(),
-            arguments: json!({}),
-        })]);
-        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta(
-            "done".into(),
-        ))]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall { id: "call-1".into(), name: "dangerous".into(), arguments: json!({}) })]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("done".into()))]);
         let loop_ = AgentLoop::new(llm, Arc::new(FakeTools), AgentLoopConfig::default()).unwrap();
         let mut session = session();
         session.tools_enabled = false;
         let mut emitter = emitter();
-        let outcome = loop_
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |session, _| prompt(session))
-            .await
-            .unwrap();
+        let outcome = loop_.run(&mut session, &[], Cancellation::new(), &mut emitter, |session, _| prompt(session)).await.unwrap();
         assert_eq!(outcome.output, "done");
-        assert!(session
-            .messages
-            .iter()
-            .any(|(role, text)| *role == Role::Tool && text.contains("disabled")));
+        assert!(session.messages.iter().any(|(role, text)| *role == Role::Tool && text.contains("disabled")));
     }
 }
