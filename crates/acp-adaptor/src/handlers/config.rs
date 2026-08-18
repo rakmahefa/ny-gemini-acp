@@ -3,9 +3,9 @@
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
+use agent_runtime::state::Session;
+use agent_runtime::AppState;
 use crate::config::config_options::build_config_options;
-use gemini_acp_runtime::state::Session;
-use gemini_acp_runtime::AppState;
 
 pub async fn handle(
     req: SetSessionConfigOptionRequest,
@@ -43,10 +43,7 @@ pub async fn handle(
                         match v.0.as_ref().to_ascii_lowercase().as_str() {
                             "true" | "1" | "on" | "yes" => s.tools_enabled = true,
                             "false" | "0" | "off" | "no" => s.tools_enabled = false,
-                            other => tracing::warn!(
-                                value = other,
-                                "valeur tools_enabled invalide, ignorée"
-                            ),
+                            other => tracing::warn!(value = other, "valeur tools_enabled invalide, ignorée"),
                         }
                     }
                 }

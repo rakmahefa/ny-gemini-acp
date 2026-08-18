@@ -8,10 +8,10 @@ use agent_client_protocol::schema::v1::{
     MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
-use gemini_acp_runtime::events::TurnEventEmitter;
-use gemini_acp_runtime::state::{Role, Store, TurnError};
-use gemini_acp_runtime::{LlmProvider, ToolProvider};
-use gemini_acp_tools::tools::executor::safe_session_update;
+use agent_runtime::events::TurnEventEmitter;
+use agent_runtime::state::{Role, Store, TurnError};
+use agent_runtime::{LlmProvider, ToolProvider};
+use tools_provider::tools::executor::safe_session_update;
 use rounds::{RoundContext, RoundOutcome};
 use std::sync::Arc;
 const MAX_TURNS: usize = 20;

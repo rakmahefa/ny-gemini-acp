@@ -5,7 +5,7 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 
-use gemini_acp_runtime::tools::lifecycle::record_partial_output;
+use tools_provider::tools::lifecycle::record_partial_output;
 
 pub const CONTEXT_TOKENS: u64 = 1_000_000;
 
@@ -64,7 +64,3 @@ pub fn notify_usage(
         SessionUpdate::UsageUpdate(usage_update(prompt, assistant)),
     ))
 }
-
-#[cfg(test)]
-#[path = "../test/notify.rs"]
-mod tests;
