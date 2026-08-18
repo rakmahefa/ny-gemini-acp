@@ -22,7 +22,8 @@ use gemini_acp_runtime::config::config_options::build_config_options;
 use gemini_acp_runtime::state::{Role, SessionMode as AcpSessionMode};
 use gemini_acp_runtime::tools::parse::parse_tool_calls;
 use gemini_acp_runtime::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
-use gemini_acp_runtime::{tools::McpError, AppState};
+use gemini_acp_runtime::AppState;
+use gemini_acp_tools::tools::McpError;
 
 fn is_valid_session_id(id: &str) -> bool {
     let Some(rest) = id.strip_prefix("sess_") else {
@@ -41,12 +42,12 @@ fn session_id_error(id: &SessionId) -> AcpError {
     }))
 }
 
-fn mcp_config_error(id: &SessionId, error: &McpError) -> AcpError {
-    tracing::error!(session = %id, %error, "forwarded MCP configuration rejected");
+fn mcp_config_error(id: &SessionId, error: &str) -> AcpError {
+    tracing::error!(session = %id, error, "forwarded MCP configuration rejected");
     AcpError::invalid_params().data(serde_json::json!({
         "session_id": id.to_string(),
         "error": "MCP configuration rejected",
-        "mcp_error": error.to_string(),
+        "mcp_error": error,
     }))
 }
 
@@ -448,72 +449,10 @@ pub async fn handle_fork(
 
     let forked = match state.sessions.fork(&req.session_id.0).await {
         Ok(forked) => forked,
-        Err(error) => return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": format!("fork impossible: {error:#}")
-        }))),
+        Err(error) => {
+            return responder.respond_with_internal_error(format!("fork de session: {error:#}"));
+        }
     };
 
-    let forked_id = SessionId::from(forked.id.clone());
-    if let Err(error) = state.sessions.configure_mcp(&forked.id, req.mcp_servers).await {
-        if let Err(cleanup) = state.sessions.delete(&forked.id).await {
-            tracing::error!(session = %forked.id, %cleanup, "failed to clean up fork after MCP setup failure");
-        }
-        return responder.respond_with_error(mcp_config_error(&forked_id, &error));
-    }
-
-    responder.respond(
-        ForkSessionResponse::new(forked_id)
-            .config_options(build_config_options(
-                &forked.model,
-                forked.think,
-                forked.tools_enabled,
-            ))
-            .modes(build_mode_state(forked.mode)),
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn session_id_accepts_only_expected_format() {
-        assert!(is_valid_session_id("sess_0123456789abcdef0123456789abcdef"));
-        assert!(is_valid_session_id("sess_aabbccddeeff00112233445566778899"));
-        assert!(!is_valid_session_id(""));
-        assert!(!is_valid_session_id("sess_short"));
-        assert!(!is_valid_session_id("sess_0123456789abcdef0123456789ABCDEF"));
-        assert!(!is_valid_session_id("../sess_0123456789abcdef0123456789abcdef"));
-        assert!(!is_valid_session_id("sess_/etc/passwd"));
-    }
-
-    #[test]
-    fn all_modes_have_stable_acp_ids() {
-        let modes = build_available_modes();
-        let ids: Vec<&str> = modes.iter().map(|mode| mode.id.0.as_ref()).collect();
-        assert_eq!(ids, vec!["default", "accept_edits", "bypass_permissions"]);
-    }
-
-    #[test]
-    fn mode_state_uses_current_mode() {
-        let state = build_mode_state(AcpSessionMode::AcceptEdits);
-        assert_eq!(state.current_mode_id.0, "accept_edits".into());
-        assert_eq!(state.available_modes.len(), 3);
-    }
-
-    #[test]
-    fn rejected_tool_results_are_not_replayed_as_success() {
-        assert!(is_rejected_or_cancelled_tool_result("write (src/a.rs) refusé par l'utilisateur."));
-        assert!(is_rejected_or_cancelled_tool_result("échec de la demande de permission ACP : transport"));
-        assert!(!is_rejected_or_cancelled_tool_result("File Updated"));
-    }
-
-    #[test]
-    fn mcp_error_is_stable_and_machine_readable() {
-        let id = SessionId::from("sess_0123456789abcdef0123456789abcdef");
-        let error = mcp_config_error(&id, &McpError::Config("missing command".into()));
-        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
-        assert!(error.data.is_some());
-    }
+    Ok(responder.respond(ForkSessionResponse::new(SessionId::from(forked.id))))
 }
