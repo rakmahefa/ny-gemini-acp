@@ -1,7 +1,7 @@
 //! Agent runtime: durable state, sessions, semantic events and execution.
 //!
 //! This crate is the center of the four-crate workspace architecture. ACP is
-//! adapted outside this crate; tools and the model integration are providers.
+//! adapted outside this crate; model and tool implementations are providers.
 
 pub mod events;
 mod execution;
@@ -10,10 +10,21 @@ pub mod runtime;
 pub mod session;
 pub mod state;
 
-// Compatibility facade during the reset: the implementation now lives in
-// `tools-provider`, but existing runtime/adapter code can keep using the
-// `crate::tools` and `gemini_acp_runtime::tools` paths while the dependency
-// boundary is enforced at the Cargo package level.
+// Provider facades used while the workspace reset is being completed. The
+// implementations remain owned by `llm-provider`; these exports avoid forcing
+// every adapter module to know the provider package's internal crate layout.
+pub mod client {
+    pub use gemini_acp_config::client::*;
+}
+
+pub mod config {
+    pub use gemini_acp_config::config::*;
+}
+
+pub mod core {
+    pub use gemini_acp_config::core::*;
+}
+
 pub use gemini_acp_tools as tools;
 
 pub use execution::{
