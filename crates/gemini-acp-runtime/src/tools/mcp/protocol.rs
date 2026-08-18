@@ -4,7 +4,10 @@ use reqwest::header::{HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use super::{McpError, MAX_MESSAGE_BYTES, META_CLIENT_CAPABILITIES, META_CLIENT_INFO, META_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION, CLIENT_NAME, CLIENT_VERSION};
+use super::{
+    McpError, CLIENT_NAME, CLIENT_VERSION, LEGACY_MCP_PROTOCOL_VERSION, MAX_MESSAGE_BYTES,
+    META_CLIENT_CAPABILITIES, META_CLIENT_INFO, META_PROTOCOL_VERSION, MCP_PROTOCOL_VERSION,
+};
 
 #[derive(Debug, Clone)]
 pub(super) struct RpcResponse {
@@ -73,6 +76,18 @@ pub(super) fn request_params(params: Value) -> Value {
     Value::Object(params)
 }
 
+pub(super) fn legacy_initialize_params() -> Value {
+    json!({
+        "protocolVersion": LEGACY_MCP_PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": CLIENT_NAME, "version": CLIENT_VERSION}
+    })
+}
+
+pub(super) fn legacy_initialized_notification() -> Value {
+    json!({})
+}
+
 pub(super) fn serialize_request_payload(request: &RpcRequest<'_>) -> Result<Vec<u8>, McpError> {
     let payload = serde_json::to_vec(request)
         .map_err(|error| McpError::Protocol(format!("serialize request: {error}")))?;
@@ -89,6 +104,24 @@ pub(super) fn serialize_request_line(request: &RpcRequest<'_>) -> Result<Vec<u8>
         return Err(McpError::MessageTooLarge);
     }
     Ok(payload)
+}
+
+pub(super) fn serialize_notification_line(
+    method: &str,
+    params: Value,
+) -> Result<Vec<u8>, McpError> {
+    let payload = serde_json::to_vec(&json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+    }))
+    .map_err(|error| McpError::Protocol(format!("serialize notification: {error}")))?;
+    let mut line = payload;
+    line.push(b'\n');
+    if line.len() > MAX_MESSAGE_BYTES {
+        return Err(McpError::MessageTooLarge);
+    }
+    Ok(line)
 }
 
 pub(super) fn parse_json_rpc_response(
@@ -212,8 +245,16 @@ mod tests {
     }
 
     #[test]
+    fn legacy_initialize_payload_is_not_self_describing() {
+        let request = RpcRequest::new(1, "initialize", legacy_initialize_params());
+        let value: Value = serde_json::from_slice(&serialize_request_payload(&request).unwrap()).unwrap();
+        assert_eq!(value["params"]["protocolVersion"], LEGACY_MCP_PROTOCOL_VERSION);
+        assert!(value["params"].get("_meta").is_none());
+    }
+
+    #[test]
     fn request_payload_is_self_describing() {
-        let request = RpcRequest::new(1, "tools/list", request_params(json!({"limit": 100})));
+        let request = RpcRequest::new(1, "tools/list", request_params(json!({})));
         let value: Value = serde_json::from_slice(&serialize_request_payload(&request).unwrap()).unwrap();
         assert_eq!(value["jsonrpc"], "2.0");
         assert_eq!(value["params"]["_meta"][META_PROTOCOL_VERSION], MCP_PROTOCOL_VERSION);
