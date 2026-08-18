@@ -2,17 +2,14 @@
 //!
 //! Responsabilités volontairement minimales :
 //! - initialiser le logging sur stderr ;
-//! - résoudre la configuration (`gemini_acp_config::AgentConfig`) ;
-//! - créer le runtime (`gemini_acp_runtime::AgentRuntime`) ;
-//! - lancer le transport ACP (`gemini_acp_agent::run_agent`) et gérer le
-//!   signal d'arrêt.
-//!
-//! Le protocole et les handlers vivent dans `agent.rs` et `handlers/`.
+//! - résoudre la configuration ;
+//! - créer le runtime ;
+//! - lancer le transport ACP et gérer le signal d'arrêt.
 
 use anyhow::{Context, Result};
 
 use gemini_acp_agent::run_agent;
-use gemini_acp_config::AgentConfig;
+use gemini_acp_llm::AgentConfig;
 use gemini_acp_runtime::AgentRuntime;
 
 #[tokio::main]
