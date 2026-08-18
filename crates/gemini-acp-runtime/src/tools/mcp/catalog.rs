@@ -10,7 +10,9 @@ use tokio::sync::Mutex;
 
 use super::{
     config::{McpError, McpServerConfig, McpToolDescriptor, McpTransportKind},
-    protocol::{request_params, RpcRequest},
+    protocol::{
+        legacy_initialize_params, legacy_initialized_notification, request_params, RpcRequest,
+    },
     render::render_tool_content,
     transport::{HttpTransport, McpTransport, StdioTransport},
     CACHE_DEFAULT_TTL, MAX_PAGE_COUNT, REQUEST_TIMEOUT,
@@ -27,6 +29,7 @@ struct McpServerClient {
     transport: McpTransport,
     next_id: u64,
     cached_tools: Option<CachedToolList>,
+    legacy_mode: bool,
 }
 
 impl McpServerClient {
@@ -40,6 +43,7 @@ impl McpServerClient {
             transport,
             next_id: 1,
             cached_tools: None,
+            legacy_mode: false,
         })
     }
 
@@ -49,9 +53,19 @@ impl McpServerClient {
         id
     }
 
-    async fn request(&mut self, method: &str, tool_name: Option<&str>, params: Value) -> Result<Value, McpError> {
+    async fn request(
+        &mut self,
+        method: &str,
+        tool_name: Option<&str>,
+        params: Value,
+    ) -> Result<Value, McpError> {
         let id = self.next_request_id();
-        let request = RpcRequest::new(id, method, request_params(params));
+        let request_params = if self.legacy_mode {
+            params
+        } else {
+            request_params(params)
+        };
+        let request = RpcRequest::new(id, method, request_params);
         let response = tokio::time::timeout(
             REQUEST_TIMEOUT,
             self.transport.request(&request, method, tool_name),
@@ -72,6 +86,62 @@ impl McpServerClient {
             .ok_or_else(|| McpError::Protocol(format!("MCP response for '{method}' has no result")))
     }
 
+    async fn initialize_legacy(&mut self) -> Result<(), McpError> {
+        if self.legacy_mode {
+            return Ok(());
+        }
+
+        let id = self.next_request_id();
+        let initialize = RpcRequest::new(id, "initialize", legacy_initialize_params());
+        let response = tokio::time::timeout(
+            REQUEST_TIMEOUT,
+            self.transport.request(&initialize, "initialize", None),
+        )
+        .await
+        .map_err(|_| McpError::Transport {
+            transport: "mcp".into(),
+            message: "MCP initialize request timed out".into(),
+        })??;
+
+        if let Some(error) = response.error {
+            return Err(McpError::Remote {
+                code: error.code,
+                message: error.message,
+            });
+        }
+        let result = response.result.ok_or_else(|| {
+            McpError::Protocol("MCP initialize response has no result".into())
+        })?;
+        let protocol_version = result
+            .get("protocolVersion")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if protocol_version.is_empty() {
+            return Err(McpError::Protocol(
+                "MCP initialize response has no protocolVersion".into(),
+            ));
+        }
+
+        self.transport
+            .notify("notifications/initialized", legacy_initialized_notification())
+            .await?;
+        self.legacy_mode = true;
+        Ok(())
+    }
+
+    fn should_fallback_to_legacy(&self, error: &McpError) -> bool {
+        if self.legacy_mode {
+            return false;
+        }
+        if !matches!(self.transport, McpTransport::Stdio(_)) {
+            return false;
+        }
+        matches!(
+            error,
+            McpError::Remote { code: -32601 | -32602, .. }
+        )
+    }
+
     async fn list_tools(&mut self) -> Result<Vec<McpToolDescriptor>, McpError> {
         if let Some(cache) = &self.cached_tools {
             if Instant::now() < cache.expires_at {
@@ -87,7 +157,15 @@ impl McpServerClient {
             if let Some(cursor) = &cursor {
                 params["cursor"] = Value::String(cursor.clone());
             }
-            let result = self.request("tools/list", None, params).await?;
+            let result = match self.request("tools/list", None, params.clone()).await {
+                Ok(result) => result,
+                Err(error) if self.should_fallback_to_legacy(&error) => {
+                    tracing::debug!(%error, "MCP server rejected stateless tools/list; falling back to legacy initialize lifecycle");
+                    self.initialize_legacy().await?;
+                    self.request("tools/list", None, params).await?
+                }
+                Err(error) => return Err(error),
+            };
             let page: ToolListPage = serde_json::from_value(result)
                 .map_err(|error| McpError::Protocol(format!("invalid tools/list result: {error}")))?;
             for descriptor in page.tools {
