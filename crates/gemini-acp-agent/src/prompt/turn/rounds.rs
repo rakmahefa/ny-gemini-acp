@@ -129,7 +129,9 @@ pub(crate) async fn run(
             outcome,
             assistant,
             tool_calls,
+            interaction_groups,
         } = streamed;
+        let _ = interaction_groups;
 
         if matches!(outcome, stream::StreamOutcome::Cancelled) {
             ctx.semantic.turn_cancelled();
