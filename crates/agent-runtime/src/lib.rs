@@ -11,8 +11,9 @@ pub mod time;
 
 pub use events::{EventBus, EventContext, EventStream, SemanticEvent, ToolEventContext, TurnEventEmitter};
 pub use execution::{
-    AgentThread, AgentThreadHandle, AgentTurn, AgentTurnHandle, Cancellation, RuntimeError,
-    ThreadCommand, ThreadState, TurnManager, TurnState,
+    AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome, AgentThread, AgentThreadHandle,
+    AgentTurn, AgentTurnHandle, Cancellation, RuntimeError, ThreadCommand, ThreadState,
+    TurnManager, TurnState,
 };
 pub use providers::{
     GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
