@@ -80,7 +80,7 @@ pub(crate) async fn run(
         let mut stream = match ctx.provider.stream(request).await {
             Ok(stream) => stream,
             Err(error) => {
-                let note = actionable_error_message(&error);
+                let note = actionable_error_message(&anyhow::anyhow!(error.to_string()));
                 let is_overflow = error.to_string().contains("context")
                     || error.to_string().contains("too long")
                     || error.to_string().contains("tokens");
