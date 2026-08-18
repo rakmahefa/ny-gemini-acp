@@ -10,9 +10,9 @@ rust-version.workspace = true
 description = "Provider-independent agent runtime: sessions, turns, events and orchestration"
 
 [dependencies]
-gemini-acp-config = { package = "llm-provider", path = "../gemini-acp-config" }
+gemini-acp-config = { package = "llm-provider", path = "../llm-provider" }
 gemini-acp-encaps = { package = "acp-encapsulation", path = "../gemini-acp-encaps" }
-tool-provider = { path = "../tool-provider" }
+tool-provider = { package = "tools-provider", path = "../tools-provider" }
 agent-client-protocol = { workspace = true, features = ["unstable_elicitation"] }
 regex = { workspace = true }
 reqwest = { workspace = true }

@@ -1,4 +1,15 @@
-//! Face API — port Rust de `gemini-web2api` (spec §5).
+//! Face API — port Rust de `gemini-web2api` (spec §5) : serveur axum servant
+//! le même backend Gemini web. Endpoints :
+//!
+//! - `GET  /` → statut + modèles.
+//! - `GET  /v1/models` → liste au format OpenAI.
+//! - `POST /v1/chat/completions` (OpenAI, streaming SSE).
+//! - `POST /v1/responses` (Codex CLI, streaming SSE).
+//! - `GET  /v1beta/models` + `POST /v1beta/models/{model}:generateContent`
+//!   (`:streamGenerateContent`) — Gemini CLI.
+//!
+//! Configuration : `config.json` (./config.json ou ~/.config/gemini-web2api/)
+//! puis env `GEMINI_WEB2API_*` (spec §5.1). Les logs vont sur stderr.
 
 mod chat;
 mod config;
@@ -28,8 +39,11 @@ async fn main() -> anyhow::Result<()> {
     let config = std::sync::Arc::new(config::load());
     convert::warn_xsrf_ignored(config.xsrf_token.as_deref());
 
-    let client = llm_provider::client::Client::new(llm_provider::client::Config {
-        cookie_file: config.cookie_file.clone().unwrap_or_else(|| "vendor/cookie.json".into()),
+    let client = gemini_acp_config::client::Client::new(gemini_acp_config::client::Config {
+        cookie_file: config
+            .cookie_file
+            .clone()
+            .unwrap_or_else(|| "vendor/cookie.json".into()),
         default_model: config.default_model.clone(),
         auth_user: config.auth_user,
         proxy: config.proxy.clone(),
@@ -37,7 +51,8 @@ async fn main() -> anyhow::Result<()> {
         request_timeout: Duration::from_secs(config.request_timeout_sec),
         retry_attempts: config.retry_attempts,
         retry_delay: Duration::from_secs(config.retry_delay_sec),
-    }).await?;
+    })
+    .await?;
 
     let state = AppState { client, config };
     let app = Router::new()
@@ -48,21 +63,29 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/responses", post(responses::handler))
         .route("/v1beta/models/{model}", post(google::generate))
         .fallback(not_found)
-        .layer(middleware::from_fn_with_state(state.clone(), http::cors_auth))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            http::cors_auth,
+        ))
         .with_state(state.clone());
 
     let addr = format!("{}:{}", state.config.host, state.config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(
         "gemini-web2api {} sur http://{addr} (modèle par défaut: {})",
-        env!("CARGO_PKG_VERSION"), state.config.default_model
+        env!("CARGO_PKG_VERSION"),
+        state.config.default_model
     );
     axum::serve(listener, app).await?;
     Ok(())
 }
 
+/// `GET /` → `{"status": "ok", "version": …, "models": […]}`.
 async fn root(State(state): State<AppState>) -> axum::response::Response {
-    let models: Vec<String> = llm_provider::core::models::MODEL_KEYS.iter().map(|s| s.to_string()).collect();
+    let models: Vec<String> = gemini_acp_config::core::models::MODEL_KEYS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     http::json_ok(serde_json::json!({
         "status": "ok",
         "version": env!("CARGO_PKG_VERSION"),
@@ -71,19 +94,27 @@ async fn root(State(state): State<AppState>) -> axum::response::Response {
     }))
 }
 
+/// `GET /v1/models` (port du vendor : `object: "list"` + `data` descripteurs).
 async fn openai_models() -> axum::response::Response {
-    let data: Vec<serde_json::Value> = llm_provider::core::models::MODEL_KEYS.iter().map(|name| {
-        serde_json::json!({
-            "id": name,
-            "object": "model",
-            "created": 1_700_000_000,
-            "owned_by": "google",
-            "description": name,
+    let data: Vec<serde_json::Value> = gemini_acp_config::core::models::MODEL_KEYS
+        .iter()
+        .map(|name| {
+            serde_json::json!({
+                "id": name,
+                "object": "model",
+                "created": 1_700_000_000,
+                "owned_by": "google",
+                "description": name,
+            })
         })
-    }).collect();
+        .collect();
     http::json_ok(serde_json::json!({ "object": "list", "data": data }))
 }
 
+/// 404 au format du vendor (`{"error": "not found"}`).
 async fn not_found() -> axum::response::Response {
-    http::json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not found"}))
+    http::json_response(
+        StatusCode::NOT_FOUND,
+        serde_json::json!({"error": "not found"}),
+    )
 }

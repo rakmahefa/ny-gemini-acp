@@ -18,8 +18,8 @@ name = "gemini-acp-snapshot"
 path = "src/bin/snapshot.rs"
 
 [dependencies]
-gemini-acp-config = { package = "llm-provider", path = "../gemini-acp-config" }
-gemini-acp-runtime = { package = "agent-runtime", path = "../gemini-acp-runtime" }
+gemini-acp-config = { package = "llm-provider", path = "../llm-provider" }
+gemini-acp-runtime = { package = "agent-runtime", path = "../agent-runtime" }
 gemini-acp-encaps = { package = "acp-encapsulation", path = "../gemini-acp-encaps" }
 agent-client-protocol = { workspace = true }
 tokio = { workspace = true }

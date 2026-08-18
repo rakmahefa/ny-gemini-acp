@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/gemini-acp-config",
-    "crates/gemini-acp-runtime",
-    "crates/gemini-acp-agent",
-    "crates/gemini-acp-encaps",
-    "crates/tool-provider",
+    "crates/acp-adapter",
+    "crates/agent-runtime",
+    "crates/llm-provider",
+    "crates/tools-provider",
 ]
+exclude = ["crates/gemini-acp-encaps"]
 
 [workspace.package]
 version = "0.2.2"
