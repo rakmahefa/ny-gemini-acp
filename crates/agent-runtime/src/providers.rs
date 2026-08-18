@@ -27,8 +27,9 @@ pub trait LlmProvider: Send + Sync {
     fn model_info(&self, model: &str) -> LlmModelInfo;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ToolCallRequest {
+    pub session_id: String,
     pub name: String,
     pub arguments: Value,
     pub cwd: PathBuf,
