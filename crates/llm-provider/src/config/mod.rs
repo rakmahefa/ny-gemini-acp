@@ -3,7 +3,6 @@
 //! La configuration est résolue une seule fois (`AgentConfig::from_env`), puis
 //! injectée vers les couches supérieures. Aucun contrat runtime ne dépend de
 //! l'environnement directement.
-pub mod config_options;
 pub mod env;
 
 use std::path::PathBuf;

@@ -7,7 +7,7 @@ fn session(messages: &[(&str, &str)]) -> Session {
         "sess_test".into(),
         "/home/dev/projet".into(),
         vec![],
-        "gemini-3.6-flash",
+        "test-model",
     );
     s.messages = messages
         .iter()
@@ -45,7 +45,7 @@ fn tool_result_est_injecte_sans_double_enveloppe() {
     ));
     s.messages.push((
         Role::Tool,
-        "[Tool result for file_read]: [workspace]\nmembers = [\"crates/gemini-acp-config\"]".into(),
+        "[Tool result for file_read]: [workspace]\nmembers = [\"crates/llm-provider\"]".into(),
     ));
 
     let p = build_prompt(&s, None);

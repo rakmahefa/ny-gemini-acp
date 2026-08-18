@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn build_config_options_retourne_3_options() {
-        let options = build_config_options("gemini-3.6-flash", Some(2), true);
+        let options = build_config_options("test-model", Some(2), true);
         assert_eq!(options.len(), 3);
     }
 
