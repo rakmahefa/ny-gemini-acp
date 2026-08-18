@@ -1,5 +1,5 @@
 [package]
-name = "gemini-acp-encaps"
+name = "acp-encapsulation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Concurrency and lifecycle encapsulation for ACP agent threads"
+description = "Internal ACP execution encapsulation primitives"
 
 [dependencies]
 tokio = { workspace = true }
