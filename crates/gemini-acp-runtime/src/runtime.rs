@@ -4,6 +4,7 @@ use crate::session::SessionManager;
 use crate::tools::{McpCatalog, ToolRegistry};
 use anyhow::{Context, Result};
 use gemini_acp_config::{AgentConfig, SettingsManager, SettingsManagerOptions};
+use gemini_acp_llm::LlmProvider;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct AppState {
     pub store: Arc<crate::state::Store>,
     pub sessions: SessionManager,
-    pub client: gemini_acp_config::client::Client,
+    pub provider: Arc<dyn LlmProvider>,
     pub config: Arc<AgentConfig>,
     pub settings: Arc<tokio::sync::Mutex<SettingsManager>>,
     pub tools: Arc<ToolRegistry>,
@@ -25,7 +26,10 @@ pub struct AgentRuntime {
 }
 
 impl AgentRuntime {
-    pub async fn from_config(config: AgentConfig) -> Result<Self> {
+    pub async fn from_parts(
+        config: AgentConfig,
+        provider: Arc<dyn LlmProvider>,
+    ) -> Result<Self> {
         for warning in config.validate() {
             tracing::warn!(%warning, "avertissement de configuration");
         }
@@ -38,15 +42,6 @@ impl AgentRuntime {
                 .with_context(|| format!("ouverture du store {}", config.data_dir.display()))?,
         );
         let sessions = SessionManager::new(Arc::clone(&store));
-        let client = gemini_acp_config::client::Client::new(gemini_acp_config::client::Config {
-            cookie_file: config.cookie_file.clone(),
-            default_model: config.default_model.clone(),
-            auth_user: config.auth_user,
-            proxy: config.proxy.clone(),
-            ..Default::default()
-        })
-        .await
-        .context("initialisation du client Gemini")?;
         let cwd = std::env::current_dir().context("résolution du cwd")?;
         let mut settings = SettingsManager::new(cwd, SettingsManagerOptions::default());
         settings
@@ -67,7 +62,7 @@ impl AgentRuntime {
             state: AppState {
                 store,
                 sessions,
-                client,
+                provider,
                 config: Arc::new(config),
                 settings: Arc::new(tokio::sync::Mutex::new(settings)),
                 tools: Arc::new(tools),
