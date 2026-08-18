@@ -1,40 +1,4 @@
-//! Utilitaire CLI pour gérer les snapshots de sessions ACP (refactor M10 §7.4).
-//!
-//! Le SDK ACP typé ne permet pas facilement d'enregistrer des méthodes custom
-//! `_gemini/*` côté agent — `on_receive_dispatch` exige l'implémentation de
-//! `JsonRpcRequest` pour des types custom, ce qui est lourd pour un usage
-//! occasionnel. À la place, ce binaire expose les opérations de snapshot
-//! directement sur le dépôt de sessions.
-//!
-//! ## Usage
-//!
-//! ```sh
-//! # Lister les snapshots d'une session
-//! gemini-acp-snapshot list <session_id>
-//!
-//! # Restaurer un snapshot
-//! gemini-acp-snapshot restore <session_id> <turn>
-//!
-//! # Restaurer en forçant (bypass le verrou `busy` — n'utiliser que si
-//! # l'agent a crashé en laissant un sentinel `.busy` orphelin)
-//! gemini-acp-snapshot restore <session_id> <turn> --force
-//!
-//! # Lister toutes les sessions (avec leurs snapshots)
-//! gemini-acp-snapshot sessions
-//! ```
-//!
-//! Le dépôt de sessions est résolu comme pour `gemini-acp` :
-//! `$GEMINI_ACP_DATA_DIR` sinon `$XDG_DATA_HOME/gemini-acp`
-//! sinon `~/.local/share/gemini-acp`.
-//!
-//! ## Sécurité (B2)
-//!
-//! `restore` refuse d'écraser une session si un tour est en cours
-//! (sentinel `<id>.busy` présent dans le dépôt). Cela évite qu'une
-//! restauration via CLI n'écrive la session pendant que l'agent
-//! `gemini-acp` est en plein tour (data corruption). Si l'agent a crashé
-//! en plein tour et a laissé un `.busy` orphelin, redémarrer l'agent
-//! purge les sentinels ; ou utiliser `--force` pour bypasser.
+//! Utilitaire CLI pour gérer les snapshots de sessions ACP.
 
 use std::path::PathBuf;
 
@@ -130,7 +94,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Résout le dépôt de sessions (même logique que `acp::env::data_dir_default`).
 fn resolve_data_dir() -> PathBuf {
     if let Ok(d) = std::env::var("GEMINI_ACP_DATA_DIR") {
         return PathBuf::from(d);
