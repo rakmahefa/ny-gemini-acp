@@ -4,6 +4,7 @@ mod emitter;
 mod event;
 mod integrity;
 mod stream;
+mod tool_sink;
 
 pub use bus::EventBus;
 pub use context::{EventContext, ToolEventContext};
