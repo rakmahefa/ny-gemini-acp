@@ -1,13 +1,14 @@
 use agent_client_protocol::schema::v1::{MessageId, SessionId, StopReason};
 use agent_client_protocol::{Client, ConnectionTo};
 use gemini_acp_runtime::events::TurnEventEmitter;
-use gemini_acp_runtime::state::{Role, Session};
+use gemini_acp_runtime::state::{Role, Session, SessionMode};
 use gemini_acp_runtime::{LlmProvider, LlmRequest, ToolProvider};
 use tokio::sync::watch;
 
 use super::context::{compact_messages, COMPACTION_THRESHOLD_CHARS, EMERGENCY_COMPACTION_CHARS};
 use crate::prompt::follow_up::{replace_components, request_action, FollowUpError, FollowUpOutcome};
 use crate::prompt::stream;
+use gemini_acp_tools::tools::ToolPermissionMode;
 
 pub(crate) enum RoundError {
     Stop(StopReason),
@@ -40,6 +41,14 @@ fn map_stop_reason_from_error(error: &str) -> StopReason {
         StopReason::Refusal
     } else {
         StopReason::EndTurn
+    }
+}
+
+fn tool_permission_mode(mode: SessionMode) -> ToolPermissionMode {
+    match mode {
+        SessionMode::Default => ToolPermissionMode::Default,
+        SessionMode::AcceptEdits => ToolPermissionMode::AcceptEdits,
+        SessionMode::BypassPermissions => ToolPermissionMode::BypassPermissions,
     }
 }
 
@@ -106,12 +115,7 @@ pub(crate) async fn run(
         )
         .await
         .map_err(RoundError::Acp)?;
-        let stream::StreamResult {
-            outcome,
-            assistant,
-            tool_calls,
-            interaction_groups,
-        } = streamed;
+        let stream::StreamResult { outcome, assistant, tool_calls, interaction_groups } = streamed;
         let _ = interaction_groups;
 
         if matches!(outcome, stream::StreamOutcome::Cancelled) {
@@ -126,7 +130,6 @@ pub(crate) async fn run(
         let clean_text = replace_components(&assistant);
         let follow_up_calls = tool_calls.iter().filter(|c| c.is_action()).collect::<Vec<_>>();
         let executable_calls = tool_calls.iter().filter(|c| !c.is_action()).collect::<Vec<_>>();
-
         if tool_calls.is_empty() {
             total_output = clean_text;
             break;
@@ -137,27 +140,18 @@ pub(crate) async fn run(
         } else {
             Vec::new()
         };
-
         if executable_calls.is_empty() && follow_up_calls.is_empty() {
             total_output = clean_text;
             break;
         }
 
         if !executable_calls.is_empty() {
-            let tool_blocks = executable_calls
-                .iter()
-                .map(|c| c.to_history_block())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let assistant_history = if clean_text.is_empty() {
-                tool_blocks
-            } else {
-                format!("{clean_text}\n{tool_blocks}")
-            };
+            let tool_blocks = executable_calls.iter().map(|c| c.to_history_block()).collect::<Vec<_>>().join("\n");
+            let assistant_history = if clean_text.is_empty() { tool_blocks } else { format!("{clean_text}\n{tool_blocks}") };
             ctx.session.messages.push((Role::Assistant, assistant_history));
-
             let session_mode = ctx.session.mode;
-            let mode_getter = || session_mode.into();
+            let mode = tool_permission_mode(session_mode);
+            let mode_getter = move || mode;
             let executor = gemini_acp_tools::tools::executor::ToolExecutor::new(
                 ctx.cx,
                 ctx.session_id,
@@ -167,62 +161,27 @@ pub(crate) async fn run(
                 &mode_getter,
                 ctx.cancel.clone(),
             );
-
             for call in &executable_calls {
                 if *ctx.cancel.borrow() {
                     ctx.semantic.turn_cancelled();
                     return Err(RoundError::Stop(StopReason::Cancelled));
                 }
-                let result = executor
-                    .execute_with_call_id_and_events(
-                        call.id.clone().into(),
-                        &call.name,
-                        &call.arguments,
-                        ctx.semantic,
-                    )
-                    .await;
-                ctx.session.messages.push((
-                    Role::Tool,
-                    gemini_acp_tools::tools::prompt::format_tool_result(&call.name, &result.content),
-                ));
+                let result = executor.execute_with_call_id_and_events(call.id.clone().into(), &call.name, &call.arguments, ctx.semantic).await;
+                ctx.session.messages.push((Role::Tool, gemini_acp_tools::tools::prompt::format_tool_result(&call.name, &result.content)));
             }
         }
 
         for call in follow_up_calls {
-            let label = call
-                .arguments
-                .get("label")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .trim();
-            let query = call
-                .arguments
-                .get("query")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or("")
-                .trim();
-            if label.is_empty() || query.is_empty() {
-                continue;
-            }
+            let label = call.arguments.get("label").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+            let query = call.arguments.get("query").and_then(serde_json::Value::as_str).unwrap_or("").trim();
+            if label.is_empty() || query.is_empty() { continue; }
             match request_action(ctx.cx, ctx.session_id, &call.id, label, query, ctx.cancel).await {
-                Ok(FollowUpOutcome::Selected(q)) => {
-                    ctx.session.messages.push((Role::User, q));
-                    total_output.clear();
-                    continue 'rounds;
-                }
+                Ok(FollowUpOutcome::Selected(q)) => { ctx.session.messages.push((Role::User, q)); total_output.clear(); continue 'rounds; }
                 Ok(FollowUpOutcome::Rejected) => continue,
-                Ok(FollowUpOutcome::Cancelled) => {
-                    ctx.semantic.turn_cancelled();
-                    return Err(RoundError::Stop(StopReason::Cancelled));
-                }
+                Ok(FollowUpOutcome::Cancelled) => { ctx.semantic.turn_cancelled(); return Err(RoundError::Stop(StopReason::Cancelled)); }
                 Err(error) => {
                     if !matches!(&error, FollowUpError::InvalidInput(_)) {
-                        crate::prompt::notify::emit_error_chunk(
-                            ctx.cx,
-                            ctx.session_id,
-                            ctx.message_id,
-                            &format!("FollowUp interaction failed: {error}"),
-                        );
+                        crate::prompt::notify::emit_error_chunk(ctx.cx, ctx.session_id, ctx.message_id, &format!("FollowUp interaction failed: {error}"));
                     }
                 }
             }
@@ -232,7 +191,6 @@ pub(crate) async fn run(
             total_output = clean_text;
             break;
         }
-
         if round == max_turns - 1 {
             total_output = "[Limite d'itérations outil atteinte]".into();
             assistant_already_persisted = true;
@@ -240,9 +198,5 @@ pub(crate) async fn run(
         }
     }
 
-    Ok(RoundOutcome {
-        output: total_output,
-        tool_round,
-        assistant_already_persisted,
-    })
+    Ok(RoundOutcome { output: total_output, tool_round, assistant_already_persisted })
 }
