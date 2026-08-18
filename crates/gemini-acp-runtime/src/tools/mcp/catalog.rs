@@ -18,6 +18,9 @@ use super::{
     CACHE_DEFAULT_TTL, MAX_PAGE_COUNT, REQUEST_TIMEOUT,
 };
 
+const DISCOVERY_ATTEMPTS: usize = 3;
+const DISCOVERY_RETRY_DELAYS_MS: [u64; DISCOVERY_ATTEMPTS - 1] = [100, 300];
+
 #[derive(Debug)]
 struct CachedToolList {
     tools: Vec<McpToolDescriptor>,
@@ -281,12 +284,61 @@ impl McpCatalog {
         Self::from_configs(configs).await
     }
 
+    async fn connect_and_discover(
+        config: McpServerConfig,
+    ) -> Result<(McpServerClient, Vec<McpToolDescriptor>), McpError> {
+        let server_name = config.name.clone();
+        let mut last_error = None;
+
+        for attempt in 0..DISCOVERY_ATTEMPTS {
+            match McpServerClient::connect(config.clone()).await {
+                Ok(mut client) => match client.list_tools().await {
+                    Ok(descriptors) => return Ok((client, descriptors)),
+                    Err(error) => {
+                        tracing::warn!(
+                            server = %server_name,
+                            attempt = attempt + 1,
+                            max_attempts = DISCOVERY_ATTEMPTS,
+                            %error,
+                            "MCP tool discovery failed"
+                        );
+                        last_error = Some(error);
+                    }
+                },
+                Err(error) => {
+                    tracing::warn!(
+                        server = %server_name,
+                        attempt = attempt + 1,
+                        max_attempts = DISCOVERY_ATTEMPTS,
+                        %error,
+                        "MCP server startup failed"
+                    );
+                    last_error = Some(error);
+                }
+            }
+
+            if attempt + 1 < DISCOVERY_ATTEMPTS {
+                tokio::time::sleep(Duration::from_millis(DISCOVERY_RETRY_DELAYS_MS[attempt])).await;
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| {
+            McpError::Transport {
+                transport: "mcp".into(),
+                message: format!("MCP server '{server_name}' discovery failed without an error"),
+            }
+        }))
+    }
+
     pub async fn from_configs(configs: Vec<McpServerConfig>) -> Result<Self, McpError> {
-        let mut servers = Vec::with_capacity(configs.len());
+        let requested_servers = configs.len();
+        let mut servers = Vec::with_capacity(requested_servers);
         let mut tools = Vec::new();
         let mut server_names = HashSet::new();
         let mut qualified_names = HashSet::new();
-        for (server_index, config) in configs.into_iter().enumerate() {
+        let mut failed_servers = Vec::new();
+
+        for config in configs {
             let server_name = config.name.clone();
             config.validate()?;
             if !server_names.insert(server_name.clone()) {
@@ -295,8 +347,21 @@ impl McpCatalog {
                     server_name
                 )));
             }
-            let mut client = McpServerClient::connect(config).await?;
-            let descriptors = client.list_tools().await?;
+
+            let (client, descriptors) = match Self::connect_and_discover(config).await {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::error!(
+                        server = %server_name,
+                        %error,
+                        "MCP server omitted after discovery retries"
+                    );
+                    failed_servers.push(server_name);
+                    continue;
+                }
+            };
+
+            let server_index = servers.len();
             for descriptor in descriptors {
                 let qualified = qualified_name(&server_name, &descriptor.name);
                 if !qualified_names.insert(qualified.clone()) {
@@ -312,6 +377,22 @@ impl McpCatalog {
             }
             servers.push(Mutex::new(client));
         }
+
+        if servers.is_empty() && requested_servers > 0 {
+            let detail = failed_servers.join(", ");
+            return Err(McpError::Config(format!(
+                "all forwarded MCP servers failed discovery: {detail}"
+            )));
+        }
+
+        tracing::info!(
+            requested_servers,
+            active_servers = servers.len(),
+            failed_servers = failed_servers.len(),
+            discovered_tools = tools.len(),
+            "MCP session catalog built"
+        );
+
         Ok(Self { servers, tools })
     }
 
@@ -384,5 +465,11 @@ mod tests {
         assert_eq!(qualified_name("foo-bar", "read_file"), "mcp__foo-bar__read_file");
         assert_eq!(qualified_name("foo/bar", "read file"), "mcp__foo_2fbar__read_20file");
         assert_ne!(qualified_name("foo/bar", "read_file"), qualified_name("foo_bar", "read_file"));
+    }
+
+    #[test]
+    fn discovery_policy_has_multiple_attempts() {
+        assert_eq!(DISCOVERY_ATTEMPTS, 3);
+        assert_eq!(DISCOVERY_RETRY_DELAYS_MS, [100, 300]);
     }
 }
