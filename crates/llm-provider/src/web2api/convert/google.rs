@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value};
 
-use gemini_acp_config::core::tool_prompt::{
+use crate::core::tool_prompt::{
     tool_result_line, tool_use_section, BlockKind, INSTRUCTION_FUNCTION_CALL,
 };
 
@@ -50,14 +50,10 @@ fn google_tool_defs(req: &Value) -> Vec<Value> {
     defs
 }
 
-/// Section `# Tool Use` du format Google natif : blocs `function_call`
-/// (port de `tools.py::build_tool_prompt`).
 fn google_tools_section(defs: &[Value]) -> String {
     tool_use_section(BlockKind::FunctionCall, INSTRUCTION_FUNCTION_CALL, defs, "")
 }
 
-/// Contrainte `toolConfig.functionCallingConfig` (mode + allowedFunctionNames) —
-/// port de `_google_tool_choice_instruction`.
 fn google_tool_choice_instruction(req: &Value) -> String {
     let config = req
         .get("toolConfig")
@@ -97,13 +93,6 @@ fn google_tool_choice_instruction(req: &Value) -> String {
     }
 }
 
-/// `contents` Google (`generateContent`) → prompt texte + **images**
-/// (`inlineData`, base64 + mime — upload Scotty ensuite). Port de
-/// `_google_contents_to_prompt` : `systemInstruction` → `[System instruction]`,
-/// role `model` → `[Assistant]`, autres → texte brut ; outils
-/// `functionDeclarations` → section `# Tool Use` au format `function_call`
-/// (+ contrainte `toolConfig`) ; historique `functionCall` → bloc, `functionResponse`
-/// → `[Tool result for …]`.
 pub fn google_contents_to_prompt(req: &Value) -> (String, Vec<(String, String)>) {
     let mut parts = Vec::new();
     let mut images = Vec::new();
@@ -152,8 +141,6 @@ pub fn google_contents_to_prompt(req: &Value) -> (String, Vec<(String, String)>)
     (parts.join("\n\n"), images)
 }
 
-/// Texte des parts Google (`text`, `functionCall` → bloc, `functionResponse` →
-/// résultat, `inlineData` → image extraite en `(base64, mime)`).
 fn parts_text(parts: Option<&Value>, images: &mut Vec<(String, String)>) -> String {
     let Some(parts) = parts.and_then(Value::as_array) else {
         return String::new();
@@ -188,18 +175,12 @@ fn parts_text(parts: Option<&Value>, images: &mut Vec<(String, String)>) -> Stri
     out.join(" ")
 }
 
-/// Extrait les appels `function_call` de la réponse Google (3 formats du
-/// vendor : bloc ` ```function_call `, ligne `function_call`, puis JSON brut
-/// `{"name", "args"}` isolé). Retourne `(texte nettoyé, [{name, args}])`.
 pub fn parse_google_function_calls(text: &str) -> (String, Vec<Value>) {
-    // Q3 : les regex sont statiques — compilation unique via `OnceLock`.
     static RE1: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     static RE2: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re1 = RE1.get_or_init(|| {
         regex::Regex::new(r"(?s)```function_call\s*\n(.*?)\n```").expect("regex statique")
     });
-    // Format 2 (sans backticks) : JSON sur une ligne — `.*` glouton jusqu'au
-    // dernier `}` de la ligne supporte les `args` imbriqués (port du vendor).
     let re2 = RE2.get_or_init(|| {
         regex::Regex::new(r"(?m)(?:^|\n)function_call\s*\n(\{.*\})(?:\n|$)")
             .expect("regex statique")
@@ -216,7 +197,8 @@ pub fn parse_google_function_calls(text: &str) -> (String, Vec<Value>) {
             };
             calls.push(json!({
                 "name": name,
-                "args": data.get("args")
+                "args": data
+                    .get("args")
                     .or_else(|| data.get("arguments"))
                     .cloned()
                     .unwrap_or_else(|| json!({})),
@@ -224,14 +206,14 @@ pub fn parse_google_function_calls(text: &str) -> (String, Vec<Value>) {
         }
         clean = re.replace_all(&clean, "").trim().to_string();
     }
-    // Format 3 : JSON brut isolé.
     if calls.is_empty() && clean.trim_start().starts_with('{') {
         if let Ok(data) = serde_json::from_str::<Value>(clean.trim()) {
             if let Some(name) = data.get("name").and_then(Value::as_str) {
                 if data.get("args").is_some() || data.get("arguments").is_some() {
                     calls.push(json!({
                         "name": name,
-                        "args": data.get("args")
+                        "args": data
+                            .get("args")
                             .or_else(|| data.get("arguments"))
                             .cloned()
                             .unwrap_or_else(|| json!({})),
@@ -258,10 +240,7 @@ mod tests {
         });
         let (prompt, images) = google_contents_to_prompt(&req);
         assert!(prompt.contains("que vois-tu ?"));
-        assert_eq!(
-            images,
-            vec![("aGVsbG8=".to_string(), "image/jpeg".to_string())]
-        );
+        assert_eq!(images, vec![("aGVsbG8=".to_string(), "image/jpeg".to_string())]);
     }
 
     #[test]
@@ -284,25 +263,21 @@ mod tests {
 
     #[test]
     fn parse_google_function_calls_trois_formats() {
-        // Bloc standard.
         let t = "texte\n```function_call\n{\"name\": \"a\", \"args\": {\"x\": 1}}\n```";
         let (clean, calls) = parse_google_function_calls(t);
         assert!(clean.contains("texte"));
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0]["name"], "a");
         assert_eq!(calls[0]["args"]["x"], 1);
-        // Sans backticks (format 2).
         let t2 = "function_call\n{\"name\": \"b\", \"args\": {}}";
         let (_, calls2) = parse_google_function_calls(t2);
         assert_eq!(calls2.len(), 1);
         assert_eq!(calls2[0]["name"], "b");
-        // JSON brut isolé (format 3) + tolérance `arguments`.
         let t3 = "{\"name\": \"c\", \"arguments\": {\"y\": 2}}";
         let (clean3, calls3) = parse_google_function_calls(t3);
         assert!(clean3.is_empty());
         assert_eq!(calls3.len(), 1);
         assert_eq!(calls3[0]["args"]["y"], 2);
-        // Sans appel → texte inchangé.
         let (clean4, calls4) = parse_google_function_calls("réponse simple");
         assert_eq!(clean4, "réponse simple");
         assert!(calls4.is_empty());
