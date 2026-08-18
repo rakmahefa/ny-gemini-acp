@@ -34,8 +34,6 @@ impl InteractionStreamParser {
         Self::default()
     }
 
-    /// Removes complete interaction groups from visible text and returns the
-    /// semantic groups that were decoded from them.
     pub(crate) fn push(&mut self, chunk: &str) -> InteractionParseResult {
         self.pending.push_str(chunk);
         self.drain(false)
@@ -54,9 +52,7 @@ impl InteractionStreamParser {
                 let keep = partial_suffix_len(&self.pending, GROUP_OPEN);
                 if final_flush {
                     if keep > 0 {
-                        tracing::warn!(
-                            "dropping partial ElicitationsGroup marker at stream end"
-                        );
+                        tracing::warn!("dropping partial ElicitationsGroup marker at stream end");
                         let emit_len = self.pending.len() - keep;
                         out.push_str(&self.pending[..emit_len]);
                     } else {
@@ -80,18 +76,14 @@ impl InteractionStreamParser {
             }
 
             if self.pending.len() > MAX_GROUP_BYTES {
-                tracing::warn!(
-                    "dropping oversized ElicitationsGroup envelope from assistant presentation"
-                );
+                tracing::warn!("dropping oversized ElicitationsGroup envelope from assistant presentation");
                 self.pending.clear();
                 return InteractionParseResult { visible: out, groups };
             }
 
             let Some(end_rel) = self.pending.find(GROUP_CLOSE) else {
                 if final_flush {
-                    tracing::warn!(
-                        "dropping incomplete ElicitationsGroup envelope at stream end"
-                    );
+                    tracing::warn!("dropping incomplete ElicitationsGroup envelope at stream end");
                     self.pending.clear();
                 }
                 return InteractionParseResult { visible: out, groups };
@@ -103,9 +95,7 @@ impl InteractionStreamParser {
 
             match parse_group(&group_text) {
                 Some(group) if !group.actions.is_empty() => groups.push(group),
-                Some(_) => tracing::warn!(
-                    "dropping ElicitationsGroup without valid Elicitation actions"
-                ),
+                Some(_) => tracing::warn!("dropping ElicitationsGroup without valid Elicitation actions"),
                 None => tracing::warn!("dropping malformed ElicitationsGroup envelope"),
             }
         }
@@ -121,7 +111,7 @@ pub(crate) struct InteractionParseResult {
 fn parse_group(text: &str) -> Option<InteractionGroup> {
     let open_end = find_tag_end(text.strip_prefix(GROUP_OPEN)?)?;
     let open_tag = &text[..GROUP_OPEN.len() + open_end + 1];
-    let message = parse_attributes(&open_tag[1..])
+    let message = parse_tag_attributes(&open_tag[1..])
         .get("message")
         .cloned()
         .filter(|value| !value.trim().is_empty())
@@ -141,7 +131,7 @@ fn parse_group(text: &str) -> Option<InteractionGroup> {
         let rest = &inner[start..];
         let tag_end = find_tag_end(rest)?;
         let tag = &rest[..tag_end + 1];
-        let attrs = parse_attributes(&tag[1..]);
+        let attrs = parse_tag_attributes(&tag[1..]);
         let label = attrs
             .get("label")
             .map(|value| decode_entities(value.trim()))
@@ -160,6 +150,12 @@ fn parse_group(text: &str) -> Option<InteractionGroup> {
     }
 
     Some(InteractionGroup { message, actions })
+}
+
+fn parse_tag_attributes(tag: &str) -> std::collections::BTreeMap<String, String> {
+    let mut parts = tag.splitn(2, char::is_whitespace);
+    let _tag_name = parts.next().unwrap_or_default();
+    parse_attributes(parts.next().unwrap_or_default())
 }
 
 fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
