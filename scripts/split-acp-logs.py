@@ -3,6 +3,11 @@
 
 The source file remains the canonical evidence. Generated chunks are copies of
 complete top-level JSON events, never line-based fragments of an event.
+
+ACP logs can contain raw control characters inside captured tool/output text.
+Python's JSON decoder rejects those by default even though they are valid bytes
+inside the captured log payload. We therefore decode with ``strict=False`` and
+re-serialize the resulting events as canonical JSON.
 """
 
 from __future__ import annotations
@@ -14,7 +19,14 @@ from pathlib import Path
 
 def split_log(source: Path, output_dir: Path, events_per_part: int) -> None:
     raw = source.read_text(encoding="utf-8")
-    events = json.loads(raw)
+    try:
+        events = json.loads(raw, strict=False)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"{source} is not parseable as an ACP JSON array: "
+            f"line {exc.lineno}, column {exc.colno}, char {exc.pos}: {exc.msg}"
+        ) from exc
+
     if not isinstance(events, list):
         raise ValueError(f"{source} must contain a top-level JSON array")
     if events_per_part <= 0:
@@ -30,6 +42,7 @@ def split_log(source: Path, output_dir: Path, events_per_part: int) -> None:
         f"- Source events: {len(events)}",
         f"- Events per part: {events_per_part}",
         "- Parts contain complete top-level events and preserve event order.",
+        "- Source decoding uses JSON `strict=False` because captured ACP/tool text may contain raw control characters.",
         "",
     ]
 
@@ -56,7 +69,10 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     parser.add_argument("--events-per-part", type=int, default=100)
     args = parser.parse_args()
-    split_log(args.source, args.output, args.events_per_part)
+    try:
+        split_log(args.source, args.output, args.events_per_part)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
     return 0
 
 
