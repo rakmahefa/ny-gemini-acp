@@ -85,6 +85,12 @@ impl McpServerConfig {
     pub fn from_acp(server: McpServer) -> Result<Self, McpError> {
         match server {
             McpServer::Stdio(server) => {
+                if !server.command.is_absolute() {
+                    return Err(McpError::Config(format!(
+                        "stdio MCP server '{}' command must be an absolute path",
+                        server.name
+                    )));
+                }
                 let command = server
                     .command
                     .to_str()
@@ -153,14 +159,15 @@ fn header_map(
     let mut result = HashMap::with_capacity(headers.len());
     for header in headers {
         if result
-            .insert(header.name.clone(), header.value)
-            .is_some()
+            .keys()
+            .any(|name| name.eq_ignore_ascii_case(&header.name))
         {
             return Err(McpError::Config(format!(
                 "duplicate MCP HTTP header '{}'",
                 header.name
             )));
         }
+        result.insert(header.name, header.value);
     }
     Ok(result)
 }
@@ -229,6 +236,13 @@ mod tests {
     }
 
     #[test]
+    fn rejects_relative_stdio_commands_before_spawning() {
+        let server = McpServer::Stdio(McpServerStdio::new("project-tools", "project-mcp"));
+        let error = McpServerConfig::from_acp(server).unwrap_err();
+        assert!(error.to_string().contains("absolute path"));
+    }
+
+    #[test]
     fn forwards_http_headers_and_transport() {
         let server = McpServer::Http(
             McpServerHttp::new("remote", "https://mcp.example.test")
@@ -255,5 +269,18 @@ mod tests {
         let config = McpServerConfig::from_acp(server).unwrap();
         assert_eq!(config.transport, McpTransportKind::Http);
         assert_eq!(config.url.as_deref(), Some("https://mcp.example.test/events"));
+    }
+
+    #[test]
+    fn duplicate_http_header_names_are_rejected_case_insensitively() {
+        let server = McpServer::Http(
+            McpServerHttp::new("remote", "https://mcp.example.test")
+                .headers(vec![
+                    HttpHeader::new("Authorization", "Bearer a"),
+                    HttpHeader::new("authorization", "Bearer b"),
+                ]),
+        );
+        let error = McpServerConfig::from_acp(server).unwrap_err();
+        assert!(error.to_string().contains("duplicate MCP HTTP header"));
     }
 }
