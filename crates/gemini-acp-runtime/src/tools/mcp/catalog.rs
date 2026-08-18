@@ -83,7 +83,7 @@ impl McpServerClient {
         let mut tools = Vec::new();
         let mut seen_cursors = HashSet::new();
         for _ in 0..MAX_PAGE_COUNT {
-            let mut params = json!({"limit": 100});
+            let mut params = json!({});
             if let Some(cursor) = &cursor {
                 params["cursor"] = Value::String(cursor.clone());
             }
