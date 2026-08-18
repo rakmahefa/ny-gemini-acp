@@ -31,7 +31,7 @@ pub struct StreamResult {
     pub outcome: StreamOutcome,
     pub assistant: String,
     pub tool_calls: Vec<ParsedToolCall>,
-    pub interaction_groups: Vec<InteractionGroup>,
+    pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
 pub async fn consume<E: Display>(
