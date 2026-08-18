@@ -1,18 +1,15 @@
-//! Binaire `gemini-acp` : transport ACP stdio vers l'agent Gemini.
+//! Binaire `gemini-acp` : bootstrap Gemini + runtime + transport ACP.
 //!
-//! Responsabilités volontairement minimales :
-//! - initialiser le logging sur stderr ;
-//! - résoudre la configuration (`gemini_acp_config::AgentConfig`) ;
-//! - créer le runtime (`gemini_acp_runtime::AgentRuntime`) ;
-//! - lancer le transport ACP (`gemini_acp_agent::run_agent`) et gérer le
-//!   signal d'arrêt.
-//!
-//! Le protocole et les handlers vivent dans `agent.rs` et `handlers/`.
+//! La composition des providers appartient au bootstrap. Le runtime ne connaît
+//! que le contrat `LlmProvider`, ce qui permet de remplacer Gemini sans toucher
+//! aux sessions, outils ou au protocole ACP.
+
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 
 use gemini_acp_agent::run_agent;
-use gemini_acp_config::AgentConfig;
+use gemini_acp_config::{client::Client, AgentConfig};
 use gemini_acp_runtime::AgentRuntime;
 
 #[tokio::main]
@@ -20,7 +17,18 @@ async fn main() -> Result<()> {
     init_tracing();
 
     let config = AgentConfig::from_env();
-    let runtime = AgentRuntime::from_config(config).await?;
+    let provider = Arc::new(
+        Client::new(gemini_acp_config::client::Config {
+            cookie_file: config.cookie_file.clone(),
+            default_model: config.default_model.clone(),
+            auth_user: config.auth_user,
+            proxy: config.proxy.clone(),
+            ..Default::default()
+        })
+        .await
+        .context("initialisation du provider Gemini")?,
+    );
+    let runtime = AgentRuntime::from_parts(config, provider).await?;
 
     tokio::select! {
         result = run_agent(runtime.state().clone()) => {
