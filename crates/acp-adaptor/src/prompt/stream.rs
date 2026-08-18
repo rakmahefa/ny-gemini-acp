@@ -14,7 +14,7 @@ use super::{
     error::actionable_stream_error,
     follow_up::StreamNormalizer,
     interaction::InteractionGroup,
-    notify::notify_text,
+    notify::{notify_reasoning, notify_text},
     stream_contract::{SemanticStreamContract, StreamDelta},
 };
 
@@ -77,7 +77,7 @@ pub async fn consume(
                             thinking_active = true;
                         }
                         semantic.thinking_delta(&text);
-                        notify_text(cx, session_id, message_id, &text.replace("\r\n", "\n"))?;
+                        notify_reasoning(cx, session_id, message_id, text)?;
                     }
                     Ok(ModelEvent::ToolCall { .. }) => {
                         break StreamOutcome::Failed("structured provider tool calls are not yet supported by the ACP text-tool projection".to_owned());
