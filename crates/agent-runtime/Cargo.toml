@@ -1,5 +1,5 @@
 [package]
-name = "gemini-acp-runtime"
+name = "agent-runtime"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,14 +7,16 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Runtime agent ACP : état, outils, persistance sessions"
+description = "Provider-neutral agent runtime: state, sessions, events and execution"
+
+[lib]
+name = "gemini_acp_runtime"
+path = "src/lib.rs"
 
 [dependencies]
-gemini-acp-config = { path = "../gemini-acp-config" }
-gemini-acp-encaps = { path = "../gemini-acp-encaps" }
+gemini_acp_config = { package = "llm-provider", path = "../llm-provider" }
+gemini_acp_tools = { package = "tools-provider", path = "../tools-provider" }
 agent-client-protocol = { workspace = true, features = ["unstable_elicitation"] }
-# Non listé dans spec.md §4.3 (omission) mais requis par tools/sandbox.rs et
-# tools/parse.rs (regex statiques pour l'analyse shell / le parsing tool_call).
 regex = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }

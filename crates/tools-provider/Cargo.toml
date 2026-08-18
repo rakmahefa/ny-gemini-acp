@@ -1,0 +1,29 @@
+[package]
+name = "tools-provider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Builtin and MCP tool provider implementations"
+
+[lib]
+name = "gemini_acp_tools"
+path = "src/lib.rs"
+
+[dependencies]
+agent-client-protocol = { workspace = true, features = ["unstable_elicitation"] }
+anyhow = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+futures-util = { workspace = true }
+regex = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
