@@ -2,14 +2,16 @@ use super::*;
 use crate::{NullLlmProvider, NullToolProvider};
 use std::sync::Arc;
 
+const TEST_MODEL: &str = "test-model";
+
 fn test_config() -> RuntimeConfig {
     let dir = std::env::temp_dir().join(format!(
-        "gemini-acp-runtime-test-{}",
+        "agent-runtime-test-{}",
         uuid::Uuid::new_v4().simple()
     ));
     RuntimeConfig {
         data_dir: dir.join("data"),
-        default_model: "gemini-3.6-flash".into(),
+        default_model: TEST_MODEL.into(),
     }
 }
 
