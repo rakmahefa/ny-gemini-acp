@@ -21,11 +21,7 @@ pub async fn handle(
         .session_capabilities
         .fork(SessionForkCapabilities::new());
     // H4: advertise the MCP transports the runtime can forward to Gemini.
-    caps.mcp_capabilities = Some(
-        McpCapabilities::new()
-            .http(true)
-            .sse(true),
-    );
+    caps = caps.mcp_capabilities(McpCapabilities::new().http(true).sse(true));
 
     responder.respond(
         InitializeResponse::new(req.protocol_version)
