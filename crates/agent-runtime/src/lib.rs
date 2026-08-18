@@ -15,9 +15,9 @@ pub use execution::{
     ThreadCommand, ThreadState, TurnManager, TurnState,
 };
 pub use providers::{
-    GenerationOptions, IntoMcpServerConfig, LlmModelInfo, LlmProvider, LlmRequest, LlmStream,
-    McpServerConfig, McpTransportKind, NullLlmProvider, NullToolProvider, SharedLlmProvider,
-    SharedToolProvider, ToolCallRequest, ToolCallResult, ToolEventSink, ToolProvider,
+    GenerationOptions, LlmModelInfo, LlmProvider, LlmRequest, LlmStream, McpServerConfig,
+    McpTransportKind, NullLlmProvider, NullToolProvider, SharedLlmProvider, SharedToolProvider,
+    ToolCallRequest, ToolCallResult, ToolEventSink, ToolProvider,
 };
 pub use runtime::{AgentRuntime, AppState, RuntimeConfig};
 pub use session::SessionManager;
