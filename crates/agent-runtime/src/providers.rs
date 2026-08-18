@@ -1,4 +1,5 @@
 //! Provider-neutral contracts owned by the agent runtime.
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -7,17 +8,24 @@ use tokio::sync::{mpsc, watch};
 
 pub type LlmStream = mpsc::Receiver<Result<String, String>>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct GenerationOptions {
+    /// Optional provider-neutral reasoning budget.
+    /// Concrete providers map this to their native reasoning controls.
+    pub reasoning_budget: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LlmRequest {
     pub prompt: String,
     pub model: String,
-    pub think: Option<u32>,
+    pub generation: GenerationOptions,
     pub refs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LlmModelInfo {
-    pub supports_thinking: bool,
+    pub supports_reasoning: bool,
 }
 
 #[async_trait::async_trait]
@@ -25,6 +33,62 @@ pub trait LlmProvider: Send + Sync {
     async fn stream(&self, request: LlmRequest) -> Result<LlmStream, String>;
     async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, String>;
     fn model_info(&self, model: &str) -> LlmModelInfo;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpTransportKind {
+    Stdio,
+    Http,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpServerConfig {
+    pub name: String,
+    pub transport: McpTransportKind,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub env: HashMap<String, String>,
+    pub cwd: Option<PathBuf>,
+    pub url: Option<String>,
+    pub headers: HashMap<String, String>,
+}
+
+impl McpServerConfig {
+    pub fn stdio(
+        name: impl Into<String>,
+        command: impl Into<String>,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        cwd: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            transport: McpTransportKind::Stdio,
+            command: Some(command.into()),
+            args,
+            env,
+            cwd,
+            url: None,
+            headers: HashMap::new(),
+        }
+    }
+
+    pub fn http(
+        name: impl Into<String>,
+        url: impl Into<String>,
+        headers: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            transport: McpTransportKind::Http,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
+            url: Some(url.into()),
+            headers,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -68,7 +132,7 @@ pub trait ToolProvider: Send + Sync {
         &self,
         session_id: &str,
         cwd: PathBuf,
-        servers: Vec<Value>,
+        servers: Vec<McpServerConfig>,
     ) -> Result<(), String>;
     async fn clear_session(&self, session_id: &str);
     fn definitions(&self) -> Vec<Value>;
@@ -85,7 +149,12 @@ impl ToolProvider for NullToolProvider {
     async fn for_session(&self, _: &str) -> Arc<dyn ToolProvider> {
         Arc::new(Self)
     }
-    async fn configure_session(&self, _: &str, _: PathBuf, _: Vec<Value>) -> Result<(), String> {
+    async fn configure_session(
+        &self,
+        _: &str,
+        _: PathBuf,
+        _: Vec<McpServerConfig>,
+    ) -> Result<(), String> {
         Ok(())
     }
     async fn clear_session(&self, _: &str) {}
