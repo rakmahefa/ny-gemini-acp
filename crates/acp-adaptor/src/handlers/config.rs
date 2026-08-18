@@ -9,7 +9,7 @@
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
-use gemini_acp_config::config::config_options::build_config_options;
+use gemini_acp_runtime::config::config_options::build_config_options;
 use gemini_acp_runtime::state::Session;
 use gemini_acp_runtime::AppState;
 
@@ -19,7 +19,6 @@ pub async fn handle(
     state: &AppState,
     cx: &ConnectionTo<Client>,
 ) -> Result<(), AcpError> {
-    // Vérifier que la session existe.
     if state.store.get(&req.session_id.0).await.is_none() {
         return responder.respond_with_error(
             AcpError::invalid_params()
@@ -27,11 +26,9 @@ pub async fn handle(
         );
     }
 
-    // Déterminer les modifications à appliquer.
     let config_id = req.config_id.0.clone();
     let value = req.value.clone();
 
-    // Appliquer via update_session (persistance SANS toucher busy).
     let session = match state
         .store
         .update_session(&req.session_id.0, move |s: &mut Session| {
@@ -53,29 +50,17 @@ pub async fn handle(
                         match v.0.as_ref().to_ascii_lowercase().as_str() {
                             "true" | "1" | "on" | "yes" => s.tools_enabled = true,
                             "false" | "0" | "off" | "no" => s.tools_enabled = false,
-                            other => {
-                                // On ne peut pas retourner d'erreur depuis la closure,
-                                // mais la validation ci-dessous attrapera le cas.
-                                // On laisse la valeur inchangée.
-                                tracing::warn!(
-                                    value = other,
-                                    "valeur tools_enabled invalide, ignorée"
-                                );
-                            }
+                            other => tracing::warn!(value = other, "valeur tools_enabled invalide, ignorée"),
                         }
                     }
                 }
-                other => {
-                    tracing::warn!(config_id = other, "config_id inconnu");
-                }
+                other => tracing::warn!(config_id = other, "config_id inconnu"),
             }
         })
         .await
     {
         Ok(()) => state.store.get(&req.session_id.0).await,
-        Err(e) => {
-            return responder.respond_with_internal_error(format!("{e:#}"));
-        }
+        Err(e) => return responder.respond_with_internal_error(format!("{e:#}")),
     };
 
     let Some(session) = session else {
@@ -87,7 +72,6 @@ pub async fn handle(
 
     let options = build_config_options(&session.model, session.think, session.tools_enabled);
 
-    // Émettre ConfigOptionUpdate (best-effort) — refactor M7 §3.6.
     cx.send_notification(SessionNotification::new(
         req.session_id.clone(),
         SessionUpdate::ConfigOptionUpdate(ConfigOptionUpdate::new(options.clone())),
