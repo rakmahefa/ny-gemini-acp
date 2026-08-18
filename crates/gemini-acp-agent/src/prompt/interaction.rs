@@ -51,13 +51,21 @@ impl InteractionStreamParser {
 
         loop {
             let Some(start) = self.pending.find(GROUP_OPEN) else {
+                let keep = partial_suffix_len(&self.pending, GROUP_OPEN);
                 if final_flush {
-                    out.push_str(&self.pending);
+                    if keep > 0 {
+                        tracing::warn!(
+                            "dropping partial ElicitationsGroup marker at stream end"
+                        );
+                        let emit_len = self.pending.len() - keep;
+                        out.push_str(&self.pending[..emit_len]);
+                    } else {
+                        out.push_str(&self.pending);
+                    }
                     self.pending.clear();
                     return InteractionParseResult { visible: out, groups };
                 }
 
-                let keep = partial_suffix_len(&self.pending, GROUP_OPEN);
                 let emit_len = self.pending.len().saturating_sub(keep);
                 if emit_len > 0 {
                     out.push_str(&self.pending[..emit_len]);
@@ -98,9 +106,7 @@ impl InteractionStreamParser {
                 Some(_) => tracing::warn!(
                     "dropping ElicitationsGroup without valid Elicitation actions"
                 ),
-                None => tracing::warn!(
-                    "dropping malformed ElicitationsGroup envelope"
-                ),
+                None => tracing::warn!("dropping malformed ElicitationsGroup envelope"),
             }
         }
     }
@@ -341,6 +347,13 @@ mod tests {
     #[test]
     fn incomplete_group_is_not_leaked_at_eof() {
         let result = parse(&["Avant <ElicitationsGroup message=\"Choix\"><Elicitation label=\"A\" query=\"Q\"/>"]);
+        assert_eq!(result.visible, "Avant ");
+        assert!(result.groups.is_empty());
+    }
+
+    #[test]
+    fn partial_marker_is_not_leaked_at_eof() {
+        let result = parse(&["Avant <Elicitation"]);
         assert_eq!(result.visible, "Avant ");
         assert!(result.groups.is_empty());
     }
