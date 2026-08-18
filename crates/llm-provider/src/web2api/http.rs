@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
 use super::config::Config;
-use crate::client::{Client, Config as ClientConfig};
+use llm_provider::client::{Client, Config as ClientConfig};
 
 pub type SseItem = Result<Event, Infallible>;
 pub type SseChannel = (mpsc::Sender<SseItem>, mpsc::Receiver<SseItem>);
@@ -103,7 +103,6 @@ fn authorized(req: &Request, config: &Config) -> bool {
     false
 }
 
-/// Convenience constructor kept local to the web2api adapter.
 pub(crate) async fn build_client(config: &Config) -> anyhow::Result<Client> {
     Client::new(ClientConfig {
         cookie_file: config.cookie_file.clone().unwrap_or_else(|| "vendor/cookie.json".into()),
