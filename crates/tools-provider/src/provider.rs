@@ -1,14 +1,16 @@
-//! Session-aware builtin/MCP implementation of the runtime ToolProvider contract.
+//! Session-aware builtin/MCP implementation of the runtime `ToolProvider` contract.
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use gemini_acp_runtime::{ToolCallRequest, ToolCallResult, ToolProvider};
+use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider};
 
+use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
 use crate::tools::mcp::{McpCatalog, McpServerConfig};
 use crate::tools::registry::ToolRegistry;
+use crate::tools::contracts::ToolCancellation;
 
 struct ProviderState {
     fallback: Arc<ToolRegistry>,
@@ -107,7 +109,10 @@ impl ToolProvider for DefaultToolProvider {
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
-        match self
+        let cancellation = ToolCancellation::from_receiver(request.cancellation.clone());
+        bind_session_cancellation(&request.session_id, cancellation);
+
+        let result = match self
             .registry
             .call_async(&request.name, &request.arguments, &request.cwd, &request.additional_dirs)
             .await
@@ -119,6 +124,9 @@ impl ToolProvider for DefaultToolProvider {
             },
             Some(crate::tools::registry::ToolResult::Err(content)) => ToolCallResult::error(content),
             None => ToolCallResult::error(format!("Outil inconnu : {}", request.name)),
-        }
+        };
+
+        unbind_session_cancellation(&request.session_id);
+        result
     }
 }
