@@ -10,7 +10,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use super::config::Config;
-use crate::client::{Client, Config as ClientConfig};
+use llm_provider::client::{Client, Config as ClientConfig};
 
 pub type SseItem = Result<Event, Infallible>;
 pub type SseChannel = (mpsc::Sender<SseItem>, mpsc::Receiver<SseItem>);
