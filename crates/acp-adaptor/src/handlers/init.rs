@@ -1,13 +1,9 @@
 //! Handler `initialize`.
-//!
-//! Refactor R1 — inspiré de `GlmAcpAgent.initialize()` :
-//! - Annonce la capability `fork` (SessionCapabilities).
-//! - Auth methods vides (cookies gérés en interne, comme glm-acp-agent).
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Error as AcpError, Responder};
 
-use gemini_acp_runtime::config::config_options::build_agent_capabilities;
+use gemini_acp_llm::config::config_options::build_agent_capabilities;
 use gemini_acp_runtime::AppState;
 
 pub async fn handle(
