@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::client::DEFAULT_BL;
-use crate::core::models::DEFAULT_MODEL;
+use llm_provider::client::DEFAULT_BL;
+use llm_provider::core::models::DEFAULT_MODEL;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -26,44 +26,21 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Self {
-            port: 8081,
-            host: "127.0.0.1".into(),
-            retry_attempts: 3,
-            retry_delay_sec: 2,
-            request_timeout_sec: 180,
-            gemini_bl: DEFAULT_BL.to_string(),
-            auth_user: None,
-            xsrf_token: None,
-            default_model: DEFAULT_MODEL.to_string(),
-            log_requests: true,
-            cookie_file: None,
-            proxy: None,
-            api_keys: Vec::new(),
-        }
+        Self { port: 8081, host: "127.0.0.1".into(), retry_attempts: 3, retry_delay_sec: 2, request_timeout_sec: 180, gemini_bl: DEFAULT_BL.to_string(), auth_user: None, xsrf_token: None, default_model: DEFAULT_MODEL.to_string(), log_requests: true, cookie_file: None, proxy: None, api_keys: Vec::new() }
     }
 }
 
-fn config_paths() -> [PathBuf; 2] {
-    [PathBuf::from("./config.json"), dirs_config().join("gemini-web2api/config.json")]
-}
-
-fn dirs_config() -> PathBuf {
-    std::env::var_os("HOME").map(PathBuf::from).map(|p| p.join(".config")).unwrap_or_else(|| PathBuf::from("."))
-}
+fn config_paths() -> [PathBuf; 2] { [PathBuf::from("./config.json"), dirs_config().join("gemini-web2api/config.json")] }
+fn dirs_config() -> PathBuf { std::env::var_os("HOME").map(PathBuf::from).map(|p| p.join(".config")).unwrap_or_else(|| PathBuf::from(".")) }
 
 pub fn load() -> Config {
     let mut config = Config::default();
     for path in config_paths() {
         if let Ok(raw) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<Config>(&raw) {
-                Ok(from_file) => { config = from_file; tracing::info!("config chargée depuis {}", path.display()); }
-                Err(e) => tracing::warn!("config.json invalide ({}): {e}", path.display()),
-            }
+            match serde_json::from_str::<Config>(&raw) { Ok(from_file) => { config = from_file; tracing::info!("config chargée depuis {}", path.display()); }, Err(e) => tracing::warn!("config.json invalide ({}): {e}", path.display()) }
         }
     }
-    apply_env(&mut config);
-    config
+    apply_env(&mut config); config
 }
 
 fn apply_env(config: &mut Config) {
