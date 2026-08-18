@@ -7,9 +7,7 @@ use tokio::sync::watch;
 use tools_provider::tools::ToolPermissionMode;
 
 use super::context::{compact_messages, COMPACTION_THRESHOLD_CHARS, EMERGENCY_COMPACTION_CHARS};
-use crate::prompt::follow_up::{
-    replace_components, request_action, FollowUpError, FollowUpOutcome,
-};
+use crate::prompt::follow_up::{replace_components, request_action, FollowUpError, FollowUpOutcome};
 use crate::prompt::stream;
 
 pub(crate) enum RoundError {
@@ -107,14 +105,12 @@ pub(crate) async fn run(
             }
         };
 
-        let thinking = ctx.llm.model_info(&ctx.session.model).supports_reasoning;
         let streamed = stream::consume(
             rx,
             ctx.cancel,
             ctx.cx,
             ctx.session_id,
             ctx.message_id,
-            thinking,
             ctx.semantic,
         )
         .await
@@ -137,14 +133,8 @@ pub(crate) async fn run(
         }
 
         let clean_text = replace_components(&assistant);
-        let follow_up_calls = tool_calls
-            .iter()
-            .filter(|c| c.is_action())
-            .collect::<Vec<_>>();
-        let executable_calls = tool_calls
-            .iter()
-            .filter(|c| !c.is_action())
-            .collect::<Vec<_>>();
+        let follow_up_calls = tool_calls.iter().filter(|c| c.is_action()).collect::<Vec<_>>();
+        let executable_calls = tool_calls.iter().filter(|c| !c.is_action()).collect::<Vec<_>>();
         if tool_calls.is_empty() {
             total_output = clean_text;
             break;
@@ -201,10 +191,7 @@ pub(crate) async fn run(
                     .await;
                 ctx.session.messages.push((
                     Role::Tool,
-                    tools_provider::tools::prompt::format_tool_result(
-                        &call.name,
-                        &result.content,
-                    ),
+                    tools_provider::tools::prompt::format_tool_result(&call.name, &result.content),
                 ));
             }
         }
