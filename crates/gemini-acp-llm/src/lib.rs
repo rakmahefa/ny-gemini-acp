@@ -36,6 +36,17 @@ pub enum LlmError {
 pub trait LlmProvider: Send + Sync {
     fn name(&self) -> &'static str;
 
+    fn is_thinking_model(&self, _model: &str) -> bool {
+        false
+    }
+
+    async fn upload_images(
+        &self,
+        _images: &[(String, String)],
+    ) -> Result<Vec<String>, LlmError> {
+        Ok(Vec::new())
+    }
+
     async fn stream(&self, request: LlmRequest) -> Result<LlmStream, LlmError>;
 }
 
