@@ -7,7 +7,10 @@ use tokio::{
 };
 
 use super::{
-    protocol::{parse_json_rpc_response, parse_sse_rpc_response, serialize_request_line, serialize_request_payload, RpcRequest, RpcResponse},
+    protocol::{
+        parse_json_rpc_response, parse_sse_rpc_response, serialize_notification_line,
+        serialize_request_line, serialize_request_payload, RpcRequest, RpcResponse,
+    },
     McpError, McpServerConfig, IO_TIMEOUT, MAX_MESSAGE_BYTES, MCP_PROTOCOL_VERSION,
     REQUEST_TIMEOUT,
 };
@@ -116,6 +119,36 @@ impl StdioTransport {
                 message: "response read timeout".into(),
             })??;
         parse_json_rpc_response(response_line.as_bytes(), None)
+    }
+
+    pub(super) async fn notify(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), McpError> {
+        let line = serialize_notification_line(method, params)?;
+        tokio::time::timeout(IO_TIMEOUT, async {
+            self.stdin
+                .write_all(&line)
+                .await
+                .map_err(|error| McpError::Transport {
+                    transport: "stdio".into(),
+                    message: error.to_string(),
+                })?;
+            self.stdin
+                .flush()
+                .await
+                .map_err(|error| McpError::Transport {
+                    transport: "stdio".into(),
+                    message: error.to_string(),
+                })
+        })
+        .await
+        .map_err(|_| McpError::Transport {
+            transport: "stdio".into(),
+            message: "notification write timeout".into(),
+        })??;
+        Ok(())
     }
 }
 
@@ -240,6 +273,19 @@ impl McpTransport {
         match self {
             Self::Stdio(transport) => transport.request(request).await,
             Self::Http(transport) => transport.request(request, method, tool_name).await,
+        }
+    }
+
+    pub(super) async fn notify(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+    ) -> Result<(), McpError> {
+        match self {
+            Self::Stdio(transport) => transport.notify(method, params).await,
+            Self::Http(_) => Err(McpError::Config(
+                "legacy MCP session fallback is only supported for stdio transport".into(),
+            )),
         }
     }
 }
