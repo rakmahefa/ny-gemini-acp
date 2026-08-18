@@ -1,11 +1,11 @@
 //! MCP tool infrastructure.
 //!
-//! The runtime targets MCP `2026-07-28`: requests are self-describing and
-//! stateless at the protocol layer. MCP remains behind the existing
-//! `ToolRegistry` surface so builtin and remote tools share one execution
-//! contract.
+//! The runtime prefers MCP `2026-07-28`: requests are self-describing and
+//! stateless at the protocol layer. Legacy MCP servers remain supported via a
+//! controlled fallback to the `2025-06-18` initialize handshake.
 
 const MCP_PROTOCOL_VERSION: &str = "2026-07-28";
+const LEGACY_MCP_PROTOCOL_VERSION: &str = "2025-06-18";
 const CLIENT_NAME: &str = "gemini-acp";
 const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
