@@ -12,16 +12,17 @@
 //! - invalid lifecycle inputs are rejected as `invalid_params`;
 //! - persisted tool_call/tool_result blocks are reconstructed into real ACP
 //!   tool cards during replay instead of disappearing from the conversation.
+//! - forwarded MCP servers are normalized and bound to the session before the
+//!   lifecycle response is emitted.
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
-use tracing::warn;
 
 use gemini_acp_config::config::config_options::build_config_options;
 use gemini_acp_runtime::state::{Role, SessionMode as AcpSessionMode};
 use gemini_acp_runtime::tools::parse::parse_tool_calls;
 use gemini_acp_runtime::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
-use gemini_acp_runtime::AppState;
+use gemini_acp_runtime::{tools::McpError, AppState};
 
 fn is_valid_session_id(id: &str) -> bool {
     let Some(rest) = id.strip_prefix("sess_") else {
@@ -37,6 +38,15 @@ fn session_id_error(id: &SessionId) -> AcpError {
     AcpError::invalid_params().data(serde_json::json!({
         "session_id": id.to_string(),
         "error": "identifiant de session invalide"
+    }))
+}
+
+fn mcp_config_error(id: &SessionId, error: &McpError) -> AcpError {
+    tracing::error!(session = %id, %error, "forwarded MCP configuration rejected");
+    AcpError::invalid_params().data(serde_json::json!({
+        "session_id": id.to_string(),
+        "error": "MCP configuration rejected",
+        "mcp_error": error.to_string(),
     }))
 }
 
@@ -143,14 +153,7 @@ pub async fn handle_new(
     responder: Responder<NewSessionResponse>,
     state: &AppState,
 ) -> Result<(), AcpError> {
-    if !req.mcp_servers.is_empty() {
-        warn!(
-            count = req.mcp_servers.len(),
-            "session/new received mcp_servers, but Gemini ACP does not wire them yet"
-        );
-    }
-
-    match state
+    let session = match state
         .sessions
         .create(
             req.cwd.clone(),
@@ -159,19 +162,33 @@ pub async fn handle_new(
         )
         .await
     {
-        Ok(session) => responder.respond(
-            NewSessionResponse::new(session.id.clone())
-                .config_options(build_config_options(
-                    &session.model,
-                    session.think,
-                    session.tools_enabled,
-                ))
-                .modes(build_mode_state(session.mode)),
-        ),
+        Ok(session) => session,
         Err(error) => {
-            responder.respond_with_internal_error(format!("création de session: {error:#}"))
+            return responder.respond_with_internal_error(format!("création de session: {error:#}"));
         }
+    };
+
+    let session_id = SessionId::from(session.id.clone());
+    if let Err(error) = state
+        .sessions
+        .configure_mcp(&session.id, req.mcp_servers)
+        .await
+    {
+        if let Err(cleanup) = state.sessions.delete(&session.id).await {
+            tracing::error!(session = %session.id, %cleanup, "failed to clean up session after MCP setup failure");
+        }
+        return responder.respond_with_error(mcp_config_error(&session_id, &error));
     }
+
+    responder.respond(
+        NewSessionResponse::new(session_id)
+            .config_options(build_config_options(
+                &session.model,
+                session.think,
+                session.tools_enabled,
+            ))
+            .modes(build_mode_state(session.mode)),
+    )
 }
 
 pub async fn handle_list(
@@ -221,6 +238,15 @@ pub async fn handle_load(
         }
     };
 
+    if let Err(error) = state
+        .sessions
+        .configure_mcp(&req.session_id.0, req.mcp_servers)
+        .await
+    {
+        state.sessions.clear_mcp(&req.session_id.0).await;
+        return responder.respond_with_error(mcp_config_error(&req.session_id, &error));
+    }
+
     send_restored_title(cx, &req.session_id, session.title.as_deref())?;
 
     let mut replay_index = 0usize;
@@ -251,7 +277,7 @@ pub async fn handle_load(
                 }
 
                 let mut result_cursor = index + 1;
-                for (call_index, call) in calls.iter().enumerate() {
+                for call in &calls {
                     let result_text = if result_cursor < session.messages.len()
                         && session.messages[result_cursor].0 == Role::Tool
                     {
@@ -272,7 +298,6 @@ pub async fn handle_load(
                         &session.cwd,
                     )?;
                     replay_index += 1;
-                    let _ = call_index;
                 }
 
                 index = result_cursor.saturating_sub(1);
@@ -317,6 +342,15 @@ pub async fn handle_resume(
             ));
         }
     };
+
+    if let Err(error) = state
+        .sessions
+        .configure_mcp(&req.session_id.0, req.mcp_servers)
+        .await
+    {
+        state.sessions.clear_mcp(&req.session_id.0).await;
+        return responder.respond_with_error(mcp_config_error(&req.session_id, &error));
+    }
 
     send_restored_title(cx, &req.session_id, session.title.as_deref())?;
 
@@ -424,23 +458,37 @@ pub async fn handle_fork(
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
 
-    match state.sessions.fork(&req.session_id.0).await {
-        Ok(forked) => responder.respond(
-            ForkSessionResponse::new(SessionId::from(forked.id.clone()))
-                .config_options(build_config_options(
-                    &forked.model,
-                    forked.think,
-                    forked.tools_enabled,
-                ))
-                .modes(build_mode_state(forked.mode)),
-        ),
+    let forked = match state.sessions.fork(&req.session_id.0).await {
+        Ok(forked) => forked,
         Err(error) => {
-            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+            return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
                 "session_id": req.session_id.to_string(),
                 "error": format!("fork impossible: {error:#}")
-            })))
+            })));
         }
+    };
+
+    let forked_id = SessionId::from(forked.id.clone());
+    if let Err(error) = state
+        .sessions
+        .configure_mcp(&forked.id, req.mcp_servers)
+        .await
+    {
+        if let Err(cleanup) = state.sessions.delete(&forked.id).await {
+            tracing::error!(session = %forked.id, %cleanup, "failed to clean up fork after MCP setup failure");
+        }
+        return responder.respond_with_error(mcp_config_error(&forked_id, &error));
     }
+
+    responder.respond(
+        ForkSessionResponse::new(forked_id)
+            .config_options(build_config_options(
+                &forked.model,
+                forked.think,
+                forked.tools_enabled,
+            ))
+            .modes(build_mode_state(forked.mode)),
+    )
 }
 
 #[cfg(test)]
@@ -485,5 +533,13 @@ mod tests {
             "échec de la demande de permission ACP : transport"
         ));
         assert!(!is_rejected_or_cancelled_tool_result("File Updated"));
+    }
+
+    #[test]
+    fn mcp_error_is_stable_and_machine_readable() {
+        let id = SessionId::from("sess_0123456789abcdef0123456789abcdef");
+        let error = mcp_config_error(&id, &McpError::Config("missing command".into()));
+        assert_eq!(error.code, agent_client_protocol::ErrorCode::InvalidParams);
+        assert!(error.data.is_some());
     }
 }
