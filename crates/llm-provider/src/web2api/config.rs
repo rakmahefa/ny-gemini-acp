@@ -1,9 +1,10 @@
-//! Configuration de la face API (spec §5.1) : `config.json` (si présent,
-//! cherché dans `./config.json` et `~/.config/gemini-web2api/config.json`,
-//! comme `config.py`) puis env `GEMINI_WEB2API_*` (priorité supérieure).
+//! Configuration de la face API (spec §5.1).
 
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+
+use llm_provider::client::DEFAULT_BL;
+use llm_provider::core::models::DEFAULT_MODEL;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -31,10 +32,10 @@ impl Default for Config {
             retry_attempts: 3,
             retry_delay_sec: 2,
             request_timeout_sec: 180,
-            gemini_bl: crate::client::DEFAULT_BL.to_string(),
+            gemini_bl: DEFAULT_BL.to_string(),
             auth_user: None,
             xsrf_token: None,
-            default_model: crate::core::models::DEFAULT_MODEL.to_string(),
+            default_model: DEFAULT_MODEL.to_string(),
             log_requests: true,
             cookie_file: None,
             proxy: None,
