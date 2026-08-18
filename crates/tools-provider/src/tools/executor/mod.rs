@@ -47,6 +47,7 @@ pub struct ToolExecutor<'a> {
     pub(crate) cwd: &'a Path,
     pub(crate) additional_dirs: &'a [PathBuf],
     pub(crate) get_mode: &'a (dyn Fn() -> ToolPermissionMode + Send + Sync),
+    pub(crate) cancellation: watch::Receiver<bool>,
 }
 
 impl<'a> ToolExecutor<'a> {
@@ -57,8 +58,13 @@ impl<'a> ToolExecutor<'a> {
         cwd: &'a Path,
         additional_dirs: &'a [PathBuf],
         get_mode: &'a (dyn Fn() -> ToolPermissionMode + Send + Sync),
+        cancellation: watch::Receiver<bool>,
     ) -> Self {
-        Self { cx, session_id, registry, cwd, additional_dirs, get_mode }
+        bind_session_cancellation(
+            session_id.0.as_ref(),
+            ToolCancellation::from_receiver(cancellation.clone()),
+        );
+        Self { cx, session_id, registry, cwd, additional_dirs, get_mode, cancellation }
     }
 
     pub async fn execute_with_call_id_and_events(&self, call_id: ToolCallId, tool_name: &str, arguments: &Value, semantic: &mut dyn ToolEventSink) -> ToolResult {
@@ -87,7 +93,7 @@ impl<'a> ToolExecutor<'a> {
         let mut lifecycle = ToolLifecycle::new();
         self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
         if let Some(e) = semantic.as_mut() { e.tool_call_requested(call_id.to_string(), tool_name.to_owned()); }
-        if session_cancelled(self.session_id.0.as_ref()) {
+        if *self.cancellation.borrow() {
             return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: "outil annulé avant son démarrage".into(), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic);
         }
         let mode = (self.get_mode)();
@@ -106,7 +112,7 @@ impl<'a> ToolExecutor<'a> {
             let request = PermissionRequest::from_tool_call(tool_name, arguments, self.cwd);
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
-                    if session_cancelled(self.session_id.0.as_ref()) {
+                    if *self.cancellation.borrow() {
                         return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: format!("{} ({}) annulé avant le démarrage de l'exécution.", request.kind.label(), request.summary), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic);
                     }
                     lifecycle.transition(ToolLifecycleState::Executing).expect("permission -> executing must be legal");
@@ -118,7 +124,7 @@ impl<'a> ToolExecutor<'a> {
                 PermissionResult::TransportError(error) => return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: format!("Échec de la demande de permission ACP : {error}"), is_ok: false, cancelled: false, reason: Some("permission-error"), terminal_id: None, terminal_meta: None }, semantic),
             }
         } else {
-            if session_cancelled(self.session_id.0.as_ref()) {
+            if *self.cancellation.borrow() {
                 return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: "outil annulé avant son exécution".into(), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic);
             }
             lifecycle.transition(ToolLifecycleState::Executing).expect("pending -> executing must be legal");
@@ -135,21 +141,26 @@ impl<'a> ToolExecutor<'a> {
     }
 
     async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
-        let (cancellation, _) = watch::channel(false);
         let request = ToolCallRequest {
             session_id: self.session_id.0.to_string(),
             name: tool_name.to_owned(),
             arguments: arguments.clone(),
             cwd: self.cwd.to_path_buf(),
             additional_dirs: self.additional_dirs.to_vec(),
-            cancellation,
+            cancellation: self.cancellation.clone(),
         };
         let result = tokio::select! {
             value = self.registry.call(request) => value,
             _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true }
         };
-        let cancelled = session_cancelled(self.session_id.0.as_ref());
+        let cancelled = session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
         ExecutionOutcome { result: ToolResult { content: result.content, is_ok: result.is_ok, executed: result.executed }, terminal_id: None, terminal_meta: None, cancelled }
+    }
+}
+
+impl Drop for ToolExecutor<'_> {
+    fn drop(&mut self) {
+        unbind_session_cancellation(self.session_id.0.as_ref());
     }
 }
 
