@@ -10,7 +10,7 @@ use crate::tools::lifecycle::{
     unbind_session_cancellation,
 };
 use crate::tools::ToolCancellation;
-use gemini_acp_encaps::Cancellation;
+use crate::Cancellation;
 
 mod busy;
 mod persistence;
