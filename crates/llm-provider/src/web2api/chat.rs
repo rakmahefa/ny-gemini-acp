@@ -1,6 +1,4 @@
-//! `POST /v1/chat/completions` (OpenAI) — port de `GeminiHandler.handle_chat`
-//! (vérité = vendor) : conversion des messages, streaming SSE réel sans tools,
-//! chunk unique + `[DONE]` avec tools (le parse complet est nécessaire).
+//! `POST /v1/chat/completions` (OpenAI) — port de `GeminiHandler.handle_chat`.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -11,6 +9,8 @@ use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
+use llm_provider::client::StreamItem;
+use llm_provider::core::models::Resolved;
 
 pub async fn handler(State(state): State<AppState>, req: axum::extract::Request) -> Response {
     let body = match json_body(req).await {
@@ -77,10 +77,10 @@ struct Ctx {
 async fn stream_deltas(
     state: &AppState,
     prompt: &str,
-    resolved: &crate::core::models::Resolved,
+    resolved: &Resolved,
     ctx: &Ctx,
 ) -> Response {
-    let mut rx: mpsc::Receiver<crate::client::StreamItem> = match state
+    let mut rx: mpsc::Receiver<StreamItem> = match state
         .client
         .stream(prompt, &resolved.name, Some(resolved.think), &[])
         .await
@@ -134,7 +134,7 @@ async fn stream_deltas(
 async fn complete(
     state: &AppState,
     prompt: &str,
-    resolved: &crate::core::models::Resolved,
+    resolved: &Resolved,
     ctx: &Ctx,
     stream: bool,
     tools: Option<&[Value]>,
