@@ -65,7 +65,7 @@ impl ToolProvider for DefaultToolProvider {
     async fn configure_session(
         &self,
         session_id: &str,
-        cwd: PathBuf,
+        _cwd: PathBuf,
         servers: Vec<McpServerConfig>,
     ) -> Result<(), String> {
         if servers.is_empty() {
