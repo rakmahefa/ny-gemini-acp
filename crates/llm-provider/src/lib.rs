@@ -1,11 +1,4 @@
 //! Gemini LLM provider implementation and its configuration primitives.
-//!
-//! Temporary source-compatibility aliases are intentionally local to this crate:
-//! the implementation was renamed from `gemini_acp_config`, but its internal
-//! modules still use that historical path. No workspace crate depends on this
-//! alias.
-extern crate self as gemini_acp_config;
-extern crate agent_runtime as gemini_acp_runtime;
 
 pub mod client;
 pub mod config;
@@ -13,6 +6,14 @@ pub mod core;
 pub mod provider;
 pub mod settings;
 pub mod web2api;
+
+/// Temporary local compatibility namespace for the historical implementation
+/// paths used by the web2api port. It is internal to this crate and does not
+/// recreate the removed workspace crate.
+pub(crate) mod gemini_acp_config {
+    pub(crate) use crate::client;
+    pub(crate) use crate::core;
+}
 
 pub use client::{Client as GeminiClient, Config as ClientConfig};
 pub use config::AgentConfig;
