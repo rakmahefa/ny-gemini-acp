@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
 use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
-use super::{AcpSemanticEvent, EventBus, EventContext, ToolEventContext};
+use super::{SemanticEvent, EventBus, EventContext, ToolEventContext};
 
 /// Owns and validates the semantic sequence for one turn.
 /// Invalid transitions never reach the event bus and do not consume a sequence number.
@@ -16,7 +16,7 @@ pub struct TurnEventEmitter {
     /// Maps upstream tool-call identities to semantic identities scoped to this turn.
     ///
     /// Gemini may legally restart a stream-local call counter on every internal round.
-    /// ACP semantic events must not reuse a terminalized identity. A queue also keeps
+    /// Semantic events must not reuse a terminalized identity. A queue also keeps
     /// the mapping deterministic if an upstream producer ever emits duplicate IDs before
     /// their lifecycle is fully terminalized.
     tool_bindings: HashMap<String, VecDeque<String>>,
@@ -70,7 +70,7 @@ impl TurnEventEmitter {
         false
     }
 
-    fn publish(&self, event: AcpSemanticEvent) {
+    fn publish(&self, event: SemanticEvent) {
         if let Err(error) = self.bus.publish(event) {
             tracing::debug!(?error, "semantic event has no active subscribers");
         }
@@ -116,7 +116,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::TurnStarted { context });
+        self.publish(SemanticEvent::TurnStarted { context });
         true
     }
 
@@ -125,7 +125,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::AssistantStarted { context });
+        self.publish(SemanticEvent::AssistantStarted { context });
         true
     }
 
@@ -134,7 +134,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::AssistantDelta {
+        self.publish(SemanticEvent::AssistantDelta {
             context,
             delta: delta.into(),
         });
@@ -146,7 +146,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::AssistantCompleted { context });
+        self.publish(SemanticEvent::AssistantCompleted { context });
         true
     }
 
@@ -155,7 +155,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::ThinkingStarted { context });
+        self.publish(SemanticEvent::ThinkingStarted { context });
         true
     }
 
@@ -164,7 +164,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::ThinkingDelta {
+        self.publish(SemanticEvent::ThinkingDelta {
             context,
             delta: delta.into(),
         });
@@ -176,7 +176,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::ThinkingCompleted { context });
+        self.publish(SemanticEvent::ThinkingCompleted { context });
         true
     }
 
@@ -199,7 +199,7 @@ impl TurnEventEmitter {
         }
 
         let context = self.tool_context(semantic_id);
-        self.publish(AcpSemanticEvent::ToolCallRequested {
+        self.publish(SemanticEvent::ToolCallRequested {
             context,
             name: name.into(),
         });
@@ -218,7 +218,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
-        self.publish(AcpSemanticEvent::PermissionRequested { context });
+        self.publish(SemanticEvent::PermissionRequested { context });
         true
     }
 
@@ -234,7 +234,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
-        self.publish(AcpSemanticEvent::ToolExecutionStarted { context });
+        self.publish(SemanticEvent::ToolExecutionStarted { context });
         true
     }
 
@@ -254,7 +254,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
-        self.publish(AcpSemanticEvent::ToolResultReceived {
+        self.publish(SemanticEvent::ToolResultReceived {
             context,
             result: result.into(),
         });
@@ -267,7 +267,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::TurnCancelled { context });
+        self.publish(SemanticEvent::TurnCancelled { context });
         self.tool_bindings.clear();
         true
     }
@@ -277,7 +277,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::TurnFailed { context });
+        self.publish(SemanticEvent::TurnFailed { context });
         self.tool_bindings.clear();
         true
     }
@@ -287,7 +287,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.context();
-        self.publish(AcpSemanticEvent::TurnCompleted { context });
+        self.publish(SemanticEvent::TurnCompleted { context });
         self.tool_bindings.clear();
         true
     }
@@ -297,31 +297,31 @@ impl TurnEventEmitter {
 mod tests {
     use super::*;
 
-    fn seq(event: &AcpSemanticEvent) -> u64 {
+    fn seq(event: &SemanticEvent) -> u64 {
         match event {
-            AcpSemanticEvent::TurnStarted { context }
-            | AcpSemanticEvent::AssistantStarted { context }
-            | AcpSemanticEvent::AssistantCompleted { context }
-            | AcpSemanticEvent::ThinkingStarted { context }
-            | AcpSemanticEvent::ThinkingCompleted { context }
-            | AcpSemanticEvent::TurnCancelled { context }
-            | AcpSemanticEvent::TurnFailed { context }
-            | AcpSemanticEvent::TurnCompleted { context } => context.sequence,
-            AcpSemanticEvent::AssistantDelta { context, .. }
-            | AcpSemanticEvent::ThinkingDelta { context, .. } => context.sequence,
-            AcpSemanticEvent::ToolCallRequested { context, .. }
-            | AcpSemanticEvent::PermissionRequested { context }
-            | AcpSemanticEvent::ToolExecutionStarted { context }
-            | AcpSemanticEvent::ToolResultReceived { context, .. } => context.event.sequence,
+            SemanticEvent::TurnStarted { context }
+            | SemanticEvent::AssistantStarted { context }
+            | SemanticEvent::AssistantCompleted { context }
+            | SemanticEvent::ThinkingStarted { context }
+            | SemanticEvent::ThinkingCompleted { context }
+            | SemanticEvent::TurnCancelled { context }
+            | SemanticEvent::TurnFailed { context }
+            | SemanticEvent::TurnCompleted { context } => context.sequence,
+            SemanticEvent::AssistantDelta { context, .. }
+            | SemanticEvent::ThinkingDelta { context, .. } => context.sequence,
+            SemanticEvent::ToolCallRequested { context, .. }
+            | SemanticEvent::PermissionRequested { context }
+            | SemanticEvent::ToolExecutionStarted { context }
+            | SemanticEvent::ToolResultReceived { context, .. } => context.event.sequence,
         }
     }
 
-    fn tool_id(event: &AcpSemanticEvent) -> &str {
+    fn tool_id(event: &SemanticEvent) -> &str {
         match event {
-            AcpSemanticEvent::ToolCallRequested { context, .. }
-            | AcpSemanticEvent::PermissionRequested { context }
-            | AcpSemanticEvent::ToolExecutionStarted { context }
-            | AcpSemanticEvent::ToolResultReceived { context, .. } => &context.tool_call_id,
+            SemanticEvent::ToolCallRequested { context, .. }
+            | SemanticEvent::PermissionRequested { context }
+            | SemanticEvent::ToolExecutionStarted { context }
+            | SemanticEvent::ToolResultReceived { context, .. } => &context.tool_call_id,
             _ => panic!("expected tool event"),
         }
     }
@@ -385,7 +385,7 @@ mod tests {
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         assert!(matches!(
             events.last(),
-            Some(AcpSemanticEvent::TurnCancelled { .. })
+            Some(SemanticEvent::TurnCancelled { .. })
         ));
         assert_eq!(events.len(), 5);
     }
@@ -404,7 +404,7 @@ mod tests {
         assert_eq!(events.iter().map(seq).collect::<Vec<_>>(), vec![0, 1, 2]);
         assert!(matches!(
             events.last(),
-            Some(AcpSemanticEvent::TurnFailed { .. })
+            Some(SemanticEvent::TurnFailed { .. })
         ));
         assert_eq!(e.sequence(), 3);
     }
@@ -434,10 +434,10 @@ mod tests {
             .filter(|event| {
                 matches!(
                     event,
-                    AcpSemanticEvent::ToolCallRequested { .. }
-                        | AcpSemanticEvent::PermissionRequested { .. }
-                        | AcpSemanticEvent::ToolExecutionStarted { .. }
-                        | AcpSemanticEvent::ToolResultReceived { .. }
+                    SemanticEvent::ToolCallRequested { .. }
+                        | SemanticEvent::PermissionRequested { .. }
+                        | SemanticEvent::ToolExecutionStarted { .. }
+                        | SemanticEvent::ToolResultReceived { .. }
                 )
             })
             .collect();
@@ -483,10 +483,10 @@ mod tests {
         let ids: Vec<_> = events
             .iter()
             .filter_map(|event| match event {
-                AcpSemanticEvent::ToolCallRequested { context, .. }
-                | AcpSemanticEvent::PermissionRequested { context }
-                | AcpSemanticEvent::ToolExecutionStarted { context }
-                | AcpSemanticEvent::ToolResultReceived { context, .. } => {
+                SemanticEvent::ToolCallRequested { context, .. }
+                | SemanticEvent::PermissionRequested { context }
+                | SemanticEvent::ToolExecutionStarted { context }
+                | SemanticEvent::ToolResultReceived { context, .. } => {
                     Some(context.tool_call_id.as_str())
                 }
                 _ => None,
