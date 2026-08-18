@@ -20,8 +20,9 @@ pub async fn handle(
     caps.session_capabilities = caps
         .session_capabilities
         .fork(SessionForkCapabilities::new());
-    // H4: advertise the MCP transports the runtime can forward to Gemini.
-    caps = caps.mcp_capabilities(McpCapabilities::new().http(true).sse(true));
+    // H4: HTTP is wired end-to-end; legacy SSE requires a different MCP
+    // endpoint handshake and is therefore rejected during session setup.
+    caps = caps.mcp_capabilities(McpCapabilities::new().http(true).sse(false));
 
     responder.respond(
         InitializeResponse::new(req.protocol_version)
