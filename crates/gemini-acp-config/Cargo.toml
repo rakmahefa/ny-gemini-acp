@@ -1,5 +1,5 @@
 [package]
-name = "gemini-acp-config"
+name = "llm-provider"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Fondation ACP : config, core Gemini, client web, proxy web2api"
+description = "LLM provider contract and Gemini provider implementation"
 
 [[bin]]
 name = "gemini-web2api"
@@ -32,7 +32,6 @@ tracing-subscriber = { workspace = true }
 tokio-stream = { version = "0.1", features = ["sync"] }
 agent-client-protocol = { workspace = true, features = ["unstable_session_fork"] }
 notify = { workspace = true }
-gemini-acp-llm = { path = "../gemini-acp-llm" }
 async-trait = { workspace = true }
 
 [dev-dependencies]
