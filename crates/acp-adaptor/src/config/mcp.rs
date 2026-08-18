@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer};
-use agent_runtime::{McpServerConfig, McpTransportKind};
+use agent_runtime::{IntoMcpServerConfig, McpServerConfig, McpTransportKind};
 
 pub fn normalize_servers(
     servers: Vec<McpServer>,
@@ -9,7 +9,7 @@ pub fn normalize_servers(
 ) -> Result<Vec<McpServerConfig>, String> {
     servers
         .into_iter()
-        .map(|server| normalize_server(server, session_cwd))
+        .map(|server| server.into_runtime_mcp(session_cwd))
         .collect()
 }
 
@@ -71,6 +71,12 @@ fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<McpServerCo
     }
 }
 
+impl IntoMcpServerConfig for McpServer {
+    fn into_runtime_mcp(self, session_cwd: &Path) -> Result<McpServerConfig, String> {
+        normalize_server(self, session_cwd)
+    }
+}
+
 fn header_map(headers: Vec<HttpHeader>) -> Result<HashMap<String, String>, String> {
     let mut result = HashMap::with_capacity(headers.len());
     for header in headers {
@@ -88,7 +94,9 @@ fn header_map(headers: Vec<HttpHeader>) -> Result<HashMap<String, String>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{EnvVariable, HttpHeader, McpServerHttp, McpServerSse, McpServerStdio};
+    use agent_client_protocol::schema::v1::{
+        EnvVariable, HttpHeader, McpServerHttp, McpServerSse, McpServerStdio,
+    };
 
     #[test]
     fn normalizes_stdio_configuration() {
