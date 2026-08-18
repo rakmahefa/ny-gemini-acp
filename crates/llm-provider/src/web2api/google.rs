@@ -1,21 +1,16 @@
-//! Endpoints Google natifs (Gemini CLI) — port de `_handle_google_generate` /
-//! `_handle_google_models_list` :
-//!
-//! - `GET  /v1beta/models` → liste au format Google AI.
-//! - `POST /v1beta/models/{model}:generateContent` → réponse complète.
-//! - `POST /v1beta/models/{model}:streamGenerateContent` → deltas SSE puis
-//!   chunk final avec `finishReason`/`usageMetadata` (spec §5.2).
+//! Endpoints Google natifs (Gemini CLI).
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{json, Value};
+use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
 
 pub async fn models_list() -> Response {
-    let models: Vec<Value> = gemini_acp_config::core::models::MODEL_KEYS
+    let models: Vec<Value> = crate::core::models::MODEL_KEYS
         .iter()
         .map(|name| {
             serde_json::json!({
@@ -38,12 +33,9 @@ pub async fn generate(
         Ok(b) => b,
         Err(e) => return e,
     };
-    // Le suffixe `:generateContent` / `:streamGenerateContent` arrive dans le
-    // segment `{model}` (axum ne matche pas `:` comme séparateur).
     let (model_name, stream) = if let Some(n) = model_path.strip_suffix(":streamGenerateContent") {
         (n.to_string(), true)
     } else if let Some(n) = model_path.strip_suffix(":streamGenerate") {
-        // Variante courte tolérée (spec §5.2).
         (n.to_string(), true)
     } else if let Some(n) = model_path.strip_suffix(":generateContent") {
         (n.to_string(), false)
@@ -64,8 +56,6 @@ pub async fn generate(
         }
     };
 
-    // Tools actifs ? (`toolConfig.functionCallingConfig.mode == NONE` désactive,
-    // comme le vendor) — conditionne la section tools et le parsing de sortie.
     let fc_mode = body
         .get("toolConfig")
         .and_then(|c| c.get("functionCallingConfig"))
@@ -82,12 +72,10 @@ pub async fn generate(
         );
     }
 
-    // Upload Scotty des images `inlineData` → refs (`inner[0][3]`). Échecs
-    // ignorés avec un warning, comme `_upload_images` du vendor.
     let mut refs = Vec::new();
     for (b64, mime) in images {
         match state.client.upload_image(&b64, &mime).await {
-            Ok(r) => refs.push(r),
+            Ok(reference) => refs.push(reference),
             Err(e) => tracing::warn!("upload d'image ignoré: {e:#}"),
         }
     }
@@ -96,12 +84,12 @@ pub async fn generate(
         return stream_chunks(&state, &prompt, &refs, &resolved, &model_name).await;
     }
 
-    let text = match state
+    let text: String = match state
         .client
         .complete(&prompt, &resolved.name, Some(resolved.think), &refs)
         .await
     {
-        Ok(t) => t,
+        Ok(text) => text,
         Err(e) => {
             return json_response(
                 StatusCode::BAD_GATEWAY,
@@ -112,16 +100,14 @@ pub async fn generate(
     json_ok(response_object(&text, &model_name, prompt.len(), has_tools))
 }
 
-/// Streaming par deltas : chaque delta → `candidates[0].content.parts[0].text`,
-/// puis chunk final `finishReason: "STOP"` + `usageMetadata` (spec §5.2).
 async fn stream_chunks(
     state: &AppState,
     prompt: &str,
     refs: &[String],
-    resolved: &gemini_acp_config::core::models::Resolved,
+    resolved: &crate::core::models::Resolved,
     model_name: &str,
 ) -> Response {
-    let mut rx = match state
+    let mut rx: mpsc::Receiver<crate::client::StreamItem> = match state
         .client
         .stream(prompt, &resolved.name, Some(resolved.think), refs)
         .await
@@ -140,19 +126,23 @@ async fn stream_chunks(
     tokio::spawn(async move {
         let mut emitted = String::new();
         while let Some(item) = rx.recv().await {
-            let Ok(delta) = item else {
-                tracing::warn!("stream generateContent interrompu: {:?}", item.err());
-                break;
-            };
-            emitted.push_str(&delta);
-            let chunk = serde_json::json!({
-                "candidates": [{
-                    "content": {"parts": [{"text": delta}], "role": "model"},
-                    "index": 0,
-                }]
-            });
-            if tx.send(Ok(sse_event(chunk))).await.is_err() {
-                return; // client parti → drop du receiver amont (abort HTTP)
+            match item {
+                Ok(delta) => {
+                    emitted.push_str(delta.as_str());
+                    let chunk = serde_json::json!({
+                        "candidates": [{
+                            "content": {"parts": [{"text": delta}], "role": "model"},
+                            "index": 0,
+                        }]
+                    });
+                    if tx.send(Ok(sse_event(chunk))).await.is_err() {
+                        return;
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!("stream generateContent interrompu: {error}");
+                    break;
+                }
             }
         }
         let final_chunk = serde_json::json!({
@@ -173,8 +163,6 @@ async fn stream_chunks(
     sse(out).into_response()
 }
 
-/// Objet réponse complet `generateContent` (port du vendor). Avec tools, la
-/// sortie est découpée en parts `text` + `functionCall` (`parse_google_function_calls`).
 fn response_object(text: &str, model_name: &str, prompt_len: usize, has_tools: bool) -> Value {
     let parts: Vec<Value> = if has_tools {
         let (clean, calls) = convert::parse_google_function_calls(text);
