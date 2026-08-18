@@ -1,5 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use agent_client_protocol::schema::v1::McpServer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -78,6 +79,90 @@ impl McpServerConfig {
             }
         }
     }
+
+    /// Convert the stable ACP v1 MCP session-setup types into the runtime's
+    /// normalized transport configuration.
+    pub fn from_acp(server: McpServer) -> Result<Self, McpError> {
+        match server {
+            McpServer::Stdio(server) => {
+                let command = server
+                    .command
+                    .to_str()
+                    .ok_or_else(|| {
+                        McpError::Config(format!(
+                            "stdio MCP server '{}' command path is not valid UTF-8",
+                            server.name
+                        ))
+                    })?
+                    .to_owned();
+                let mut env = HashMap::new();
+                for variable in server.env {
+                    if env.insert(variable.name.clone(), variable.value).is_some() {
+                        return Err(McpError::Config(format!(
+                            "stdio MCP server '{}' contains duplicate environment variable '{}'",
+                            server.name, variable.name
+                        )));
+                    }
+                }
+                Ok(Self {
+                    name: server.name,
+                    transport: McpTransportKind::Stdio,
+                    command: Some(command),
+                    args: server.args,
+                    env,
+                    cwd: None,
+                    url: None,
+                    headers: HashMap::new(),
+                })
+            }
+            McpServer::Http(server) => Ok(Self {
+                name: server.name,
+                transport: McpTransportKind::Http,
+                command: None,
+                args: Vec::new(),
+                env: HashMap::new(),
+                cwd: None,
+                url: Some(server.url),
+                headers: header_map(server.headers)?,
+            }),
+            McpServer::Sse(server) => Ok(Self {
+                name: server.name,
+                transport: McpTransportKind::Http,
+                command: None,
+                args: Vec::new(),
+                env: HashMap::new(),
+                cwd: None,
+                url: Some(server.url),
+                headers: header_map(server.headers)?,
+            }),
+            _ => Err(McpError::Config(
+                "unsupported MCP transport received from ACP client".into(),
+            )),
+        }
+    }
+
+    /// Convert all forwarded ACP servers while preserving request order.
+    pub fn from_acp_servers(servers: Vec<McpServer>) -> Result<Vec<Self>, McpError> {
+        servers.into_iter().map(Self::from_acp).collect()
+    }
+}
+
+fn header_map(
+    headers: Vec<agent_client_protocol::schema::v1::HttpHeader>,
+) -> Result<HashMap<String, String>, McpError> {
+    let mut result = HashMap::with_capacity(headers.len());
+    for header in headers {
+        if result
+            .insert(header.name.clone(), header.value)
+            .is_some()
+        {
+            return Err(McpError::Config(format!(
+                "duplicate MCP HTTP header '{}'",
+                header.name
+            )));
+        }
+    }
+    Ok(result)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +200,7 @@ impl McpToolDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_client_protocol::schema::v1::{EnvVariable, HttpHeader, McpServerHttp, McpServerStdio};
 
     #[test]
     fn tool_descriptor_requires_object_input_schema() {
@@ -125,5 +211,49 @@ mod tests {
             output_schema: None,
         };
         assert!(descriptor.validate().is_err());
+    }
+
+    #[test]
+    fn forwards_stdio_configuration_without_losing_arguments_or_environment() {
+        let server = McpServer::Stdio(
+            McpServerStdio::new("project-tools", "/usr/local/bin/project-mcp")
+                .args(vec!["--cwd".into(), "/tmp/project".into()])
+                .env(vec![EnvVariable::new("TOKEN", "secret")]),
+        );
+        let config = McpServerConfig::from_acp(server).unwrap();
+        assert_eq!(config.name, "project-tools");
+        assert_eq!(config.transport, McpTransportKind::Stdio);
+        assert_eq!(config.command.as_deref(), Some("/usr/local/bin/project-mcp"));
+        assert_eq!(config.args, ["--cwd", "/tmp/project"]);
+        assert_eq!(config.env.get("TOKEN").map(String::as_str), Some("secret"));
+    }
+
+    #[test]
+    fn forwards_http_headers_and_transport() {
+        let server = McpServer::Http(
+            McpServerHttp::new("remote", "https://mcp.example.test")
+                .headers(vec![HttpHeader::new("authorization", "Bearer test")]),
+        );
+        let config = McpServerConfig::from_acp(server).unwrap();
+        assert_eq!(config.transport, McpTransportKind::Http);
+        assert_eq!(config.url.as_deref(), Some("https://mcp.example.test"));
+        assert_eq!(
+            config.headers.get("authorization").map(String::as_str),
+            Some("Bearer test")
+        );
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn sse_is_forwarded_through_the_shared_http_transport() {
+        let server = McpServer::Sse(
+            agent_client_protocol::schema::v1::McpServerSse::new(
+                "legacy-events",
+                "https://mcp.example.test/events",
+            ),
+        );
+        let config = McpServerConfig::from_acp(server).unwrap();
+        assert_eq!(config.transport, McpTransportKind::Http);
+        assert_eq!(config.url.as_deref(), Some("https://mcp.example.test/events"));
     }
 }
