@@ -10,12 +10,10 @@ rust-version.workspace = true
 description = "Provider-neutral agent runtime: state, sessions, events and execution"
 
 [lib]
-name = "gemini_acp_runtime"
+name = "agent_runtime"
 path = "src/lib.rs"
 
 [dependencies]
-gemini_acp_config = { package = "llm-provider", path = "../llm-provider" }
-gemini_acp_tools = { package = "tools-provider", path = "../tools-provider" }
 agent-client-protocol = { workspace = true, features = ["unstable_elicitation"] }
 regex = { workspace = true }
 reqwest = { workspace = true }
