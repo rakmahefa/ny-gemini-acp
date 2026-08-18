@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::Path};
 
 use agent_client_protocol::schema::v1::{HttpHeader, McpServer};
-use agent_runtime::{IntoMcpServerConfig, McpServerConfig, McpTransportKind};
+use agent_runtime::{McpServerConfig, McpTransportKind};
 
 pub fn normalize_servers(
     servers: Vec<McpServer>,
@@ -9,7 +9,7 @@ pub fn normalize_servers(
 ) -> Result<Vec<McpServerConfig>, String> {
     servers
         .into_iter()
-        .map(|server| server.into_runtime_mcp(session_cwd))
+        .map(|server| normalize_server(server, session_cwd))
         .collect()
 }
 
@@ -68,12 +68,6 @@ fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<McpServerCo
             server.name
         )),
         _ => Err("unsupported MCP transport received from ACP client".into()),
-    }
-}
-
-impl IntoMcpServerConfig for McpServer {
-    fn into_runtime_mcp(self, session_cwd: &Path) -> Result<McpServerConfig, String> {
-        normalize_server(self, session_cwd)
     }
 }
 
