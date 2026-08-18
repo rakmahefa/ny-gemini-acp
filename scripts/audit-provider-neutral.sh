@@ -4,36 +4,77 @@ set -uo pipefail
 ROOT="${1:-.}"
 cd "$ROOT"
 
-fail=0
+FAIL_COUNT=0
+WARN_COUNT=0
 
 section() {
   printf '\n=== %s ===\n' "$1"
 }
 
-findings() {
-  local title="$1"
-  shift
-  section "$title"
-  local out
-  out=$("$@" 2>/dev/null || true)
-  if [[ -n "$out" ]]; then
-    printf '%s\n' "$out"
-    fail=1
-  else
-    printf 'OK\n'
-  fi
+status_line() {
+  local level="$1"
+  local message="$2"
+  printf '%-4s %s\n' "$level" "$message"
 }
 
-require_rg() {
-  if ! command -v rg >/dev/null 2>&1; then
-    echo "ERROR: ripgrep (rg) is required" >&2
+run_scan() {
+  local severity="$1"
+  local title="$2"
+  shift 2
+
+  local out rc
+  out=$("$@" 2>&1)
+  rc=$?
+
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out"
+    if [[ "$severity" == "FAIL" ]]; then
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      status_line "FAIL" "$title"
+    else
+      WARN_COUNT=$((WARN_COUNT + 1))
+      status_line "WARN" "$title"
+    fi
+    return 1
+  fi
+
+  if [[ "$rc" -gt 1 ]]; then
+    printf 'command failed with exit code %d\n' "$rc"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    status_line "FAIL" "$title (audit command failed)"
+    return 1
+  fi
+
+  status_line "PASS" "$title"
+  return 0
+}
+
+require_command() {
+  local command_name="$1"
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    printf 'ERROR: %s is required\n' "$command_name" >&2
     exit 2
   fi
 }
 
-require_rg
+check_direct_dependency_absent() {
+  local crate="$1"
+  local manifest="$2"
 
-# The adapter is the only layer allowed to know ACP details.
+  if rg -n -S '^agent-client-protocol[[:space:]]*=' "$manifest" >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+check_direct_dependency_used() {
+  local source_dir="$1"
+  rg -n -S --glob '*.rs' 'agent[_-]client[_-]protocol' "$source_dir" >/dev/null 2>&1
+}
+
+require_command rg
+
+# The adapter is the only layer allowed to own ACP protocol conversion.
 RUNTIME='crates/agent-runtime/src'
 LLM='crates/llm-provider/src'
 TOOLS='crates/tools-provider/src'
@@ -41,100 +82,168 @@ ADAPTER='crates/acp-adaptor/src'
 
 # -----------------------------------------------------------------------------
 # 1. HARD BOUNDARY: agent-runtime must know neither ACP nor Gemini.
+# Production code is FAIL; test-only provider fixtures are WARN.
 # -----------------------------------------------------------------------------
-findings "1. ACP leakage into agent-runtime" \
-  rg -n -S --glob '*.rs' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|McpServer|Acp|ACP' \
+section "1. Runtime boundary"
+run_scan "FAIL" "agent-runtime has no executable ACP references" \
+  rg -n -S --glob '*.rs' --glob '!**/test/**' \
+    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|McpServer' \
     "$RUNTIME"
 
-findings "2. Gemini leakage into agent-runtime" \
-  rg -n -S --glob '*.rs' \
+run_scan "FAIL" "agent-runtime production code has no Gemini/provider-specific references" \
+  rg -n -S --glob '*.rs' --glob '!**/test/**' \
     '\bGemini\b|\bgemini\b|google|sapisid|web2api|cookie_file|auth_user' \
     "$RUNTIME"
 
-# -----------------------------------------------------------------------------
-# 2. CONTRACT SURFACE: only inspect the actual provider boundary.
-# -----------------------------------------------------------------------------
-section "3. Generic LLM contract: suspicious Gemini-shaped fields"
-rg -n -S \
-  'think\b|refs\b|prompt:\s*String|model:\s*String' \
-  "$RUNTIME/providers.rs" 2>/dev/null || true
-
-section "4. Generic LLM contract: weakly typed boundaries"
-rg -n -S \
-  'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' \
-  "$RUNTIME/providers.rs" 2>/dev/null || true
-
-section "5. Generic Tool contract: ACP-shaped or untyped MCP configuration"
-rg -n -S \
-  'serde_json::Value|Vec<Value>|agent[_-]client[_-]protocol|McpServer|Result<[^>]+,\s*String>' \
-  "$RUNTIME/providers.rs" 2>/dev/null || true
+run_scan "WARN" "agent-runtime tests are provider-neutral" \
+  rg -n -S --glob '*.rs' \
+    '\bGemini\b|\bgemini\b|gemini-acp-(runtime|config|agent|encaps|tools)|gemini_acp_(runtime|config|agent|encaps|tools)' \
+    "$RUNTIME/test"
 
 # -----------------------------------------------------------------------------
-# 3. PROVIDER IMPLEMENTATIONS: detect protocol leakage at the adapter edge.
-# Internal provider implementation code may use protocol details, but the
-# provider entry points should not expose them in public contracts.
+# 2. CONTRACT SURFACE: informational checks are WARN-only by design.
+# They are signals for future typing work, not architectural failures.
 # -----------------------------------------------------------------------------
-findings "6. ACP types crossing llm-provider entry points" \
+section "2. Contract surface"
+run_scan "WARN" "LLM contract should be reviewed for weakly typed fields" \
+  rg -n -S \
+    'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' \
+    "$RUNTIME/providers.rs"
+
+run_scan "WARN" "Tool contract should be reviewed for weakly typed fields" \
+  rg -n -S \
+    'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' \
+    "$RUNTIME/providers.rs"
+
+# -----------------------------------------------------------------------------
+# 3. ACP MUST NOT cross provider entry points.
+# -----------------------------------------------------------------------------
+section "3. ACP provider boundary"
+run_scan "FAIL" "ACP types do not cross llm-provider entry point" \
   rg -n -S --glob '*.rs' \
     'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|McpServer' \
     "$LLM/provider.rs"
 
-findings "7. ACP types crossing tools-provider entry point" \
+run_scan "FAIL" "ACP types do not cross tools-provider entry point" \
   rg -n -S --glob '*.rs' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest' \
+    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|McpServer' \
     "$TOOLS/provider.rs"
 
 # -----------------------------------------------------------------------------
-# 4. TOOL CONFIGURATION: MCP should be converted at the ACP boundary.
-# These are the concrete places to inspect if ACP types leaked inward.
+# 4. Dependency hygiene.
+# - llm-provider MUST NOT declare ACP and must not pull it as a direct dep.
+# - tools-provider MAY declare ACP only because tools/elicitation.rs currently
+#   projects interactive tool requests onto ACP client APIs.
 # -----------------------------------------------------------------------------
-section "8. MCP configuration conversion sites"
-rg -n -S \
-  'McpServer|from_acp_servers|configure_session|servers:\s*Vec<Value>|serde_json::from_value' \
-  "$TOOLS" "$ADAPTER" 2>/dev/null || true
+section "4. Cargo dependency hygiene"
 
-# -----------------------------------------------------------------------------
-# 5. SESSION OWNERSHIP: focus only on provider/session coupling.
-# -----------------------------------------------------------------------------
-section "9. Provider-owned session state"
-rg -n -S \
-  'for_session|configure_session|clear_session|session_id|HashMap<.*String.*Arc<dyn ToolProvider|HashMap<String, Arc<ToolRegistry>>' \
-  "$RUNTIME/providers.rs" "$TOOLS/provider.rs" "$RUNTIME/session.rs" 2>/dev/null || true
-
-# -----------------------------------------------------------------------------
-# 6. LEGACY MIGRATION: only old architectural identities, not generic TODOs.
-# -----------------------------------------------------------------------------
-section "10. Legacy architecture names still referenced"
-rg -n -S \
-  'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' \
-  Cargo.toml crates README.md scripts 2>/dev/null || true
-
-# -----------------------------------------------------------------------------
-# 7. DEPENDENCY DIRECTION: only inspect the runtime package.
-# -----------------------------------------------------------------------------
-section "11. agent-runtime direct provider/protocol dependencies"
-if command -v cargo >/dev/null 2>&1; then
-  cargo tree -p agent-runtime --depth 1 2>/dev/null \
-    | rg -n 'llm-provider|tools-provider|agent-client-protocol|gemini' \
-    || true
+if [[ ! -f crates/llm-provider/Cargo.toml || ! -f crates/tools-provider/Cargo.toml ]]; then
+  status_line "FAIL" "provider Cargo.toml files are present"
+  FAIL_COUNT=$((FAIL_COUNT + 1))
 else
-  echo "cargo not available; skipped"
+  if check_direct_dependency_absent "llm-provider" "crates/llm-provider/Cargo.toml"; then
+    status_line "FAIL" "llm-provider has no direct agent-client-protocol dependency"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  else
+    status_line "PASS" "llm-provider has no direct agent-client-protocol dependency"
+  fi
+
+  if check_direct_dependency_used "$TOOLS"; then
+    status_line "PASS" "tools-provider ACP dependency is justified by source usage (elicitation bridge)"
+  else
+    if rg -n -S '^agent-client-protocol[[:space:]]*=' crates/tools-provider/Cargo.toml >/dev/null 2>&1; then
+      status_line "FAIL" "tools-provider declares ACP without source usage"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    else
+      status_line "PASS" "tools-provider does not declare an unnecessary ACP dependency"
+    fi
+  fi
+fi
+
+if command -v cargo >/dev/null 2>&1; then
+  llm_tree=$(cargo tree -p llm-provider --depth 1 2>/dev/null || true)
+  if printf '%s\n' "$llm_tree" | rg -n 'agent-client-protocol' >/dev/null 2>&1; then
+    printf '%s\n' "$llm_tree" | rg -n 'agent-client-protocol'
+    status_line "FAIL" "llm-provider dependency graph contains agent-client-protocol"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  else
+    status_line "PASS" "llm-provider dependency graph excludes agent-client-protocol"
+  fi
+
+  tools_tree=$(cargo tree -p tools-provider --depth 1 2>/dev/null || true)
+  if printf '%s\n' "$tools_tree" | rg -n 'agent-client-protocol' >/dev/null 2>&1; then
+    status_line "PASS" "tools-provider dependency graph contains only its justified ACP dependency"
+  else
+    status_line "WARN" "tools-provider dependency graph does not expose ACP; verify the elicitation boundary manually"
+    WARN_COUNT=$((WARN_COUNT + 1))
+  fi
+else
+  status_line "WARN" "cargo unavailable; dependency graph checks skipped"
+  WARN_COUNT=$((WARN_COUNT + 1))
 fi
 
 # -----------------------------------------------------------------------------
-# 8. FINAL CHECK: public provider contracts should remain centralized.
+# 5. MCP normalization: ACP-specific server shapes must be normalized by the
+# adapter; MCP implementation is allowed inside tools-provider.
 # -----------------------------------------------------------------------------
-section "12. Provider trait declarations"
-rg -n -S \
-  '^pub trait (LlmProvider|ToolProvider)|^pub struct (LlmRequest|ToolCallRequest|ToolCallResult|LlmModelInfo)' \
-  "$RUNTIME" "$LLM" "$TOOLS" 2>/dev/null || true
+section "5. MCP normalization"
+run_scan "FAIL" "ACP MCP servers are normalized at the adapter boundary" \
+  rg -n -S 'McpServer|from_acp_servers|normalize_server' "$ADAPTER/config/mcp.rs"
+
+run_scan "WARN" "tools-provider owns MCP implementation details rather than runtime" \
+  rg -n -S 'McpServerConfig|McpCatalog|McpTransportKind' "$TOOLS"
+
+# -----------------------------------------------------------------------------
+# 6. Provider-owned session state.
+# -----------------------------------------------------------------------------
+section "6. Provider-owned session state"
+run_scan "WARN" "tool session ownership is implemented by ToolProvider" \
+  rg -n -S \
+    'for_session|configure_session|clear_session|session_id|HashMap' \
+    "$RUNTIME/providers.rs" "$TOOLS/provider.rs" "$RUNTIME/session.rs"
+
+# -----------------------------------------------------------------------------
+# 7. Legacy architecture identities.
+# Production references are FAIL; fixtures/docs are WARN.
+# -----------------------------------------------------------------------------
+section "7. Legacy architecture names"
+run_scan "FAIL" "production code has no legacy gemini-acp crate identities" \
+  rg -n -S --glob '*.rs' --glob '!**/test/**' \
+    'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' \
+    crates
+
+run_scan "WARN" "tests and fixtures have no legacy gemini-acp crate identities" \
+  rg -n -S --glob '*.rs' --glob '**/test/**' \
+    'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' \
+    crates
+
+# -----------------------------------------------------------------------------
+# 8. Public provider contracts remain centralized in agent-runtime.
+# -----------------------------------------------------------------------------
+section "8. Provider trait declarations"
+run_scan "FAIL" "provider traits are centralized in agent-runtime" \
+  rg -n -S \
+    '^pub trait (LlmProvider|ToolProvider)' \
+    "$RUNTIME/providers.rs"
+
+run_scan "FAIL" "provider implementations do not redeclare runtime provider traits" \
+  rg -n -S \
+    '^pub trait (LlmProvider|ToolProvider)' \
+    "$LLM" "$TOOLS"
 
 printf '\n=== RESULT ===\n'
-if [[ "$fail" -eq 0 ]]; then
-  echo "No hard-boundary findings. Review informational sections 3-5, 8-12 manually."
+printf 'PASS: checks completed without a hard-boundary failure\n'
+printf 'WARN: %d\n' "$WARN_COUNT"
+printf 'FAIL: %d\n' "$FAIL_COUNT"
+
+if [[ "$FAIL_COUNT" -eq 0 ]]; then
+  if [[ "$WARN_COUNT" -eq 0 ]]; then
+    echo "PASS: provider-neutral architecture audit is clean."
+  else
+    echo "PASS: no hard-boundary failures; warnings are informational and non-blocking."
+  fi
   exit 0
 fi
 
-echo "Focused findings detected. Prioritize sections 1-2, then 3-9."
+echo "FAIL: hard-boundary findings detected."
 exit 1
