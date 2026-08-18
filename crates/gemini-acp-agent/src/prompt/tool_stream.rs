@@ -201,7 +201,8 @@ impl ToolStreamDetector {
                 self.follow_up = None;
                 return;
             }
-            if parse_complete_follow_ups(tag).len() > 0 {
+            let parsed = parse_complete_follow_ups(tag);
+            if !parsed.is_empty() {
                 let candidate = std::mem::take(tag);
                 calls.extend(parse_complete_follow_ups(&candidate));
             }
