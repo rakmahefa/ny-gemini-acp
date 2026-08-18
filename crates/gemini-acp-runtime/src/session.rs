@@ -45,13 +45,14 @@ impl SessionManager {
         &self,
         id: &str,
         servers: Vec<McpServer>,
+        session_cwd: &Path,
     ) -> std::result::Result<(), crate::tools::McpError> {
         if servers.is_empty() {
             self.clear_mcp(id).await;
             return Ok(());
         }
 
-        let configs = McpServerConfig::from_acp_servers(servers)?;
+        let configs = McpServerConfig::from_acp_servers(servers, session_cwd)?;
         let catalog = McpCatalog::from_configs(configs).await?;
         let mut registry = ToolRegistry::builtin();
         registry.register_mcp(Arc::new(catalog));
@@ -61,7 +62,7 @@ impl SessionManager {
             .write()
             .await
             .insert(id.to_owned(), registry);
-        tracing::info!(session = %id, "forwarded MCP configuration activated for session");
+        tracing::info!(session = %id, cwd = %session_cwd.display(), "forwarded MCP configuration activated for session");
         Ok(())
     }
     pub fn validate_id(id: &str) -> Result<()> {
