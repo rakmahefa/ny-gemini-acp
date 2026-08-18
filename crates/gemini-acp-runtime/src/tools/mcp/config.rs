@@ -80,12 +80,6 @@ impl McpServerConfig {
         }
     }
 
-    /// Convert ACP session-setup data into the runtime's normalized transport configuration.
-    ///
-    /// Stdio is mandatory in ACP and supported directly. HTTP is supported by
-    /// the runtime's request/response transport. Legacy SSE is rejected here
-    /// because the runtime does not implement its separate endpoint handshake;
-    /// advertising it would overstate H4 support.
     pub fn from_acp(server: McpServer, session_cwd: &Path) -> Result<Self, McpError> {
         match server {
             McpServer::Stdio(server) => {
@@ -154,7 +148,6 @@ impl McpServerConfig {
         }
     }
 
-    /// Convert all forwarded ACP servers while preserving request order.
     pub fn from_acp_servers(
         servers: Vec<McpServer>,
         session_cwd: &Path,
@@ -169,11 +162,11 @@ impl McpServerConfig {
 fn header_map(
     headers: Vec<agent_client_protocol::schema::v1::HttpHeader>,
 ) -> Result<HashMap<String, String>, McpError> {
-    let mut result = HashMap::with_capacity(headers.len());
+    let mut result: HashMap<String, String> = HashMap::with_capacity(headers.len());
     for header in headers {
         if result
             .keys()
-            .any(|name| name.eq_ignore_ascii_case(&header.name))
+            .any(|name: &&String| name.eq_ignore_ascii_case(&header.name))
         {
             return Err(McpError::Config(format!(
                 "duplicate MCP HTTP header '{}'",
