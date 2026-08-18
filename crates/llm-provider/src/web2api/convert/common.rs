@@ -4,10 +4,10 @@ use serde_json::{json, Value};
 use tracing::warn;
 
 /// Résout un nom de modèle strictement contre les modèles du provider Gemini.
-pub fn resolve_model_strict(requested: &str, default: &str) -> Result<llm_provider::core::models::Resolved, String> {
+pub fn resolve_model_strict(requested: &str, default: &str) -> Result<crate::core::models::Resolved, String> {
     let base = requested.split("@think=").next().unwrap_or(requested);
-    if !llm_provider::core::models::MODEL_KEYS.contains(&base) { return Err(format!("Unknown model: {requested}")); }
-    llm_provider::core::models::resolve(requested, default)
+    if !crate::core::models::MODEL_KEYS.contains(&base) { return Err(format!("Unknown model: {requested}")); }
+    crate::core::models::resolve(requested, default)
 }
 
 pub fn usage(prompt: &str, completion: &str) -> Value { let pt=prompt.chars().count()/4; let ct=completion.chars().count()/4; json!({"prompt_tokens":pt,"completion_tokens":ct,"total_tokens":pt+ct}) }
