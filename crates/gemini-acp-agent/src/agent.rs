@@ -1,10 +1,8 @@
 //! Construction de l'agent ACP et câblage du transport stdio.
 //!
-//! Refactor R1 — inspiré de `glm-acp-agent/src/protocol/agent.ts` :
-//! - Fork session et set mode.
-//! - Prompt serialization via `gemini-acp-encaps::TurnManager`.
-//! - Interactive tool context isolé par tour.
-//! - AppState fourni par `gemini-acp-runtime`.
+//! L'agent ne connaît plus le client Gemini : le bootstrap injecte un
+//! `LlmProvider` dans `AppState`, et cette couche ne fait que projeter ACP vers
+//! le runtime.
 
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
@@ -16,7 +14,7 @@ use crate::prompt;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_store = state.store.clone();
-    let h_client = state.client.clone();
+    let h_provider = state.provider.clone();
     let h_tools = state.tools.clone();
     let h_sessions = state.sessions.clone();
     let h_events = state.events.clone();
@@ -47,14 +45,14 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
         .on_receive_request(
             {
                 let store = h_store.clone();
-                let client = h_client.clone();
+                let provider = h_provider.clone();
                 let fallback_tools = h_tools.clone();
                 let sessions = h_sessions.clone();
                 let events = h_events.clone();
                 let turn_manager = turn_manager.clone();
                 async move |req: PromptRequest, responder, cx| {
                     let store = store.clone();
-                    let client = client.clone();
+                    let provider = provider.clone();
                     let fallback_tools = fallback_tools.clone();
                     let sessions = sessions.clone();
                     let events = events.clone();
@@ -86,7 +84,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     let result = prompt::run_turn(
                                         store,
                                         tools,
-                                        client,
+                                        provider,
                                         req,
                                         responder,
                                         turn_cx,
