@@ -52,9 +52,9 @@ impl SessionMode {
 
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Default => "Ask the ACP client before edits and commands.",
+            Self::Default => "Ask for permission before edits and commands.",
             Self::AcceptEdits => {
-                "Edits run without prompting. High-risk commands still require ACP permission."
+                "Edits run without prompting. High-risk commands still require explicit permission."
             }
             Self::BypassPermissions => "Edits and commands run without prompting.",
         }
