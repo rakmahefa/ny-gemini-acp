@@ -3,7 +3,6 @@ use agent_client_protocol::{Client, ConnectionTo};
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::state::{Role, Session};
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, ToolExecutor};
-use gemini_acp_runtime::tools::parse::ParsedToolCall;
 use gemini_acp_runtime::tools::ToolRegistry;
 use tokio::sync::watch;
 
@@ -291,7 +290,8 @@ pub(crate) async fn run(
                     return Err(RoundError::Stop(StopReason::Cancelled));
                 }
                 Err(error) => {
-                    let is_invalid_input = matches!(error, FollowUpError::InvalidInput(_));
+                    let is_invalid_input =
+                        matches!(&error, FollowUpError::InvalidInput(_));
                     tracing::warn!(
                         session = %ctx.session_id,
                         action_id = %call.id,
