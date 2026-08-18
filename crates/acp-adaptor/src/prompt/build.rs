@@ -1,6 +1,6 @@
-use gemini_acp_runtime::persona;
-use gemini_acp_runtime::state::{Role, Session};
-use gemini_acp_runtime::ToolProvider;
+use agent_runtime::persona;
+use agent_runtime::state::{Role, Session};
+use agent_runtime::ToolProvider;
 pub const MAX_MESSAGES: usize = 12;
 pub const MAX_PROMPT_CHARS: usize = 32_000;
 fn history_prefix(role: &Role) -> &'static str {
