@@ -18,12 +18,12 @@
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
+use crate::config::mcp::normalize_servers;
 use gemini_acp_runtime::config::config_options::build_config_options;
 use gemini_acp_runtime::state::{Role, SessionMode as AcpSessionMode};
 use gemini_acp_runtime::tools::parse::parse_tool_calls;
 use gemini_acp_runtime::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 use gemini_acp_runtime::AppState;
-use gemini_acp_tools::tools::McpError;
 
 fn is_valid_session_id(id: &str) -> bool {
     let Some(rest) = id.strip_prefix("sess_") else {
@@ -49,6 +49,16 @@ fn mcp_config_error(id: &SessionId, error: &str) -> AcpError {
         "error": "MCP configuration rejected",
         "mcp_error": error,
     }))
+}
+
+async fn configure_mcp(
+    state: &AppState,
+    session_id: &str,
+    servers: Vec<McpServer>,
+    session_cwd: &std::path::Path,
+) -> Result<(), String> {
+    let servers = normalize_servers(servers, session_cwd)?;
+    state.sessions.configure_mcp(session_id, servers).await
 }
 
 fn session_mode_id(mode: AcpSessionMode) -> SessionModeId {
@@ -171,10 +181,13 @@ pub async fn handle_new(
     };
 
     let session_id = SessionId::from(session.id.clone());
-    if let Err(error) = state
-        .sessions
-        .configure_mcp(&session.id, req.mcp_servers)
-        .await
+    if let Err(error) = configure_mcp(
+        state,
+        &session.id,
+        req.mcp_servers,
+        &session.cwd,
+    )
+    .await
     {
         if let Err(cleanup) = state.sessions.delete(&session.id).await {
             tracing::error!(session = %session.id, %cleanup, "failed to clean up session after MCP setup failure");
@@ -240,10 +253,13 @@ pub async fn handle_load(
         }
     };
 
-    if let Err(error) = state
-        .sessions
-        .configure_mcp(&req.session_id.0, req.mcp_servers)
-        .await
+    if let Err(error) = configure_mcp(
+        state,
+        &req.session_id.0,
+        req.mcp_servers,
+        &session.cwd,
+    )
+    .await
     {
         state.sessions.clear_mcp(&req.session_id.0).await;
         return responder.respond_with_error(mcp_config_error(&req.session_id, &error));
@@ -345,10 +361,13 @@ pub async fn handle_resume(
         }
     };
 
-    if let Err(error) = state
-        .sessions
-        .configure_mcp(&req.session_id.0, req.mcp_servers)
-        .await
+    if let Err(error) = configure_mcp(
+        state,
+        &req.session_id.0,
+        req.mcp_servers,
+        &session.cwd,
+    )
+    .await
     {
         state.sessions.clear_mcp(&req.session_id.0).await;
         return responder.respond_with_error(mcp_config_error(&req.session_id, &error));
