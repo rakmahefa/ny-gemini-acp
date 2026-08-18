@@ -8,8 +8,8 @@ use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
-use crate::client::StreamItem;
-use crate::core::models::{self, Resolved};
+use llm_provider::client::StreamItem;
+use llm_provider::core::models::{self, Resolved};
 
 pub async fn models_list() -> Response {
     let model_names: Vec<Value> = models::MODEL_KEYS.iter().map(|name| serde_json::json!({"name": format!("models/{name}"), "displayName": name, "description": name, "supportedGenerationMethods": ["generateContent", "streamGenerateContent"]})).collect();
