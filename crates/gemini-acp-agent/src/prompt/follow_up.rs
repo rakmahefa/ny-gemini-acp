@@ -13,21 +13,65 @@ use agent_client_protocol::schema::v1::{
 };
 use agent_client_protocol::{Client, ConnectionTo};
 use serde_json::json;
+use tokio::sync::watch;
 
 const FOLLOW_UP_MARKER: &str = "<FollowUp";
 const SELECT_ID: &str = "followup_select";
 const SKIP_ID: &str = "followup_skip";
+const MAX_LABEL_CHARS: usize = 160;
+const MAX_QUERY_CHARS: usize = 16 * 1024;
 
-/// Ask the host to present a real interactive FollowUp choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FollowUpOutcome {
+    Selected(String),
+    Rejected,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FollowUpError {
+    InvalidInput(&'static str),
+    Acp(String),
+    UnexpectedOutcome(String),
+}
+
+impl std::fmt::Display for FollowUpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidInput(message) => f.write_str(message),
+            Self::Acp(message) => write!(f, "ACP FollowUp action failed: {message}"),
+            Self::UnexpectedOutcome(message) => {
+                write!(f, "unexpected FollowUp permission outcome: {message}")
+            }
+        }
+    }
+}
+
+/// Ask the host to present one interactive FollowUp choice.
 ///
-/// `Some(query)` means the user selected the suggested next step.
-/// `None` means the user dismissed/rejected it.
+/// The action owns its own ACP `ToolCallId`, which is independent from both
+/// the Gemini stream-local tool ids and the semantic tool lifecycle. Waiting
+/// for the host is cancellation-aware and never reserves another outer turn.
 pub async fn request_action(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
+    source_id: &str,
     label: &str,
     query: &str,
-) -> Result<Option<String>, String> {
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<FollowUpOutcome, FollowUpError> {
+    let label = label.trim();
+    let query = query.trim();
+    if label.is_empty() || label.chars().count() > MAX_LABEL_CHARS {
+        return Err(FollowUpError::InvalidInput("FollowUp label is empty or too long"));
+    }
+    if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
+        return Err(FollowUpError::InvalidInput("FollowUp query is empty or too long"));
+    }
+    if *cancel.borrow() {
+        return Ok(FollowUpOutcome::Cancelled);
+    }
+
     let call_id = ToolCallId::from(format!("followup_{}", uuid::Uuid::new_v4().simple()));
     let body = format!(
         "**{}**\n\n{}\n\nChoisissez cette action pour envoyer la proposition au modèle.",
@@ -53,6 +97,7 @@ pub async fn request_action(
             "geminiAcp": {
                 "nonExecutionKind": "follow_up_action",
                 "ui": "choice",
+                "sourceId": source_id,
                 "label": label,
                 "query": query,
             }
@@ -74,6 +119,7 @@ pub async fn request_action(
                     "geminiAcp": {
                         "kind": "follow_up",
                         "action": "prompt",
+                        "sourceId": source_id,
                         "label": label,
                         "query": query,
                         "singleUse": true,
@@ -84,23 +130,30 @@ pub async fn request_action(
                 .unwrap(),
             );
 
-    let response = cx
-        .send_request(request)
-        .block_task()
-        .await
-        .map_err(|error| format!("ACP FollowUp action failed: {error}"))?;
+    let response = tokio::select! {
+        result = cx.send_request(request).block_task() => {
+            result.map_err(|error| FollowUpError::Acp(error.to_string()))?
+        }
+        _ = cancel.changed() => {
+            return Ok(FollowUpOutcome::Cancelled);
+        }
+    };
+
+    if *cancel.borrow() {
+        return Ok(FollowUpOutcome::Cancelled);
+    }
 
     match response.outcome {
         RequestPermissionOutcome::Selected(selected)
             if selected.option_id.0 == SELECT_ID.into() =>
         {
-            Ok(Some(query.to_owned()))
+            Ok(FollowUpOutcome::Selected(query.to_owned()))
         }
         RequestPermissionOutcome::Selected(selected) if selected.option_id.0 == SKIP_ID.into() => {
-            Ok(None)
+            Ok(FollowUpOutcome::Rejected)
         }
-        RequestPermissionOutcome::Cancelled => Ok(None),
-        other => Err(format!("unexpected FollowUp permission outcome: {other:?}")),
+        RequestPermissionOutcome::Cancelled => Ok(FollowUpOutcome::Rejected),
+        other => Err(FollowUpError::UnexpectedOutcome(format!("{other:?}"))),
     }
 }
 
@@ -205,11 +258,32 @@ mod tests {
     }
 
     #[test]
+    fn outcome_is_explicitly_not_a_tool_result() {
+        assert_eq!(
+            FollowUpOutcome::Selected("cargo test".into()),
+            FollowUpOutcome::Selected("cargo test".into())
+        );
+        assert_ne!(FollowUpOutcome::Rejected, FollowUpOutcome::Cancelled);
+    }
+
+    #[test]
     fn removes_complete_follow_up_from_stream() {
         let mut normalizer = StreamNormalizer::default();
         assert_eq!(
             normalizer.push("hello <FollowUp label=\"Run tests\" query=\"cargo test\" />"),
             "hello "
+        );
+        assert_eq!(normalizer.finish(), "");
+    }
+
+    #[test]
+    fn removes_multiple_follow_ups_from_stream() {
+        let mut normalizer = StreamNormalizer::default();
+        assert_eq!(
+            normalizer.push(
+                "before <FollowUp label=\"One\" query=\"one\" /><FollowUp label=\"Two\" query=\"two\" /> after"
+            ),
+            "before  after"
         );
         assert_eq!(normalizer.finish(), "");
     }
@@ -235,9 +309,25 @@ mod tests {
     }
 
     #[test]
-    fn incomplete_follow_up_is_discarded_on_finish() {
+    fn malformed_follow_up_is_hidden_at_finish() {
         let mut normalizer = StreamNormalizer::default();
         assert_eq!(normalizer.push("hello <FollowUp label=\"Run"), "hello ");
+        assert_eq!(normalizer.finish(), "");
+    }
+
+    #[test]
+    fn ordinary_less_than_text_is_preserved() {
+        let mut normalizer = StreamNormalizer::default();
+        let input = "2 < 3 and x <Follow";
+        assert_eq!(normalizer.push(input), "2 < 3 and x ");
+        assert_eq!(normalizer.finish(), "<Follow");
+    }
+
+    #[test]
+    fn partial_marker_suffix_is_preserved_until_boundary() {
+        let mut normalizer = StreamNormalizer::default();
+        assert_eq!(normalizer.push("hello <Follow"), "hello ");
+        assert_eq!(normalizer.push("Up label=\"Run\" query=\"test\" />"), "");
         assert_eq!(normalizer.finish(), "");
     }
 }

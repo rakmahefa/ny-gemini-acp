@@ -16,8 +16,9 @@ use gemini_acp_runtime::tools::parse::ParsedToolCall;
 use super::{
     error::actionable_stream_error,
     follow_up::StreamNormalizer,
+    interaction::InteractionGroup,
     notify::notify_text,
-    stream_contract::SemanticStreamContract,
+    stream_contract::{SemanticStreamContract, StreamDelta},
 };
 
 pub enum StreamOutcome {
@@ -30,6 +31,7 @@ pub struct StreamResult {
     pub outcome: StreamOutcome,
     pub assistant: String,
     pub tool_calls: Vec<ParsedToolCall>,
+    pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
 pub async fn consume<E: Display>(
@@ -46,6 +48,7 @@ pub async fn consume<E: Display>(
     let mut follow_up_stream = StreamNormalizer::default();
     let mut assistant = String::new();
     let mut tool_calls = Vec::new();
+    let mut interaction_groups = Vec::new();
     let mut thinking_active = false;
     semantic.assistant_started();
 
@@ -82,7 +85,7 @@ pub async fn consume<E: Display>(
                                     semantic.thinking_completed();
                                     thinking_active = false;
                                 }
-                                tool_calls.extend(handle_response_chunk(
+                                let delta = handle_response_chunk(
                                     &text,
                                     &mut stream_contract,
                                     &mut follow_up_stream,
@@ -91,7 +94,9 @@ pub async fn consume<E: Display>(
                                     cx,
                                     session_id,
                                     message_id,
-                                )?);
+                                )?;
+                                tool_calls.extend(delta.tool_calls);
+                                interaction_groups.extend(delta.interaction_groups);
                             }
                         }
                     },
@@ -129,7 +134,7 @@ pub async fn consume<E: Display>(
                     semantic.thinking_completed();
                     thinking_active = false;
                 }
-                tool_calls.extend(handle_response_chunk(
+                let delta = handle_response_chunk(
                     &text,
                     &mut stream_contract,
                     &mut follow_up_stream,
@@ -138,7 +143,9 @@ pub async fn consume<E: Display>(
                     cx,
                     session_id,
                     message_id,
-                )?);
+                )?;
+                tool_calls.extend(delta.tool_calls);
+                interaction_groups.extend(delta.interaction_groups);
             }
         }
     }
@@ -161,6 +168,7 @@ pub async fn consume<E: Display>(
         }
     };
     tool_calls.extend(final_delta.tool_calls);
+    interaction_groups.extend(final_delta.interaction_groups);
     if !final_delta.visible.is_empty() {
         assistant.push_str(&final_delta.visible);
         let safe_message = follow_up_stream.push(&final_delta.visible);
@@ -188,6 +196,7 @@ pub async fn consume<E: Display>(
         outcome,
         assistant,
         tool_calls,
+        interaction_groups,
     })
 }
 
@@ -200,7 +209,7 @@ fn handle_response_chunk(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     message_id: &MessageId,
-) -> Result<Vec<ParsedToolCall>, AcpError> {
+) -> Result<StreamDelta, AcpError> {
     let delta = match stream_contract.feed(text) {
         Ok(delta) => delta,
         Err(error) => {
@@ -211,7 +220,7 @@ fn handle_response_chunk(
                 message_id,
                 "Internal stream integrity failure: unsafe protocol output was rejected.",
             );
-            return Ok(Vec::new());
+            return Ok(StreamDelta::default());
         }
     };
 
@@ -223,5 +232,5 @@ fn handle_response_chunk(
             notify_text(cx, session_id, message_id, safe_message)?;
         }
     }
-    Ok(delta.tool_calls)
+    Ok(delta)
 }

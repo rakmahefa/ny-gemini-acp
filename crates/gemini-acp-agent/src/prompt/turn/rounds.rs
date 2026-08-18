@@ -3,13 +3,12 @@ use agent_client_protocol::{Client, ConnectionTo};
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::state::{Role, Session};
 use gemini_acp_runtime::tools::executor::{emit_error_chunk, ToolExecutor};
-use gemini_acp_runtime::tools::parse::ParsedToolCall;
 use gemini_acp_runtime::tools::ToolRegistry;
 use tokio::sync::watch;
 
 use super::context::{compact_messages, COMPACTION_THRESHOLD_CHARS, EMERGENCY_COMPACTION_CHARS};
 use crate::prompt::error::actionable_error_message;
-use crate::prompt::follow_up::{replace_components, request_action};
+use crate::prompt::follow_up::{replace_components, request_action, FollowUpError, FollowUpOutcome};
 use crate::prompt::stream;
 use gemini_acp_runtime::tools::lifecycle::clear_partial_output;
 
@@ -56,7 +55,7 @@ pub(crate) async fn run(
     let mut assistant_already_persisted = false;
     let mut overflow_retry_count = 0usize;
 
-    for round in 0..max_turns {
+    'rounds: for round in 0..max_turns {
         tool_round = round;
 
         if *ctx.cancel.borrow() {
@@ -130,7 +129,9 @@ pub(crate) async fn run(
             outcome,
             assistant,
             tool_calls,
+            interaction_groups,
         } = streamed;
+        let _ = interaction_groups;
 
         if matches!(outcome, stream::StreamOutcome::Cancelled) {
             ctx.semantic.turn_cancelled();
@@ -145,7 +146,42 @@ pub(crate) async fn run(
         }
 
         let clean_text = replace_components(&assistant);
-        if tool_calls.is_empty() || !ctx.session.tools_enabled || !ctx.registry.has_tools() {
+        let follow_up_calls = tool_calls.iter().filter(|call| call.is_action()).collect::<Vec<_>>();
+        let executable_calls = tool_calls
+            .iter()
+            .filter(|call| !call.is_action())
+            .collect::<Vec<_>>();
+
+        if tool_calls.is_empty() {
+            total_output = clean_text;
+            break;
+        }
+
+        if !executable_calls.is_empty() && !ctx.session.tools_enabled {
+            tracing::warn!(
+                session = %ctx.session_id,
+                action_count = follow_up_calls.len(),
+                tool_count = executable_calls.len(),
+                "executable tool calls were suppressed because tools are disabled"
+            );
+        }
+
+        if !executable_calls.is_empty() && !ctx.registry.has_tools() {
+            tracing::warn!(
+                session = %ctx.session_id,
+                action_count = follow_up_calls.len(),
+                tool_count = executable_calls.len(),
+                "executable tool calls were suppressed because the tool registry is empty"
+            );
+        }
+
+        let executable_calls = if ctx.session.tools_enabled && ctx.registry.has_tools() {
+            executable_calls
+        } else {
+            Vec::new()
+        };
+
+        if executable_calls.is_empty() && follow_up_calls.is_empty() {
             total_output = clean_text;
             break;
         }
@@ -153,95 +189,130 @@ pub(crate) async fn run(
         tracing::info!(
             session = %ctx.session_id,
             round,
-            tool_count = tool_calls.len(),
-            "tool calls détectés — exécution via ToolExecutor"
+            tool_count = executable_calls.len(),
+            follow_up_count = follow_up_calls.len(),
+            "stream protocol actions normalized"
         );
 
-        let tool_blocks = tool_calls
-            .iter()
-            .map(ParsedToolCall::to_history_block)
-            .collect::<Vec<_>>()
-            .join("\n");
-        let assistant_history = if clean_text.is_empty() {
-            tool_blocks
-        } else {
-            format!("{clean_text}\n{tool_blocks}")
-        };
-        ctx.session
-            .messages
-            .push((Role::Assistant, assistant_history));
-        clear_partial_output(ctx.sid);
+        if !executable_calls.is_empty() {
+            let tool_blocks = executable_calls
+                .iter()
+                .map(|call| call.to_history_block())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let assistant_history = if clean_text.is_empty() {
+                tool_blocks
+            } else {
+                format!("{clean_text}\n{tool_blocks}")
+            };
+            ctx.session
+                .messages
+                .push((Role::Assistant, assistant_history));
+            clear_partial_output(ctx.sid);
 
-        let session_mode = ctx.session.mode;
-        let mode_getter = || session_mode;
-        let executor = ToolExecutor::new(
-            ctx.cx,
-            ctx.session_id,
-            ctx.registry,
-            &ctx.session.cwd,
-            &ctx.session.additional_directories,
-            &mode_getter,
-        );
-        let mut follow_up_seen = false;
-        let mut follow_up_selected = None;
+            let session_mode = ctx.session.mode;
+            let mode_getter = || session_mode;
+            let executor = ToolExecutor::new(
+                ctx.cx,
+                ctx.session_id,
+                ctx.registry,
+                &ctx.session.cwd,
+                &ctx.session.additional_directories,
+                &mode_getter,
+            );
 
-        for call in &tool_calls {
-            if *ctx.cancel.borrow() {
-                ctx.semantic.turn_cancelled();
-                return Err(RoundError::Stop(StopReason::Cancelled));
+            for call in &executable_calls {
+                if *ctx.cancel.borrow() {
+                    ctx.semantic.turn_cancelled();
+                    return Err(RoundError::Stop(StopReason::Cancelled));
+                }
+
+                let result = executor
+                    .execute_with_call_id_and_events(
+                        call.id.clone().into(),
+                        &call.name,
+                        &call.arguments,
+                        ctx.semantic,
+                    )
+                    .await;
+                ctx.session.messages.push((
+                    Role::Tool,
+                    gemini_acp_runtime::tools::prompt::format_tool_result(
+                        &call.name,
+                        &result.content,
+                    ),
+                ));
+            }
+        }
+
+        for call in follow_up_calls {
+            let label = call
+                .arguments
+                .get("label")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let query = call
+                .arguments
+                .get("query")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .trim();
+
+            if label.is_empty() || query.is_empty() {
+                tracing::warn!(
+                    session = %ctx.session_id,
+                    action_id = %call.id,
+                    "malformed FollowUp action ignored"
+                );
+                continue;
             }
 
-            if call.name == "FollowUp" {
-                follow_up_seen = true;
-                let label = call
-                    .arguments
-                    .get("label")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("Suggested next step")
-                    .trim();
-                let query = call
-                    .arguments
-                    .get("query")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("")
-                    .trim();
-                if !label.is_empty() && !query.is_empty() {
-                    match request_action(ctx.cx, ctx.session_id, label, query).await {
-                        Ok(selected) => follow_up_selected = selected,
-                        Err(error) => emit_error_chunk(
+            match request_action(
+                ctx.cx,
+                ctx.session_id,
+                &call.id,
+                label,
+                query,
+                ctx.cancel,
+            )
+            .await
+            {
+                Ok(FollowUpOutcome::Selected(selected_query)) => {
+                    ctx.session.messages.push((Role::User, selected_query));
+                    total_output.clear();
+                    continue 'rounds;
+                }
+                Ok(FollowUpOutcome::Rejected) => {
+                    continue;
+                }
+                Ok(FollowUpOutcome::Cancelled) => {
+                    ctx.semantic.turn_cancelled();
+                    ctx.span.record("outcome", "cancelled_follow_up");
+                    return Err(RoundError::Stop(StopReason::Cancelled));
+                }
+                Err(error) => {
+                    let is_invalid_input = matches!(&error, FollowUpError::InvalidInput(_));
+                    tracing::warn!(
+                        session = %ctx.session_id,
+                        action_id = %call.id,
+                        invalid_input = is_invalid_input,
+                        error = %error,
+                        "FollowUp interaction rejected without corrupting the containing turn"
+                    );
+                    if !is_invalid_input {
+                        emit_error_chunk(
                             ctx.cx,
                             ctx.session_id,
                             ctx.message_id,
                             &format!("FollowUp interaction failed: {error}"),
-                        ),
+                        );
                     }
                 }
-                break;
             }
-
-            let result = executor
-                .execute_with_call_id_and_events(
-                    call.id.clone().into(),
-                    &call.name,
-                    &call.arguments,
-                    ctx.semantic,
-                )
-                .await;
-            ctx.session.messages.push((
-                Role::Tool,
-                gemini_acp_runtime::tools::prompt::format_tool_result(
-                    &call.name,
-                    &result.content,
-                ),
-            ));
         }
 
-        if follow_up_seen {
-            if let Some(query) = follow_up_selected {
-                ctx.session.messages.push((Role::User, query));
-                total_output.clear();
-                continue;
-            }
+        if executable_calls.is_empty() {
             total_output = clean_text;
             break;
         }
