@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
-use llm_provider::client::DEFAULT_BL;
-use llm_provider::core::models::DEFAULT_MODEL;
+use crate::client::DEFAULT_BL;
+use crate::core::models::DEFAULT_MODEL;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
