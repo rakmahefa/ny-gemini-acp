@@ -7,7 +7,7 @@
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Error as AcpError, Responder};
 
-use gemini_acp_config::config::config_options::build_agent_capabilities;
+use gemini_acp_runtime::config::config_options::build_agent_capabilities;
 use gemini_acp_runtime::AppState;
 
 pub async fn handle(
@@ -16,12 +16,9 @@ pub async fn handle(
     _state: &AppState,
 ) -> Result<(), AcpError> {
     let mut caps = build_agent_capabilities();
-    // R1: annoncer fork (inspiré de GlmAcpAgent qui a fork: {} dans capabilities).
     caps.session_capabilities = caps
         .session_capabilities
         .fork(SessionForkCapabilities::new());
-    // H4: HTTP is wired end-to-end; legacy SSE requires a different MCP
-    // endpoint handshake and is therefore rejected during session setup.
     caps = caps.mcp_capabilities(McpCapabilities::new().http(true).sse(false));
 
     responder.respond(
