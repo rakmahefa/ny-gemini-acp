@@ -1,9 +1,7 @@
 //! Session lifecycle and persistence.
-use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider};
+use crate::providers::{McpServerConfig, NullToolProvider, SharedToolProvider, ToolProvider};
 use crate::state::{Session, SessionMode, Store};
 use anyhow::{bail, Context, Result};
-use serde::Serialize;
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 pub const SESSION_ID_PREFIX: &str = "sess_";
@@ -29,20 +27,17 @@ impl SessionManager {
     pub async fn clear_mcp(&self, id: &str) {
         self.tools.clear_session(id).await
     }
-    pub async fn configure_mcp<S>(&self, id: &str, servers: Vec<S>) -> Result<(), String>
-    where
-        S: Serialize,
-    {
+    pub async fn configure_mcp(
+        &self,
+        id: &str,
+        servers: Vec<McpServerConfig>,
+    ) -> Result<(), String> {
         let session = self
             .store
             .get(id)
             .await
             .ok_or_else(|| format!("session introuvable: {id}"))?;
-        let values = servers
-            .into_iter()
-            .map(|server| serde_json::to_value(server).map_err(|e| e.to_string()))
-            .collect::<Result<Vec<Value>, _>>()?;
-        self.tools.configure_session(id, session.cwd, values).await
+        self.tools.configure_session(id, session.cwd, servers).await
     }
     pub fn validate_id(id: &str) -> Result<()> {
         let Some(rest) = id.strip_prefix(SESSION_ID_PREFIX) else {
