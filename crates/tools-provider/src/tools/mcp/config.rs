@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use agent_client_protocol::schema::v1::McpServer;
 use serde::{Deserialize, Serialize};
@@ -59,20 +62,15 @@ impl McpServerConfig {
             )));
         }
         match self.transport {
-            McpTransportKind::Stdio
-                if self.command.as_deref().unwrap_or("").trim().is_empty() =>
-            {
+            McpTransportKind::Stdio if self.command.as_deref().unwrap_or("").trim().is_empty() => {
                 Err(McpError::Config(format!(
                     "stdio server '{}' is missing command",
                     self.name
                 )))
             }
-            McpTransportKind::Http if self.url.as_deref().unwrap_or("").trim().is_empty() => {
-                Err(McpError::Config(format!(
-                    "http server '{}' is missing url",
-                    self.name
-                )))
-            }
+            McpTransportKind::Http if self.url.as_deref().unwrap_or("").trim().is_empty() => Err(
+                McpError::Config(format!("http server '{}' is missing url", self.name)),
+            ),
             _ => {
                 super::protocol::validate_custom_headers(&self.headers)?;
                 Ok(())
@@ -200,7 +198,9 @@ pub struct McpToolDescriptor {
 impl McpToolDescriptor {
     pub(super) fn validate(&self) -> Result<(), McpError> {
         if self.name.trim().is_empty() {
-            return Err(McpError::Protocol("MCP tool descriptor has empty name".into()));
+            return Err(McpError::Protocol(
+                "MCP tool descriptor has empty name".into(),
+            ));
         }
         if self.name.chars().any(char::is_control) {
             return Err(McpError::Protocol(format!(
@@ -250,7 +250,10 @@ mod tests {
         let config = McpServerConfig::from_acp(server, cwd()).unwrap();
         assert_eq!(config.name, "project-tools");
         assert_eq!(config.transport, McpTransportKind::Stdio);
-        assert_eq!(config.command.as_deref(), Some("/usr/local/bin/project-mcp"));
+        assert_eq!(
+            config.command.as_deref(),
+            Some("/usr/local/bin/project-mcp")
+        );
         assert_eq!(config.args, ["--cwd", "/tmp/project"]);
         assert_eq!(config.env.get("TOKEN").map(String::as_str), Some("secret"));
         assert_eq!(config.cwd.as_deref(), Some(cwd()));
@@ -280,10 +283,7 @@ mod tests {
 
     #[test]
     fn rejects_control_characters_in_stdio_command() {
-        let server = McpServer::Stdio(McpServerStdio::new(
-            "project-tools",
-            "project-mcp\u{0007}",
-        ));
+        let server = McpServer::Stdio(McpServerStdio::new("project-tools", "project-mcp\u{0007}"));
         let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
         assert!(error.to_string().contains("control characters"));
     }
@@ -333,6 +333,8 @@ mod tests {
                 .env(vec![EnvVariable::new("BAD=NAME", "secret")]),
         );
         let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
-        assert!(error.to_string().contains("invalid environment variable name"));
+        assert!(error
+            .to_string()
+            .contains("invalid environment variable name"));
     }
 }

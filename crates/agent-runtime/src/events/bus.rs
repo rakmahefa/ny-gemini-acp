@@ -21,7 +21,10 @@ impl EventBus {
         Self { sender }
     }
 
-    pub fn publish(&self, event: AcpSemanticEvent) -> Result<usize, broadcast::error::SendError<AcpSemanticEvent>> {
+    pub fn publish(
+        &self,
+        event: AcpSemanticEvent,
+    ) -> Result<usize, broadcast::error::SendError<AcpSemanticEvent>> {
         self.sender.send(event)
     }
 

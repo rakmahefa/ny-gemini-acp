@@ -112,9 +112,9 @@ impl McpServerClient {
                 message: error.message,
             });
         }
-        let result = response.result.ok_or_else(|| {
-            McpError::Protocol("MCP initialize response has no result".into())
-        })?;
+        let result = response
+            .result
+            .ok_or_else(|| McpError::Protocol("MCP initialize response has no result".into()))?;
         let protocol_version = result
             .get("protocolVersion")
             .and_then(Value::as_str)
@@ -126,7 +126,10 @@ impl McpServerClient {
         }
 
         self.transport
-            .notify("notifications/initialized", legacy_initialized_notification())
+            .notify(
+                "notifications/initialized",
+                legacy_initialized_notification(),
+            )
             .await?;
         self.legacy_mode = true;
         Ok(())
@@ -141,7 +144,10 @@ impl McpServerClient {
         }
         matches!(
             error,
-            McpError::Remote { code: -32601 | -32602, .. }
+            McpError::Remote {
+                code: -32601 | -32602,
+                ..
+            }
         )
     }
 
@@ -169,8 +175,9 @@ impl McpServerClient {
                 }
                 Err(error) => return Err(error),
             };
-            let page: ToolListPage = serde_json::from_value(result)
-                .map_err(|error| McpError::Protocol(format!("invalid tools/list result: {error}")))?;
+            let page: ToolListPage = serde_json::from_value(result).map_err(|error| {
+                McpError::Protocol(format!("invalid tools/list result: {error}"))
+            })?;
             for descriptor in page.tools {
                 descriptor.validate()?;
                 tools.push(descriptor);
@@ -178,7 +185,9 @@ impl McpServerClient {
             match page.next_cursor {
                 Some(next) if !next.is_empty() => {
                     if !seen_cursors.insert(next.clone()) {
-                        return Err(McpError::Protocol("tools/list pagination cursor repeated".into()));
+                        return Err(McpError::Protocol(
+                            "tools/list pagination cursor repeated".into(),
+                        ));
                     }
                     cursor = Some(next);
                 }
@@ -199,14 +208,22 @@ impl McpServerClient {
         Err(McpError::PaginationLimit)
     }
 
-    async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<ToolCallResult, McpError> {
+    async fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: Value,
+    ) -> Result<ToolCallResult, McpError> {
         if !arguments.is_object() {
             return Err(McpError::Protocol(format!(
                 "MCP tools/call arguments for '{name}' must be an object"
             )));
         }
         let result = self
-            .request("tools/call", Some(name), json!({"name": name, "arguments": arguments}))
+            .request(
+                "tools/call",
+                Some(name),
+                json!({"name": name, "arguments": arguments}),
+            )
             .await?;
         serde_json::from_value(result)
             .map_err(|error| McpError::Protocol(format!("invalid tools/call result: {error}")))
@@ -277,10 +294,16 @@ impl McpCatalog {
     pub async fn from_env() -> Result<Self, McpError> {
         let raw = match std::env::var("GEMINI_ACP_MCP_SERVERS") {
             Ok(value) if !value.trim().is_empty() => value,
-            _ => return Ok(Self { servers: Vec::new(), tools: Vec::new() }),
+            _ => {
+                return Ok(Self {
+                    servers: Vec::new(),
+                    tools: Vec::new(),
+                })
+            }
         };
-        let configs: Vec<McpServerConfig> = serde_json::from_str(&raw)
-            .map_err(|error| McpError::Config(format!("invalid GEMINI_ACP_MCP_SERVERS: {error}")))?;
+        let configs: Vec<McpServerConfig> = serde_json::from_str(&raw).map_err(|error| {
+            McpError::Config(format!("invalid GEMINI_ACP_MCP_SERVERS: {error}"))
+        })?;
         Self::from_configs(configs).await
     }
 
@@ -322,11 +345,9 @@ impl McpCatalog {
             }
         }
 
-        Err(last_error.unwrap_or_else(|| {
-            McpError::Transport {
-                transport: "mcp".into(),
-                message: format!("MCP server '{server_name}' discovery failed without an error"),
-            }
+        Err(last_error.unwrap_or_else(|| McpError::Transport {
+            transport: "mcp".into(),
+            message: format!("MCP server '{server_name}' discovery failed without an error"),
         }))
     }
 
@@ -429,7 +450,10 @@ impl McpCatalog {
         })?;
         let server = self.servers.get(binding.server_index)?;
         let mut server = server.lock().await;
-        match server.call_tool(&binding.descriptor.name, args.clone()).await {
+        match server
+            .call_tool(&binding.descriptor.name, args.clone())
+            .await
+        {
             Ok(result) => Some(result.into_tool_result()),
             Err(error) => Some(crate::tools::registry::ToolResult::Err(error.to_string())),
         }
@@ -437,7 +461,11 @@ impl McpCatalog {
 }
 
 fn qualified_name(server: &str, tool: &str) -> String {
-    format!("mcp__{}__{}", sanitize_component(server), sanitize_component(tool))
+    format!(
+        "mcp__{}__{}",
+        sanitize_component(server),
+        sanitize_component(tool)
+    )
 }
 
 fn sanitize_component(value: &str) -> String {
@@ -453,7 +481,11 @@ fn sanitize_component(value: &str) -> String {
             }
         }
     }
-    if output.is_empty() { "_".into() } else { output }
+    if output.is_empty() {
+        "_".into()
+    } else {
+        output
+    }
 }
 
 #[cfg(test)]
@@ -462,9 +494,18 @@ mod tests {
 
     #[test]
     fn qualified_names_are_collision_safe() {
-        assert_eq!(qualified_name("foo-bar", "read_file"), "mcp__foo-bar__read_file");
-        assert_eq!(qualified_name("foo/bar", "read file"), "mcp__foo_2fbar__read_20file");
-        assert_ne!(qualified_name("foo/bar", "read_file"), qualified_name("foo_bar", "read_file"));
+        assert_eq!(
+            qualified_name("foo-bar", "read_file"),
+            "mcp__foo-bar__read_file"
+        );
+        assert_eq!(
+            qualified_name("foo/bar", "read file"),
+            "mcp__foo_2fbar__read_20file"
+        );
+        assert_ne!(
+            qualified_name("foo/bar", "read_file"),
+            qualified_name("foo_bar", "read_file")
+        );
     }
 
     #[test]

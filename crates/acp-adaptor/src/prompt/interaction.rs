@@ -59,7 +59,10 @@ impl InteractionStreamParser {
                         out.push_str(&self.pending);
                     }
                     self.pending.clear();
-                    return InteractionParseResult { visible: out, groups };
+                    return InteractionParseResult {
+                        visible: out,
+                        groups,
+                    };
                 }
 
                 let emit_len = self.pending.len().saturating_sub(keep);
@@ -67,7 +70,10 @@ impl InteractionStreamParser {
                     out.push_str(&self.pending[..emit_len]);
                     self.pending = self.pending[emit_len..].to_owned();
                 }
-                return InteractionParseResult { visible: out, groups };
+                return InteractionParseResult {
+                    visible: out,
+                    groups,
+                };
             };
 
             if start > 0 {
@@ -76,9 +82,14 @@ impl InteractionStreamParser {
             }
 
             if self.pending.len() > MAX_GROUP_BYTES {
-                tracing::warn!("dropping oversized ElicitationsGroup envelope from assistant presentation");
+                tracing::warn!(
+                    "dropping oversized ElicitationsGroup envelope from assistant presentation"
+                );
                 self.pending.clear();
-                return InteractionParseResult { visible: out, groups };
+                return InteractionParseResult {
+                    visible: out,
+                    groups,
+                };
             }
 
             let Some(end_rel) = self.pending.find(GROUP_CLOSE) else {
@@ -86,7 +97,10 @@ impl InteractionStreamParser {
                     tracing::warn!("dropping incomplete ElicitationsGroup envelope at stream end");
                     self.pending.clear();
                 }
-                return InteractionParseResult { visible: out, groups };
+                return InteractionParseResult {
+                    visible: out,
+                    groups,
+                };
             };
 
             let end = end_rel + GROUP_CLOSE.len();
@@ -95,7 +109,9 @@ impl InteractionStreamParser {
 
             match parse_group(&group_text) {
                 Some(group) if !group.actions.is_empty() => groups.push(group),
-                Some(_) => tracing::warn!("dropping ElicitationsGroup without valid Elicitation actions"),
+                Some(_) => {
+                    tracing::warn!("dropping ElicitationsGroup without valid Elicitation actions")
+                }
                 None => tracing::warn!("dropping malformed ElicitationsGroup envelope"),
             }
         }
@@ -213,7 +229,8 @@ fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
             value
         } else {
             let value_start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'>' {
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'>'
+            {
                 index += 1;
             }
             input[value_start..index].to_owned()
@@ -294,7 +311,10 @@ mod tests {
         );
         assert_eq!(result.groups[0].actions.len(), 3);
         assert_eq!(result.groups[0].actions[0].label, "Lancer les tests");
-        assert_eq!(result.groups[0].actions[2].query, "Inspecter l'architecture MCP");
+        assert_eq!(
+            result.groups[0].actions[2].query,
+            "Inspecter l'architecture MCP"
+        );
     }
 
     #[test]
@@ -328,7 +348,10 @@ mod tests {
         let result = parse(&[
             "<ElicitationsGroup message=\"Choisir &amp; continuer\"><Elicitation label=\"A &quot;test&quot;\" query=\"x &amp; y\"/></ElicitationsGroup>",
         ]);
-        assert_eq!(result.groups[0].message.as_deref(), Some("Choisir & continuer"));
+        assert_eq!(
+            result.groups[0].message.as_deref(),
+            Some("Choisir & continuer")
+        );
         assert_eq!(result.groups[0].actions[0].label, "A \"test\"");
         assert_eq!(result.groups[0].actions[0].query, "x & y");
     }
@@ -342,7 +365,9 @@ mod tests {
 
     #[test]
     fn incomplete_group_is_not_leaked_at_eof() {
-        let result = parse(&["Avant <ElicitationsGroup message=\"Choix\"><Elicitation label=\"A\" query=\"Q\"/>"]);
+        let result = parse(&[
+            "Avant <ElicitationsGroup message=\"Choix\"><Elicitation label=\"A\" query=\"Q\"/>",
+        ]);
         assert_eq!(result.visible, "Avant ");
         assert!(result.groups.is_empty());
     }

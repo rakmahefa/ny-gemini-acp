@@ -139,12 +139,14 @@ impl SemanticStreamContract {
     }
 
     fn validate_visible(&self, visible: &str) -> Result<(), ContractViolation> {
-        if visible
-            .lines()
-            .map(str::trim_start)
-            .any(|line| PROTOCOL_MARKERS.iter().any(|marker| line.starts_with(marker)))
-        {
-            tracing::error!("semantic stream contract violation: protocol leaked to assistant output");
+        if visible.lines().map(str::trim_start).any(|line| {
+            PROTOCOL_MARKERS
+                .iter()
+                .any(|marker| line.starts_with(marker))
+        }) {
+            tracing::error!(
+                "semantic stream contract violation: protocol leaked to assistant output"
+            );
             return Err(ContractViolation::ProtocolLeakedToAssistant);
         }
         Ok(())
@@ -153,11 +155,11 @@ impl SemanticStreamContract {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::protocol::{
-        ASSISTANT_MARKER, FUNCTION_CALL_FENCE, TOOL_CALL_FENCE,
-        TOOL_CALL_SINGLE_QUOTE_FENCE, TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX, USER_MARKER,
+        ASSISTANT_MARKER, FUNCTION_CALL_FENCE, TOOL_CALL_FENCE, TOOL_CALL_SINGLE_QUOTE_FENCE,
+        TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX, USER_MARKER,
     };
+    use super::*;
 
     fn collect(chunks: &[&str]) -> StreamDelta {
         let mut contract = SemanticStreamContract::new();
@@ -227,7 +229,10 @@ mod tests {
             let actual = collect(&[left, right]);
             assert_eq!(actual.visible, reference.visible, "split at {split}");
             assert_eq!(actual.tool_calls, reference.tool_calls, "split at {split}");
-            assert_eq!(actual.interaction_groups, reference.interaction_groups, "split at {split}");
+            assert_eq!(
+                actual.interaction_groups, reference.interaction_groups,
+                "split at {split}"
+            );
         }
     }
 

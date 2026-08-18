@@ -37,9 +37,10 @@ pub(super) fn render_tool_content(content: &[Value], structured_content: Option<
             );
         }
     } else if let Some(structured_content) = structured_content {
-        rendered.push(serde_json::to_string(structured_content).unwrap_or_else(|_| {
-            "<unserializable MCP structuredContent>".into()
-        }));
+        rendered.push(
+            serde_json::to_string(structured_content)
+                .unwrap_or_else(|_| "<unserializable MCP structuredContent>".into()),
+        );
     }
     rendered.join("\n")
 }
@@ -61,6 +62,9 @@ mod tests {
     #[test]
     fn renders_structured_content_when_no_text_exists() {
         let structured = json!({"answer": 42});
-        assert_eq!(render_tool_content(&[], Some(&structured)), r#"{"answer":42}"#);
+        assert_eq!(
+            render_tool_content(&[], Some(&structured)),
+            r#"{"answer":42}"#
+        );
     }
 }

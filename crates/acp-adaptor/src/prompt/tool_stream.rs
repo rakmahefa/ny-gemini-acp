@@ -170,9 +170,7 @@ impl ToolStreamDetector {
         let text = line.trim_end_matches(['\r', '\n']);
         let trimmed = text.trim_start();
 
-        if trimmed.starts_with(TOOL_RESULT_PREFIX)
-            || trimmed.starts_with(TOOL_RESULT_ENVELOPE)
-        {
+        if trimmed.starts_with(TOOL_RESULT_PREFIX) || trimmed.starts_with(TOOL_RESULT_ENVELOPE) {
             self.mode = Mode::IgnoreToolResult;
             self.at_stream_start = false;
             return;
@@ -361,9 +359,7 @@ mod tests {
 
     #[test]
     fn detects_function_call_incrementally() {
-        let calls = collect(&[
-            "```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```",
-        ]);
+        let calls = collect(&["```function_call\n{\"name\":\"shell_exec\",\"args\":{}}\n```"]);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "shell_exec");
     }
@@ -425,9 +421,7 @@ mod tests {
 
     #[test]
     fn detects_bare_json_tool_call_at_stream_prefix() {
-        let calls = collect(&[
-            "{\"name\":\"shell_exec\",\"arguments\":{\"command\":\"pwd\"}}\n",
-        ]);
+        let calls = collect(&["{\"name\":\"shell_exec\",\"arguments\":{\"command\":\"pwd\"}}\n"]);
         assert_eq!(calls.len(), 1);
     }
 

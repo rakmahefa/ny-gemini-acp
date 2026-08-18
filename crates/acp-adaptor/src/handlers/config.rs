@@ -43,7 +43,10 @@ pub async fn handle(
                         match v.0.as_ref().to_ascii_lowercase().as_str() {
                             "true" | "1" | "on" | "yes" => s.tools_enabled = true,
                             "false" | "0" | "off" | "no" => s.tools_enabled = false,
-                            other => tracing::warn!(value = other, "valeur tools_enabled invalide, ignorée"),
+                            other => tracing::warn!(
+                                value = other,
+                                "valeur tools_enabled invalide, ignorée"
+                            ),
                         }
                     }
                 }
