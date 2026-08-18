@@ -211,7 +211,7 @@ pub(crate) async fn run(
             clear_partial_output(ctx.sid);
 
             let session_mode = ctx.session.mode;
-            let mode_getter = || session_mode;
+            let mode_getter = || session_mode.into();
             let executor = ToolExecutor::new(
                 ctx.cx,
                 ctx.session_id,
