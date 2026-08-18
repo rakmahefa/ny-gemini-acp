@@ -1,6 +1,6 @@
 //! Types du module state : rôles, modes de session, données persistées, erreurs.
 
-use crate::Cancellation;
+use crate::{time, Cancellation};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -30,11 +30,7 @@ pub enum SessionMode {
 
 impl SessionMode {
     pub fn all() -> &'static [SessionMode] {
-        &[
-            SessionMode::Default,
-            SessionMode::AcceptEdits,
-            SessionMode::BypassPermissions,
-        ]
+        &[Self::Default, Self::AcceptEdits, Self::BypassPermissions]
     }
 
     pub fn from_str_lossy(s: &str) -> Option<Self> {
@@ -73,16 +69,6 @@ impl SessionMode {
     }
 }
 
-impl From<SessionMode> for gemini_acp_tools::ToolPermissionMode {
-    fn from(mode: SessionMode) -> Self {
-        match mode {
-            SessionMode::Default => Self::Default,
-            SessionMode::AcceptEdits => Self::AcceptEdits,
-            SessionMode::BypassPermissions => Self::BypassPermissions,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -108,7 +94,7 @@ impl Session {
         additional_directories: Vec<PathBuf>,
         model: &str,
     ) -> Self {
-        let now = gemini_acp_config::core::time::now_iso();
+        let now = time::now_iso();
         Self {
             id,
             cwd,
@@ -126,7 +112,7 @@ impl Session {
     }
 
     pub fn fork(&self, new_id: String) -> Self {
-        let now = gemini_acp_config::core::time::now_iso();
+        let now = time::now_iso();
         Self {
             id: new_id,
             cwd: self.cwd.clone(),
@@ -153,9 +139,6 @@ pub enum TurnError {
 }
 
 /// Runtime-owned session state plus the shared cancellation primitive.
-///
-/// Cancellation belongs to `agent-runtime`; the tools provider only receives a
-/// boundary adapter when a tool execution needs to observe the current turn.
 pub struct Live {
     pub session: Session,
     pub cancel: Cancellation,
