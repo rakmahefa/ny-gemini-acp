@@ -9,6 +9,7 @@ use crate::tools::lifecycle::{
     begin_partial_output, bind_session_cancellation, take_partial_output,
     unbind_session_cancellation,
 };
+use crate::tools::ToolCancellation;
 use gemini_acp_encaps::Cancellation;
 
 mod busy;
@@ -43,7 +44,7 @@ impl Store {
             let gen = entry.generation;
             entry.cancel = Cancellation::new();
             let rx = entry.cancel.subscribe();
-            bind_session_cancellation(id, entry.cancel.clone());
+            bind_session_cancellation(id, ToolCancellation::from_receiver(rx.clone()));
             begin_partial_output(id);
             return Ok((entry.session.clone(), rx, gen));
         }
@@ -56,7 +57,7 @@ impl Store {
             .map_err(|_| TurnError::AlreadyRunning)?;
         let cancellation = Cancellation::new();
         let rx = cancellation.subscribe();
-        bind_session_cancellation(id, cancellation.clone());
+        bind_session_cancellation(id, ToolCancellation::from_receiver(rx.clone()));
         begin_partial_output(id);
         live.insert(
             id.to_string(),
@@ -108,11 +109,6 @@ impl Store {
             }
         }
 
-        // A cancelled stream may have already emitted assistant chunks while
-        // never reaching the normal `total_output` finalization in prompt/turn.
-        // Persist that partial text only when the current session history still
-        // ends at the user message: this proves the streamed answer has not
-        // already been committed by the normal completion path.
         let partial = take_partial_output(id);
         if !partial.trim().is_empty() && matches!(session.messages.last(), Some((Role::User, _))) {
             session.messages.push((Role::Assistant, partial));
