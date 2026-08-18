@@ -1,25 +1,21 @@
-//! Injection de la section outils dans le prompt et formatage
-//! de l'historique avec les blocs tool_call / tool_result.
+//! Tool prompt assembly and safe history formatting.
 
 use crate::tools::registry::ToolRegistry;
-use gemini_acp_config::core::tool_prompt::{tool_use_section, BlockKind, INSTRUCTION_TOOL_CALL};
 
-/// Construit la section `# Tool Use` à injecter dans le prompt.
+const INSTRUCTION_TOOL_CALL: &str = "# Tool Use\n\nYou have access to tools that execute in the user's local environment. To call a tool, respond with:\n```tool_call\n{\"name\": \"<tool_name>\", \"arguments\": {<arguments>}}\n```\nYou may call multiple tools with multiple blocks in a single response. After receiving a [Tool result for ...], use that data to answer the user. Only use tool_call blocks when the user's request requires it.\n\nAvailable tools:";
+
+/// Construit la section `# Tool Use` sans dépendance au crate LLM.
 pub fn tools_section(registry: &ToolRegistry) -> Option<String> {
     let defs = registry.definitions();
     if defs.is_empty() {
         return None;
     }
-    Some(tool_use_section(
-        BlockKind::ToolCall,
-        INSTRUCTION_TOOL_CALL,
-        &defs,
-        "",
-    ))
+    let defs_json = serde_json::to_string_pretty(&defs).unwrap_or_else(|_| "[]".into());
+    Some(format!("{INSTRUCTION_TOOL_CALL}\n{defs_json}"))
 }
 
 /// Formate un résultat d'outil pour l'historique avec la sérialisation sûre
-/// commune au runtime.
+/// commune au provider.
 pub fn format_tool_result(tool: &str, content: &str) -> String {
     super::tool_history::encode(tool, content)
 }
@@ -35,8 +31,8 @@ mod tests {
         serde_json::json!({"type": "object"})
     }
 
-    fn dummy_def() -> crate::tools::registry::ToolDef {
-        crate::tools::registry::ToolDef {
+    fn dummy_def() -> ToolDef {
+        ToolDef {
             name: "dummy",
             description: "Un outil de test.",
             parameters_fn: dummy_params,
@@ -49,6 +45,7 @@ mod tests {
             static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
             DEF.get_or_init(dummy_def)
         }
+
         async fn execute(
             &self,
             _args: &serde_json::Value,
