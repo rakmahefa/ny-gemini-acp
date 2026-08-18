@@ -26,6 +26,27 @@ The same evidence also exposes three hardening targets:
 
 Forwarded MCP servers are also received from Zed but are not wired into Gemini ACP yet.
 
+## H1 implementation status
+
+The P0.1 semantic tool identity/lifecycle isolation implementation is now present on `agent/zed-baseline`.
+
+The runtime no longer uses the upstream Gemini tool-call ID as the semantic event identity. `TurnEventEmitter` allocates a monotonically increasing semantic invocation identity scoped to the outer turn (`turn_<id>/tool_<n>`) and keeps a temporary upstream-to-semantic binding for permission, execution, and result transitions.
+
+This preserves the upstream Gemini/ACP transport identity used by `ToolExecutor` while guaranteeing that repeated stream-local IDs from later Gemini rounds cannot address a terminalized semantic tool state.
+
+Regression coverage now includes:
+
+- repeated `gemini_call_0` IDs across two tool rounds;
+- complete `requested -> permission -> execution -> result` lifecycle for each invocation;
+- deterministic semantic identity reuse within one invocation;
+- distinct identities across rounds;
+- distinct identities across independent outer turns sharing one session;
+- binding cleanup at terminal turn outcomes.
+
+**Implementation status: COMPLETE.**
+
+The remaining H1 exit criterion is real-Zed validation: repeat the historical repeated-tool and multi-tool scenarios and confirm that the ACP logs contain no `already requested` or post-`Terminal` semantic transition errors.
+
 ## Priority order
 
 ### H1 — Semantic tool identity and lifecycle isolation
