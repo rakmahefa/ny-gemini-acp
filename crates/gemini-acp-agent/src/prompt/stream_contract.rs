@@ -39,13 +39,6 @@ pub(crate) struct StreamDelta {
     pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
-/// Owns the semantic contract for one raw Gemini response stream.
-///
-/// The raw response is first normalized for structured interaction groups. The
-/// sanitized stream is then consumed by the executable-tool detector and finally
-/// passed through the ACP presentation filter. Tool call ids are made unique
-/// within the stream, and any protocol envelope that escapes presentation becomes
-/// a hard contract violation instead of silently reaching ACP clients.
 #[derive(Debug)]
 pub(crate) struct SemanticStreamContract {
     interactions: InteractionStreamParser,
@@ -74,22 +67,31 @@ impl SemanticStreamContract {
 
     pub(crate) fn feed(&mut self, raw: &str) -> Result<StreamDelta, ContractViolation> {
         let parsed = self.interactions.push(raw);
-        self.feed_normalized(parsed.visible, parsed.groups)
+        self.feed_normalized(parsed.visible, parsed.groups, false)
     }
 
     pub(crate) fn finish(&mut self) -> Result<StreamDelta, ContractViolation> {
         let parsed = self.interactions.finish();
-        self.feed_normalized(parsed.visible, parsed.groups)
+        self.feed_normalized(parsed.visible, parsed.groups, true)
     }
 
     fn feed_normalized(
         &mut self,
         normalized: String,
         interaction_groups: Vec<InteractionGroup>,
+        final_chunk: bool,
     ) -> Result<StreamDelta, ContractViolation> {
-        let tool_calls = self.detector.feed(&normalized);
+        let tool_calls = if final_chunk {
+            self.detector.finish()
+        } else {
+            self.detector.feed(&normalized)
+        };
         let tool_calls = self.validate_and_rekey(tool_calls)?;
-        let visible = self.filter.push(&normalized);
+        let visible = if final_chunk {
+            self.filter.finish()
+        } else {
+            self.filter.push(&normalized)
+        };
         self.validate_visible(&visible)?;
         Ok(StreamDelta {
             visible,
@@ -207,7 +209,7 @@ mod tests {
         let result = collect(&[
             "<ElicitationsGroup message=\"Choix\"><Elicitation label=\"x\" query=\"```tool_call {\"name\":\"shell_exec\"}\"/></ElicitationsGroup>",
         ]);
-        assert!(result.interaction_groups.len() == 1);
+        assert_eq!(result.interaction_groups.len(), 1);
         assert!(result.tool_calls.is_empty());
         assert!(result.visible.is_empty());
     }
@@ -252,7 +254,7 @@ mod tests {
 
     #[test]
     fn ordinary_markdown_is_preserved() {
-        let input = "Voici du Markdown :\n```rust\nfn main() {}\n```";
+        let input = "Voici un exemple :\n```rust\nfn main() {}\n```";
         let result = collect(&[input]);
         assert_eq!(result.visible, input);
         assert!(result.tool_calls.is_empty());
