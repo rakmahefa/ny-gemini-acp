@@ -10,6 +10,7 @@ use crate::Cancellation;
 mod busy;
 mod persistence;
 mod snapshot;
+pub(crate) mod turn_support;
 mod types;
 
 pub(crate) use types::MAX_SNAPSHOTS;
@@ -39,6 +40,7 @@ impl Store {
             let gen = entry.generation;
             entry.cancel = Cancellation::new();
             let rx = entry.cancel.subscribe();
+            turn_support::begin_partial_output(id);
             return Ok((entry.session.clone(), rx, gen));
         }
 
@@ -51,6 +53,7 @@ impl Store {
             .map_err(|_| TurnError::AlreadyRunning)?;
         let cancellation = Cancellation::new();
         let rx = cancellation.subscribe();
+        turn_support::begin_partial_output(id);
         live.insert(
             id.to_string(),
             Live {
@@ -101,7 +104,7 @@ impl Store {
             }
         }
 
-        let partial = super::turn_support::take_partial_output(id);
+        let partial = turn_support::take_partial_output(id);
         if !partial.trim().is_empty() && matches!(session.messages.last(), Some((Role::User, _))) {
             session.messages.push((Role::Assistant, partial));
         }
@@ -149,7 +152,7 @@ impl Store {
         }
         live.remove(id);
         drop(live);
-        let _ = super::turn_support::take_partial_output(id);
+        let _ = turn_support::take_partial_output(id);
         self.release_busy(id).await;
         existed
     }
