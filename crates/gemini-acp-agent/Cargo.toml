@@ -1,5 +1,5 @@
 [package]
-name = "gemini-acp-agent"
+name = "acp-adaptor"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,7 +7,7 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Agent ACP v1 pour Zed : transport, handlers, prompt"
+description = "ACP adapter for Zed: transport, protocol handlers and presentation projection"
 
 [[bin]]
 name = "gemini-acp"
@@ -18,10 +18,9 @@ name = "gemini-acp-snapshot"
 path = "src/bin/snapshot.rs"
 
 [dependencies]
-gemini-acp-config = { path = "../gemini-acp-config" }
-gemini-acp-runtime = { path = "../gemini-acp-runtime" }
-gemini-acp-encaps = { path = "../gemini-acp-encaps" }
-gemini-acp-llm = { path = "../gemini-acp-llm" }
+gemini-acp-config = { package = "llm-provider", path = "../gemini-acp-config" }
+gemini-acp-runtime = { package = "agent-runtime", path = "../gemini-acp-runtime" }
+gemini-acp-encaps = { package = "acp-encapsulation", path = "../gemini-acp-encaps" }
 agent-client-protocol = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
