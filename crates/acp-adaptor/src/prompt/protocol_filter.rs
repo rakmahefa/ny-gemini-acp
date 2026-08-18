@@ -192,7 +192,11 @@ impl ProtocolFilter {
                     continue;
                 }
 
-                if !final_chunk && PROTOCOL_MARKERS.iter().any(|prefix| prefix.starts_with(rest)) {
+                if !final_chunk
+                    && PROTOCOL_MARKERS
+                        .iter()
+                        .any(|prefix| prefix.starts_with(rest))
+                {
                     self.pending.push_str(rest);
                     break;
                 }

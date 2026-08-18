@@ -24,10 +24,13 @@ pub fn emit_error_chunk(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(format!("\n\n[error] {error}"))))
-                .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
+                "\n\n[error] {error}"
+            ))))
+            .message_id(message_id.clone()),
         ),
-    )).ok();
+    ))
+    .ok();
 }
 
 /// ACP notification sink for already-normalized assistant text.

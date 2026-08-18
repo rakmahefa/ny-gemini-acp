@@ -7,7 +7,11 @@ use std::sync::Arc;
 use tokio::sync::{watch, Notify};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ToolPermissionMode { Default, AcceptEdits, BypassPermissions }
+pub enum ToolPermissionMode {
+    Default,
+    AcceptEdits,
+    BypassPermissions,
+}
 
 #[derive(Clone)]
 pub struct ToolCancellation {
@@ -21,11 +25,29 @@ impl ToolCancellation {
         let mut observed = receiver.clone();
         let notify_clone = notify.clone();
         tokio::spawn(async move {
-            if *observed.borrow() { notify_clone.notify_waiters(); return; }
-            while observed.changed().await.is_ok() { if *observed.borrow() { notify_clone.notify_waiters(); break; } }
+            if *observed.borrow() {
+                notify_clone.notify_waiters();
+                return;
+            }
+            while observed.changed().await.is_ok() {
+                if *observed.borrow() {
+                    notify_clone.notify_waiters();
+                    break;
+                }
+            }
         });
-        Self { cancelled: Arc::new(receiver), notify }
+        Self {
+            cancelled: Arc::new(receiver),
+            notify,
+        }
     }
-    pub fn is_cancelled(&self) -> bool { *self.cancelled.borrow() }
-    pub async fn cancelled(&self) { if self.is_cancelled() { return; } self.notify.notified().await; }
+    pub fn is_cancelled(&self) -> bool {
+        *self.cancelled.borrow()
+    }
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        self.notify.notified().await;
+    }
 }

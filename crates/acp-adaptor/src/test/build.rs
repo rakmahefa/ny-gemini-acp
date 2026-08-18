@@ -13,7 +13,11 @@ fn session(messages: &[(&str, &str)]) -> Session {
         .iter()
         .map(|(role, text)| {
             (
-                if *role == "u" { Role::User } else { Role::Assistant },
+                if *role == "u" {
+                    Role::User
+                } else {
+                    Role::Assistant
+                },
                 (*text).to_string(),
             )
         })

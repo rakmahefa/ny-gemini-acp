@@ -19,7 +19,9 @@ fn thinking_model_without_explicit_thought_envelope_preserves_response() {
     let mut stream = ThoughtStream::new(true);
     assert_eq!(
         stream.feed("Voici la réponse finale"),
-        vec![ThoughtEvent::ResponseChunk("Voici la réponse finale".into())]
+        vec![ThoughtEvent::ResponseChunk(
+            "Voici la réponse finale".into()
+        )]
     );
     assert_eq!(
         stream.feed(" avec plus de détails"),
@@ -61,7 +63,10 @@ fn xml_open_marker_split_across_deltas_is_atomic() {
     assert!(stream.feed("<thi").is_empty());
     assert_eq!(
         stream.feed("nking>Réflexion"),
-        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("Réflexion".into())]
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("Réflexion".into())
+        ]
     );
     let tail = stream.feed(" puis </thi");
     assert!(tail.iter().any(|event| match event {
@@ -82,7 +87,10 @@ fn opening_marker_is_never_exposed_to_consumers() {
     let mut stream = ThoughtStream::new(true);
     assert_eq!(
         stream.feed("<thinking>raisonnement"),
-        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("raisonnement".into())]
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("raisonnement".into())
+        ]
     );
     // An unclosed explicit thought is finalized at EOF. The already-emitted
     // thought payload must not be duplicated, but its lifecycle still needs
@@ -112,7 +120,10 @@ fn closing_marker_split_across_deltas_is_atomic() {
     let mut stream = ThoughtStream::new(true);
     assert_eq!(
         stream.feed("<thinking>pensée"),
-        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("pensée".into())]
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("pensée".into())
+        ]
     );
     assert_eq!(
         stream.feed(" utile </thi"),
@@ -120,7 +131,10 @@ fn closing_marker_split_across_deltas_is_atomic() {
     );
     assert_eq!(
         stream.feed("nking>Réponse"),
-        vec![ThoughtEvent::ThoughtEnd, ThoughtEvent::ResponseChunk("Réponse".into())]
+        vec![
+            ThoughtEvent::ThoughtEnd,
+            ThoughtEvent::ResponseChunk("Réponse".into())
+        ]
     );
 }
 
@@ -141,7 +155,10 @@ fn finish_is_idempotent() {
     let mut stream = ThoughtStream::new(true);
     assert_eq!(
         stream.feed("<thinking>pensée"),
-        vec![ThoughtEvent::ThoughtStart, ThoughtEvent::ThoughtChunk("pensée".into())]
+        vec![
+            ThoughtEvent::ThoughtStart,
+            ThoughtEvent::ThoughtChunk("pensée".into())
+        ]
     );
     assert!(stream.finish().contains(&ThoughtEvent::ThoughtEnd));
     assert!(stream.finish().is_empty());
@@ -151,7 +168,8 @@ fn finish_is_idempotent() {
 #[test]
 fn legacy_splitter_facade_preserves_existing_contract() {
     let mut splitter = ThoughtSplitter::new(true);
-    let (thought, message) = splitter.feed("<thinking>Réflexion suffisamment longue pour être émise");
+    let (thought, message) =
+        splitter.feed("<thinking>Réflexion suffisamment longue pour être émise");
     assert!(!thought.is_empty());
     assert!(message.is_empty());
 

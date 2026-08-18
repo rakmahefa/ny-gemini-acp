@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 
-use super::{AcpSemanticEvent, EventBus, EventContext, ToolEventContext};
 use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
+use super::{AcpSemanticEvent, EventBus, EventContext, ToolEventContext};
 
 /// Owns and validates the semantic sequence for one turn.
 /// Invalid transitions never reach the event bus and do not consume a sequence number.
@@ -182,7 +182,11 @@ impl TurnEventEmitter {
 
     /// Records a tool invocation using a semantic identity independent from the
     /// upstream Gemini call ID. All later lifecycle events resolve through this binding.
-    pub fn tool_call_requested(&mut self, upstream_id: impl Into<String>, name: impl Into<String>) -> bool {
+    pub fn tool_call_requested(
+        &mut self,
+        upstream_id: impl Into<String>,
+        name: impl Into<String>,
+    ) -> bool {
         let upstream_id = upstream_id.into();
         if upstream_id.is_empty() {
             return self.reject(IntegrityError::new("tool call identity must be non-empty"));
@@ -397,10 +401,7 @@ mod tests {
         assert!(!e.turn_completed());
         assert!(e.is_terminal());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(
-            events.iter().map(seq).collect::<Vec<_>>(),
-            vec![0, 1, 2]
-        );
+        assert_eq!(events.iter().map(seq).collect::<Vec<_>>(), vec![0, 1, 2]);
         assert!(matches!(
             events.last(),
             Some(AcpSemanticEvent::TurnFailed { .. })
@@ -492,16 +493,19 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(ids, vec![
-            "turn_a/tool_0",
-            "turn_a/tool_0",
-            "turn_a/tool_0",
-            "turn_a/tool_0",
-            "turn_b/tool_0",
-            "turn_b/tool_0",
-            "turn_b/tool_0",
-            "turn_b/tool_0",
-        ]);
+        assert_eq!(
+            ids,
+            vec![
+                "turn_a/tool_0",
+                "turn_a/tool_0",
+                "turn_a/tool_0",
+                "turn_a/tool_0",
+                "turn_b/tool_0",
+                "turn_b/tool_0",
+                "turn_b/tool_0",
+                "turn_b/tool_0",
+            ]
+        );
         assert_ne!(ids[0], ids[4]);
     }
 }

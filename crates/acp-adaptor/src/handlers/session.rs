@@ -165,7 +165,8 @@ pub async fn handle_new(
     {
         Ok(session) => session,
         Err(error) => {
-            return responder.respond_with_internal_error(format!("création de session: {error:#}"));
+            return responder
+                .respond_with_internal_error(format!("création de session: {error:#}"));
         }
     };
 
@@ -377,11 +378,15 @@ pub async fn handle_delete(
 
     match state.sessions.delete(&req.session_id.0).await {
         Ok(true) => responder.respond(DeleteSessionResponse::new()),
-        Ok(false) => responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": "session introuvable"
-        }))),
-        Err(error) => responder.respond_with_internal_error(format!("suppression de session: {error:#}")),
+        Ok(false) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": "session introuvable"
+            })))
+        }
+        Err(error) => {
+            responder.respond_with_internal_error(format!("suppression de session: {error:#}"))
+        }
     }
 }
 
@@ -396,11 +401,15 @@ pub async fn handle_close(
 
     match state.sessions.close(&req.session_id.0).await {
         Ok(true) => responder.respond(CloseSessionResponse::new()),
-        Ok(false) => responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": "session introuvable"
-        }))),
-        Err(error) => responder.respond_with_internal_error(format!("fermeture de session: {error:#}")),
+        Ok(false) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": "session introuvable"
+            })))
+        }
+        Err(error) => {
+            responder.respond_with_internal_error(format!("fermeture de session: {error:#}"))
+        }
     }
 }
 
@@ -424,10 +433,14 @@ pub async fn handle_set_mode(
 
     let updated = match state.sessions.set_mode(&req.session_id.0, new_mode).await {
         Ok(session) => session,
-        Err(error) => return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": format!("impossible de changer le mode: {error:#}")
-        }))),
+        Err(error) => {
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
+                    "session_id": req.session_id.to_string(),
+                    "error": format!("impossible de changer le mode: {error:#}")
+                }),
+            ))
+        }
     };
 
     cx.send_notification(SessionNotification::new(

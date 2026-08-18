@@ -7,10 +7,10 @@ use tokio::sync::RwLock;
 
 use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider};
 
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
 use crate::tools::mcp::{McpCatalog, McpServerConfig};
 use crate::tools::registry::ToolRegistry;
-use crate::tools::contracts::ToolCancellation;
 
 struct ProviderState {
     fallback: Arc<ToolRegistry>,
@@ -77,8 +77,8 @@ impl ToolProvider for DefaultToolProvider {
             .map(serde_json::from_value)
             .collect::<Result<_, _>>()
             .map_err(|error| format!("MCP configuration invalide: {error}"))?;
-        let configs = McpServerConfig::from_acp_servers(parsed, &cwd)
-            .map_err(|error| error.to_string())?;
+        let configs =
+            McpServerConfig::from_acp_servers(parsed, &cwd).map_err(|error| error.to_string())?;
         let catalog = McpCatalog::from_configs(configs)
             .await
             .map_err(|error| error.to_string())?;
@@ -114,7 +114,12 @@ impl ToolProvider for DefaultToolProvider {
 
         let result = match self
             .registry
-            .call_async(&request.name, &request.arguments, &request.cwd, &request.additional_dirs)
+            .call_async(
+                &request.name,
+                &request.arguments,
+                &request.cwd,
+                &request.additional_dirs,
+            )
             .await
         {
             Some(crate::tools::registry::ToolResult::Ok(content)) => ToolCallResult {
@@ -122,7 +127,9 @@ impl ToolProvider for DefaultToolProvider {
                 is_ok: true,
                 executed: true,
             },
-            Some(crate::tools::registry::ToolResult::Err(content)) => ToolCallResult::error(content),
+            Some(crate::tools::registry::ToolResult::Err(content)) => {
+                ToolCallResult::error(content)
+            }
             None => ToolCallResult::error(format!("Outil inconnu : {}", request.name)),
         };
 

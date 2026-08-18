@@ -26,8 +26,8 @@ mod protocol;
 mod protocol_filter;
 pub mod stream;
 mod stream_contract;
-mod tool_stream;
 pub mod title;
+mod tool_stream;
 pub mod turn;
 
 pub use turn::run_turn;

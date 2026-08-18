@@ -6,9 +6,9 @@ use agent_client_protocol::schema::v1::{
 };
 use serde_json::{json, Map, Value};
 
-use super::ToolExecutor;
 use super::super::sandbox::{RiskLevel, ShellAnalysis};
 use super::super::tool_ux::{classify_risk, ToolInfo};
+use super::ToolExecutor;
 
 #[derive(Debug, Clone)]
 pub struct PermissionRequest {
@@ -44,31 +44,66 @@ impl PermissionRequest {
         match tool_name {
             "file_write" | "file_edit" | "replace_in_file" => {
                 if let Some(path) = args.get("path").and_then(Value::as_str) {
-                    let resolved = if Path::new(path).is_absolute() { PathBuf::from(path) } else { cwd.join(path) };
+                    let resolved = if Path::new(path).is_absolute() {
+                        PathBuf::from(path)
+                    } else {
+                        cwd.join(path)
+                    };
                     if resolved.exists() {
-                        warnings.push(format!("Le fichier '{}' existe déjà et sera modifié.", info.title));
+                        warnings.push(format!(
+                            "Le fichier '{}' existe déjà et sera modifié.",
+                            info.title
+                        ));
                     }
                 }
             }
             "shell_exec" => {
                 let command = args.get("command").and_then(Value::as_str).unwrap_or("");
                 let analysis = ShellAnalysis::analyze(command);
-                if analysis.has_dangerous_pipe_chain { warnings.push("Chaîne de commandes potentiellement dangereuse détectée.".into()); }
-                if analysis.has_env_injection { warnings.push("Injection de variables d'environnement détectée.".into()); }
+                if analysis.has_dangerous_pipe_chain {
+                    warnings
+                        .push("Chaîne de commandes potentiellement dangereuse détectée.".into());
+                }
+                if analysis.has_env_injection {
+                    warnings.push("Injection de variables d'environnement détectée.".into());
+                }
                 if analysis.risk >= RiskLevel::High {
-                    warnings.push(format!("Niveau de risque {} : {}", analysis.risk.emoji(), analysis.risk.description()));
+                    warnings.push(format!(
+                        "Niveau de risque {} : {}",
+                        analysis.risk.emoji(),
+                        analysis.risk.description()
+                    ));
                 }
             }
             _ => {}
         }
-        if risk >= RiskLevel::High { warnings.push("Cette opération peut avoir des effets irréversibles.".into()); }
+        if risk >= RiskLevel::High {
+            warnings.push("Cette opération peut avoir des effets irréversibles.".into());
+        }
 
         let detail = if warnings.is_empty() {
             format!("{}\n{} {}", info.title, risk.emoji(), risk.label())
         } else {
-            format!("{}\n{} {}\n\nAvertissements :\n{}", info.title, risk.emoji(), risk.label(), warnings.iter().map(|w| format!("  - {w}")).collect::<Vec<_>>().join("\n"))
+            format!(
+                "{}\n{} {}\n\nAvertissements :\n{}",
+                info.title,
+                risk.emoji(),
+                risk.label(),
+                warnings
+                    .iter()
+                    .map(|w| format!("  - {w}"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )
         };
-        Self { kind, risk, summary: info.title, detail, tool_name: tool_name.to_owned(), warnings }
+        Self {
+            kind,
+            risk,
+            summary: info.title,
+            detail,
+            tool_name: tool_name.to_owned(),
+            warnings,
+        }
     }
 }
 
@@ -81,7 +116,11 @@ pub enum PermissionResult {
 }
 
 impl<'a> ToolExecutor<'a> {
-    pub async fn request_permission(&self, request: &PermissionRequest, call_id: &ToolCallId) -> PermissionResult {
+    pub async fn request_permission(
+        &self,
+        request: &PermissionRequest,
+        call_id: &ToolCallId,
+    ) -> PermissionResult {
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(match request.kind {
                 PermissionKind::Read => ToolKind::Read,
@@ -92,12 +131,29 @@ impl<'a> ToolExecutor<'a> {
             .status(ToolCallStatus::Pending)
             .meta(permission_meta(request));
         let options = vec![
-            PermissionOption::new("allow_once", "Autoriser cette fois", PermissionOptionKind::AllowOnce),
-            PermissionOption::new("allow_always", "Toujours autoriser", PermissionOptionKind::AllowAlways),
+            PermissionOption::new(
+                "allow_once",
+                "Autoriser cette fois",
+                PermissionOptionKind::AllowOnce,
+            ),
+            PermissionOption::new(
+                "allow_always",
+                "Toujours autoriser",
+                PermissionOptionKind::AllowAlways,
+            ),
             PermissionOption::new("reject_once", "Refuser", PermissionOptionKind::RejectOnce),
-            PermissionOption::new("reject_always", "Toujours refuser", PermissionOptionKind::RejectAlways),
+            PermissionOption::new(
+                "reject_always",
+                "Toujours refuser",
+                PermissionOptionKind::RejectAlways,
+            ),
         ];
-        let rpc = RequestPermissionRequest::new(self.session_id.clone(), ToolCallUpdate::from(tool_call), options).meta(permission_meta(request));
+        let rpc = RequestPermissionRequest::new(
+            self.session_id.clone(),
+            ToolCallUpdate::from(tool_call),
+            options,
+        )
+        .meta(permission_meta(request));
         tracing::info!(session=%self.session_id, tool=%request.tool_name, kind=?request.kind, risk=%request.risk, summary=%request.summary, detail=%request.detail, warnings=?request.warnings, "envoi session/request_permission");
 
         let response = tokio::select! {
@@ -109,7 +165,9 @@ impl<'a> ToolExecutor<'a> {
             RequestPermissionOutcome::Selected(selected) => match selected.option_id.0.as_ref() {
                 "allow_once" | "allow_always" => PermissionResult::Allow,
                 "reject_once" | "reject_always" => PermissionResult::Reject,
-                unknown => PermissionResult::TransportError(format!("option de permission ACP inconnue: {unknown}")),
+                unknown => PermissionResult::TransportError(format!(
+                    "option de permission ACP inconnue: {unknown}"
+                )),
             },
             _ => PermissionResult::TransportError("outcome de permission ACP non reconnu".into()),
         }

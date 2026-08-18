@@ -4,8 +4,8 @@
 //! paths while exposing the new provider-neutral crates under their canonical
 //! names. These aliases are local to the adapter and do not recreate the old
 //! workspace crate boundaries.
-extern crate self as gemini_acp_runtime;
 extern crate self as gemini_acp_config;
+extern crate self as gemini_acp_runtime;
 extern crate self as gemini_acp_tools;
 
 pub use agent_runtime::*;

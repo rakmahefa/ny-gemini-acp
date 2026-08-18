@@ -14,9 +14,9 @@ use axum::routing::{get, post};
 use axum::Router;
 use tracing_subscriber::EnvFilter;
 
+use crate::http::AppState;
 use llm_provider::client::{Client, Config as ClientConfig};
 use llm_provider::core::models;
-use crate::http::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -52,7 +52,10 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/responses", post(responses::handler))
         .route("/v1beta/models/{model}", post(google::generate))
         .fallback(not_found)
-        .layer(middleware::from_fn_with_state(state.clone(), http::cors_auth))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            http::cors_auth,
+        ))
         .with_state(state.clone());
 
     let addr = format!("{}:{}", state.config.host, state.config.port);
@@ -93,5 +96,8 @@ async fn openai_models() -> axum::response::Response {
 }
 
 async fn not_found() -> axum::response::Response {
-    http::json_response(StatusCode::NOT_FOUND, serde_json::json!({"error": "not found"}))
+    http::json_response(
+        StatusCode::NOT_FOUND,
+        serde_json::json!({"error": "not found"}),
+    )
 }

@@ -9,7 +9,11 @@ impl Store {
 
     pub(crate) async fn acquire_busy(&self, id: &str) -> anyhow::Result<()> {
         let path = self.busy_path(id);
-        let content = format!("pid={} ts={}\n", std::process::id(), crate::time::now_unix());
+        let content = format!(
+            "pid={} ts={}\n",
+            std::process::id(),
+            crate::time::now_unix()
+        );
 
         match tokio::fs::OpenOptions::new()
             .write(true)

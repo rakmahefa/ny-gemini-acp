@@ -63,10 +63,14 @@ pub async fn request_action(
     let label = label.trim();
     let query = query.trim();
     if label.is_empty() || label.chars().count() > MAX_LABEL_CHARS {
-        return Err(FollowUpError::InvalidInput("FollowUp label is empty or too long"));
+        return Err(FollowUpError::InvalidInput(
+            "FollowUp label is empty or too long",
+        ));
     }
     if query.is_empty() || query.chars().count() > MAX_QUERY_CHARS {
-        return Err(FollowUpError::InvalidInput("FollowUp query is empty or too long"));
+        return Err(FollowUpError::InvalidInput(
+            "FollowUp query is empty or too long",
+        ));
     }
     if *cancel.borrow() {
         return Ok(FollowUpOutcome::Cancelled);
