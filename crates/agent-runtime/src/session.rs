@@ -1,8 +1,8 @@
 //! Session lifecycle and persistence.
 use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider};
 use crate::state::{Session, SessionMode, Store};
-use agent_client_protocol::schema::v1::McpServer;
 use anyhow::{bail, Context, Result};
+use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,7 +29,10 @@ impl SessionManager {
     pub async fn clear_mcp(&self, id: &str) {
         self.tools.clear_session(id).await
     }
-    pub async fn configure_mcp(&self, id: &str, servers: Vec<McpServer>) -> Result<(), String> {
+    pub async fn configure_mcp<S>(&self, id: &str, servers: Vec<S>) -> Result<(), String>
+    where
+        S: Serialize,
+    {
         let session = self
             .store
             .get(id)
