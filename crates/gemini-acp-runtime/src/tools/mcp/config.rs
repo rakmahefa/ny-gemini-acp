@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::{Path, PathBuf}};
 
 use agent_client_protocol::schema::v1::McpServer;
 use serde::{Deserialize, Serialize};
@@ -86,7 +86,7 @@ impl McpServerConfig {
     /// the runtime's request/response transport. Legacy SSE is rejected here
     /// because the runtime does not implement its separate endpoint handshake;
     /// advertising it would overstate H4 support.
-    pub fn from_acp(server: McpServer) -> Result<Self, McpError> {
+    pub fn from_acp(server: McpServer, session_cwd: &Path) -> Result<Self, McpError> {
         match server {
             McpServer::Stdio(server) => {
                 if !server.command.is_absolute() {
@@ -112,7 +112,7 @@ impl McpServerConfig {
                         || variable.name.chars().any(|ch| ch == '\0' || ch.is_control())
                     {
                         return Err(McpError::Config(format!(
-                            "stdio MCP server '{}' contains invalid environment variable name '{}',",
+                            "stdio MCP server '{}' contains invalid environment variable name '{}'",
                             server.name, variable.name
                         )));
                     }
@@ -129,7 +129,7 @@ impl McpServerConfig {
                     command: Some(command),
                     args: server.args,
                     env,
-                    cwd: None,
+                    cwd: Some(session_cwd.to_path_buf()),
                     url: None,
                     headers: HashMap::new(),
                 })
@@ -155,8 +155,14 @@ impl McpServerConfig {
     }
 
     /// Convert all forwarded ACP servers while preserving request order.
-    pub fn from_acp_servers(servers: Vec<McpServer>) -> Result<Vec<Self>, McpError> {
-        servers.into_iter().map(Self::from_acp).collect()
+    pub fn from_acp_servers(
+        servers: Vec<McpServer>,
+        session_cwd: &Path,
+    ) -> Result<Vec<Self>, McpError> {
+        servers
+            .into_iter()
+            .map(|server| Self::from_acp(server, session_cwd))
+            .collect()
     }
 }
 
@@ -218,6 +224,10 @@ mod tests {
         EnvVariable, HttpHeader, McpServerHttp, McpServerSse, McpServerStdio,
     };
 
+    fn cwd() -> &'static Path {
+        Path::new("/tmp/zed-workspace")
+    }
+
     #[test]
     fn tool_descriptor_requires_object_input_schema() {
         let descriptor = McpToolDescriptor {
@@ -230,24 +240,25 @@ mod tests {
     }
 
     #[test]
-    fn forwards_stdio_configuration_without_losing_arguments_or_environment() {
+    fn forwards_stdio_configuration_without_losing_arguments_environment_or_cwd() {
         let server = McpServer::Stdio(
             McpServerStdio::new("project-tools", "/usr/local/bin/project-mcp")
                 .args(vec!["--cwd".into(), "/tmp/project".into()])
                 .env(vec![EnvVariable::new("TOKEN", "secret")]),
         );
-        let config = McpServerConfig::from_acp(server).unwrap();
+        let config = McpServerConfig::from_acp(server, cwd()).unwrap();
         assert_eq!(config.name, "project-tools");
         assert_eq!(config.transport, McpTransportKind::Stdio);
         assert_eq!(config.command.as_deref(), Some("/usr/local/bin/project-mcp"));
         assert_eq!(config.args, ["--cwd", "/tmp/project"]);
         assert_eq!(config.env.get("TOKEN").map(String::as_str), Some("secret"));
+        assert_eq!(config.cwd.as_deref(), Some(cwd()));
     }
 
     #[test]
     fn rejects_relative_stdio_commands_before_spawning() {
         let server = McpServer::Stdio(McpServerStdio::new("project-tools", "project-mcp"));
-        let error = McpServerConfig::from_acp(server).unwrap_err();
+        let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
         assert!(error.to_string().contains("absolute path"));
     }
 
@@ -257,7 +268,7 @@ mod tests {
             McpServerHttp::new("remote", "https://mcp.example.test")
                 .headers(vec![HttpHeader::new("authorization", "Bearer test")]),
         );
-        let config = McpServerConfig::from_acp(server).unwrap();
+        let config = McpServerConfig::from_acp(server, cwd()).unwrap();
         assert_eq!(config.transport, McpTransportKind::Http);
         assert_eq!(config.url.as_deref(), Some("https://mcp.example.test"));
         assert_eq!(
@@ -273,7 +284,7 @@ mod tests {
             "legacy-events",
             "https://mcp.example.test/events",
         ));
-        let error = McpServerConfig::from_acp(server).unwrap_err();
+        let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
         assert!(error.to_string().contains("unsupported"));
     }
 
@@ -285,7 +296,7 @@ mod tests {
                 HttpHeader::new("authorization", "Bearer b"),
             ]),
         );
-        let error = McpServerConfig::from_acp(server).unwrap_err();
+        let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
         assert!(error.to_string().contains("duplicate MCP HTTP header"));
     }
 
@@ -295,7 +306,7 @@ mod tests {
             McpServerStdio::new("project-tools", "/usr/local/bin/project-mcp")
                 .env(vec![EnvVariable::new("BAD=NAME", "secret")]),
         );
-        let error = McpServerConfig::from_acp(server).unwrap_err();
+        let error = McpServerConfig::from_acp(server, cwd()).unwrap_err();
         assert!(error.to_string().contains("invalid environment variable name"));
     }
 }
