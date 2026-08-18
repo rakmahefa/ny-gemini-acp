@@ -2,7 +2,7 @@ use crate::{handlers, prompt};
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use agent_runtime::events::TurnEventEmitter;
-use agent_runtime::{AppState, EncapsError, ToolProvider, TurnManager};
+use agent_runtime::{AppState, RuntimeError, ToolProvider, TurnManager};
 use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
@@ -82,7 +82,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     &mut semantic,
                                 )
                                 .await
-                                .map_err(|e| EncapsError::Task(e.to_string()));
+                                .map_err(|e| RuntimeError::Task(e.to_string()));
 
                                 if result.is_err() && !semantic.is_terminal() {
                                     semantic.turn_failed();
@@ -93,7 +93,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                             .await
                         })
                         .await
-                        .map_err(|error| anyhow::anyhow!("failed to enqueue ACP turn: {error}"))?;
+                        .map_err(|error| anyhow::anyhow!("failed to enqueue agent turn: {error}"))?;
                     Ok(())
                 }
             },
