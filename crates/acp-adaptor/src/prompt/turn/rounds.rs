@@ -2,7 +2,7 @@ use agent_client_protocol::schema::v1::{MessageId, SessionId, StopReason};
 use agent_client_protocol::{Client, ConnectionTo};
 use gemini_acp_runtime::events::TurnEventEmitter;
 use gemini_acp_runtime::state::{Role, Session, SessionMode};
-use gemini_acp_runtime::{LlmProvider, LlmRequest, ToolProvider};
+use gemini_acp_runtime::{GenerationOptions, LlmProvider, LlmRequest, ToolProvider};
 use tokio::sync::watch;
 
 use super::context::{compact_messages, COMPACTION_THRESHOLD_CHARS, EMERGENCY_COMPACTION_CHARS};
@@ -81,7 +81,9 @@ pub(crate) async fn run(
             .stream(LlmRequest {
                 prompt,
                 model: ctx.session.model.clone(),
-                think: ctx.session.think,
+                generation: GenerationOptions {
+                    reasoning_budget: ctx.session.think,
+                },
                 refs: ctx.refs.to_vec(),
             })
             .await
@@ -105,7 +107,7 @@ pub(crate) async fn run(
             }
         };
 
-        let thinking = ctx.llm.model_info(&ctx.session.model).supports_thinking;
+        let thinking = ctx.llm.model_info(&ctx.session.model).supports_reasoning;
         let streamed = stream::consume(
             rx,
             ctx.cancel,
