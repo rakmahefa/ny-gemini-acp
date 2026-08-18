@@ -3,9 +3,9 @@ use super::*;
 #[test]
 fn creates_turn_started_event() {
     let context = EventContext::new("session", "turn", 1);
-    let event = AcpSemanticEvent::TurnStarted { context };
+    let event = SemanticEvent::TurnStarted { context };
 
-    assert!(matches!(event, AcpSemanticEvent::TurnStarted { .. }));
+    assert!(matches!(event, SemanticEvent::TurnStarted { .. }));
 }
 
 #[test]
@@ -16,10 +16,10 @@ fn keeps_tool_call_context() {
         tool_call_id: "tool-a".into(),
     };
 
-    let event = AcpSemanticEvent::ToolExecutionStarted { context };
+    let event = SemanticEvent::ToolExecutionStarted { context };
 
     match event {
-        AcpSemanticEvent::ToolExecutionStarted { context } => {
+        SemanticEvent::ToolExecutionStarted { context } => {
             assert_eq!(context.tool_call_id, "tool-a");
         }
         _ => unreachable!(),
