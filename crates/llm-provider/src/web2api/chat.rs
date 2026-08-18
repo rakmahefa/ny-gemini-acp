@@ -7,6 +7,7 @@ use axum::http::StatusCode;
 use axum::response::sse::Event;
 use axum::response::{IntoResponse, Response};
 use serde_json::Value;
+use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
@@ -38,7 +39,6 @@ pub async fn handler(State(state): State<AppState>, req: axum::extract::Request)
         .unwrap_or_default();
     let tools: Option<Vec<Value>> = body.get("tools").and_then(Value::as_array).cloned();
     let tool_choice = convert::ToolChoice::parse(body.get("tool_choice"));
-    // `none` → pas de section tools ni de parsing `tool_call` en sortie.
     let has_tools = tools.is_some() && !tool_choice.is_none();
     let prompt = convert::messages_to_prompt(&messages, tools.as_deref(), &tool_choice);
     if prompt.trim().is_empty() {
@@ -68,22 +68,19 @@ pub async fn handler(State(state): State<AppState>, req: axum::extract::Request)
     complete(&state, &prompt, &resolved, &ctx, stream, tools_opt).await
 }
 
-/// Identifiants de la réponse en cours (`model`, `id` de complétion, horodatage).
 struct Ctx {
     model_name: String,
     cid: String,
     created: u64,
 }
 
-/// Streaming SSE réel : rôle, deltas du flux, chunk final `finish_reason: stop`,
-/// `data: [DONE]`. Une erreur amont avant tout delta termine proprement le flux.
 async fn stream_deltas(
     state: &AppState,
     prompt: &str,
-    resolved: &gemini_acp_config::core::models::Resolved,
+    resolved: &crate::core::models::Resolved,
     ctx: &Ctx,
 ) -> Response {
-    let mut rx = match state
+    let mut rx: mpsc::Receiver<crate::client::StreamItem> = match state
         .client
         .stream(prompt, &resolved.name, Some(resolved.think), &[])
         .await
@@ -118,13 +115,12 @@ async fn stream_deltas(
         while let Some(item) = rx.recv().await {
             match item {
                 Ok(delta) => {
-                    if tx.send(Ok(chunk(Some(&delta), None))).await.is_err() {
-                        return; // client parti → drop du receiver amont (abort HTTP)
+                    if tx.send(Ok(chunk(Some(delta.as_str()), None))).await.is_err() {
+                        return;
                     }
                 }
-                Err(e) => {
-                    // Erreur amont en cours de flux : on s'arrête (comme le vendor).
-                    tracing::warn!("stream chat interrompu: {e}");
+                Err(error) => {
+                    tracing::warn!("stream chat interrompu: {error}");
                     break;
                 }
             }
@@ -135,22 +131,20 @@ async fn stream_deltas(
     sse(out).into_response()
 }
 
-/// Réponse complète : `complete` du client, puis `parse_tool_calls` si tools.
-/// En mode stream (avec tools) : un seul chunk + `[DONE]`, comme le vendor.
 async fn complete(
     state: &AppState,
     prompt: &str,
-    resolved: &gemini_acp_config::core::models::Resolved,
+    resolved: &crate::core::models::Resolved,
     ctx: &Ctx,
     stream: bool,
     tools: Option<&[Value]>,
 ) -> Response {
-    let text = match state
+    let text: String = match state
         .client
         .complete(prompt, &resolved.name, Some(resolved.think), &[])
         .await
     {
-        Ok(t) => t,
+        Ok(text) => text,
         Err(e) => {
             return json_response(
                 StatusCode::BAD_GATEWAY,
