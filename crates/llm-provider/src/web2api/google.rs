@@ -8,9 +8,12 @@ use tokio::sync::mpsc;
 
 use super::convert;
 use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event, AppState};
+use llm_provider::client::StreamItem;
+use llm_provider::core::models::Resolved;
+use llm_provider::core::models;
 
 pub async fn models_list() -> Response {
-    let models: Vec<Value> = crate::core::models::MODEL_KEYS
+    let model_names: Vec<Value> = models::MODEL_KEYS
         .iter()
         .map(|name| {
             serde_json::json!({
@@ -21,7 +24,7 @@ pub async fn models_list() -> Response {
             })
         })
         .collect();
-    json_ok(serde_json::json!({ "models": models }))
+    json_ok(serde_json::json!({ "models": model_names }))
 }
 
 pub async fn generate(
@@ -104,10 +107,10 @@ async fn stream_chunks(
     state: &AppState,
     prompt: &str,
     refs: &[String],
-    resolved: &crate::core::models::Resolved,
+    resolved: &Resolved,
     model_name: &str,
 ) -> Response {
-    let mut rx: mpsc::Receiver<crate::client::StreamItem> = match state
+    let mut rx: mpsc::Receiver<StreamItem> = match state
         .client
         .stream(prompt, &resolved.name, Some(resolved.think), refs)
         .await
