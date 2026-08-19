@@ -14,7 +14,7 @@ const PRESERVE_TURNS: usize = 10;
 
 #[async_trait::async_trait]
 pub trait AgentActionHandler: Send + Sync {
-    fn supports(&self, name: &str);
+    fn supports(&self, name: &str) -> bool;
     async fn handle(&self, session_id: &str, call_id: &str, name: &str, arguments: serde_json::Value, cancellation: Cancellation) -> Result<Option<String>, String>;
 }
 
