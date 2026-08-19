@@ -11,12 +11,10 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, Store, TurnError};
-use agent_runtime::{LlmProvider, ToolProvider};
+use agent_runtime::{AgentLoopConfig, LlmProvider, ToolProvider};
 use tools_provider::tools::executor::safe_session_update;
 use rounds::{RoundContext, RoundOutcome};
 use std::sync::Arc;
-
-const MAX_TURNS: usize = 20;
 
 pub async fn run_turn(
     store: Arc<Store>,
@@ -104,7 +102,8 @@ pub async fn run_turn(
         span: &span,
     };
 
-    let outcome = match rounds::run(&mut round_context, MAX_TURNS).await {
+    let max_rounds = AgentLoopConfig::default().max_rounds;
+    let outcome = match rounds::run(&mut round_context, max_rounds).await {
         Ok(outcome) => outcome,
         Err(rounds::RoundError::Stop(reason)) => {
             match reason {
