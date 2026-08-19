@@ -1,12 +1,11 @@
-use std::path::Path;
 use std::sync::Arc;
 
-use agent_client_protocol::schema::v1::{SessionId, ToolKind, ToolCallId};
+use agent_client_protocol::schema::v1::{SessionId, ToolCallId};
 use agent_client_protocol::{Client, ConnectionTo};
-use agent_runtime::{SessionMode, ToolPermissionDecision, ToolPermissionHandler, ToolPermissionRequest};
-use tools_provider::tools::executor::{PermissionRequest, PermissionResult, ToolExecutor};
+use agent_runtime::state::SessionMode;
+use agent_runtime::{Cancellation, ToolPermissionDecision, ToolPermissionHandler, ToolPermissionRequest, ToolProvider};
+use tools_provider::tools::executor::{PermissionKind, PermissionRequest, PermissionResult, ToolExecutor};
 use tools_provider::tools::ToolPermissionMode;
-use agent_runtime::ToolProvider;
 
 pub(crate) struct AcpToolPermissionHandler {
     cx: ConnectionTo<Client>,
@@ -17,28 +16,22 @@ impl AcpToolPermissionHandler {
     pub(crate) fn new(cx: ConnectionTo<Client>, tools: Arc<dyn ToolProvider>) -> Self {
         Self { cx, tools }
     }
-}
 
-impl AcpToolPermissionHandler {
-    fn permission_kind(&self, request: &ToolPermissionRequest) -> PermissionRequest {
-        PermissionRequest::from_tool_call(&request.name, &request.arguments, Path::new(&request.cwd))
+    fn permission_request(&self, request: &ToolPermissionRequest) -> PermissionRequest {
+        PermissionRequest::from_tool_call(&request.name, &request.arguments, &request.cwd)
     }
 }
 
 #[async_trait::async_trait]
 impl ToolPermissionHandler for AcpToolPermissionHandler {
     fn needs_permission(&self, session: &agent_runtime::state::Session, request: &ToolPermissionRequest) -> bool {
-        let permission = self.permission_kind(request);
+        let permission = self.permission_request(request);
         match permission.kind {
-            tools_provider::tools::executor::PermissionKind::Read
-            | tools_provider::tools::executor::PermissionKind::Network => false,
-            tools_provider::tools::executor::PermissionKind::Write
-            | tools_provider::tools::executor::PermissionKind::Execute => match session.mode {
+            PermissionKind::Read | PermissionKind::Network => false,
+            PermissionKind::Write | PermissionKind::Execute => match session.mode {
                 SessionMode::BypassPermissions => false,
-                SessionMode::AcceptEdits => {
-                    permission.kind == tools_provider::tools::executor::PermissionKind::Execute
-                        && permission.risk >= tools_provider::tools::sandbox::RiskLevel::High
-                }
+                SessionMode::AcceptEdits => permission.kind == PermissionKind::Execute
+                    && permission.risk >= tools_provider::tools::sandbox::RiskLevel::High,
                 SessionMode::Default => true,
             },
         }
@@ -48,7 +41,7 @@ impl ToolPermissionHandler for AcpToolPermissionHandler {
         &self,
         session: &agent_runtime::state::Session,
         request: &ToolPermissionRequest,
-        cancellation: agent_runtime::Cancellation,
+        cancellation: Cancellation,
     ) -> ToolPermissionDecision {
         let mode = match session.mode {
             SessionMode::Default => ToolPermissionMode::Default,
@@ -66,7 +59,7 @@ impl ToolPermissionHandler for AcpToolPermissionHandler {
             &get_mode,
             cancellation.clone().subscribe(),
         );
-        let permission = PermissionRequest::from_tool_call(&request.name, &request.arguments, &request.cwd);
+        let permission = self.permission_request(request);
         match executor
             .request_permission(&permission, &ToolCallId::from(request.call_id.clone()))
             .await
