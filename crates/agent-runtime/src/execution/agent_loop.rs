@@ -18,7 +18,7 @@ const PRESERVE_TURNS: usize = 10;
 
 #[async_trait::async_trait]
 pub trait AgentActionHandler: Send + Sync {
-    fn supports(&self, name: &str) -> bool;
+    fn supports(&self, name: &str);
     async fn handle(&self, session_id: &str, call_id: &str, name: &str, arguments: serde_json::Value, cancellation: Cancellation) -> Result<Option<String>, String>;
 }
 
@@ -259,11 +259,13 @@ fn format_tool_calls(text: &str, calls: &[PendingToolCall]) -> String {
     for call in calls {
         if !result.is_empty() { result.push('\n'); }
         let block = serde_json::json!({"name": call.name, "id": call.id, "arguments": call.arguments});
-        result.push_str("```tool_call\n");
-        result.push_str(&block.to_string());
-        result.push_str("\n```");
+        result.push_str("[tool_call ");
+        result.push_str(&call.name);
+        result.push_str(" id=");
+        result.push_str(&call.id);
+        result.push_str("] ");
+        result.push_str(&block.get("arguments").cloned().unwrap_or_else(|| serde_json::json!({})).to_string());
     }
-    result
 }
 fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
     let envelope = serde_json::json!({"tool": name, "content": result.content});
