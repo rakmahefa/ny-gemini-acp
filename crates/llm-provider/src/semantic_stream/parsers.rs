@@ -155,6 +155,6 @@ fn find_tag_end(input: &str) -> Option<usize> {
 
 pub(super) fn allocate_call_id(next_id: &mut usize) -> String {
     let id = format!("gemini_call_{}", *next_id);
-    *next_id = next_id.saturating_add(1);
+    *next_id = (*next_id).saturating_add(1);
     id
 }
