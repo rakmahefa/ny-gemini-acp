@@ -16,14 +16,11 @@ fn format_entry(entry: &HistoryEntry) -> String {
             name,
             content,
             is_ok,
-        } if name == "legacy" && id.is_empty() => format!("{content}\n\n"),
-        HistoryEntry::ToolResult {
-            id,
-            name,
-            content,
-            is_ok,
         } => {
             let status = if *is_ok { "ok" } else { "error" };
+            if name == "legacy" && id.is_empty() {
+                return format!("{content}\n\n");
+            }
             format!("[tool_result {name} id={id} status={status}] {content}\n\n")
         }
     }
@@ -40,16 +37,14 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
         Some(ts) => format!("{system}{ts}\n\n"),
         None => system,
     };
-    let n = session.messages.len();
+
+    let history = session.messages.entries();
+    let n = history.len();
     if n == 0 {
         return system;
     }
 
-    let lens: Vec<usize> = session
-        .messages
-        .iter()
-        .map(|entry| format_entry(entry).chars().count())
-        .collect();
+    let lens: Vec<usize> = history.iter().map(|entry| format_entry(entry).chars().count()).collect();
     let prefix: Vec<usize> = std::iter::once(0)
         .chain(lens.iter().scan(0usize, |sum, len| {
             *sum += *len;
@@ -57,10 +52,20 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
         }))
         .collect();
 
-    let min_start = n.saturating_sub(MAX_MESSAGES);
-    let mut lo = min_start;
-    let mut hi = n.saturating_sub(1);
-    let budget_ok = |start: usize| prefix[n] - prefix[start] <= MAX_PROMPT_CHARS;
+    let mut turn_starts = vec![0usize];
+    for (index, entry) in history.iter().enumerate().skip(1) {
+        if matches!(entry, HistoryEntry::User { .. }) {
+            turn_starts.push(index);
+        }
+    }
+
+    let first_turn = turn_starts.len().saturating_sub(MAX_MESSAGES);
+    let mut lo = first_turn;
+    let mut hi = turn_starts.len().saturating_sub(1);
+    let budget_ok = |turn_index: usize| {
+        let start = turn_starts[turn_index];
+        prefix[n] - prefix[start] <= MAX_PROMPT_CHARS
+    };
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         if budget_ok(mid) {
@@ -69,11 +74,10 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
             lo = mid + 1;
         }
     }
-    format!("{system}{}", format_history(session, lo))
-}
 
-fn format_history(session: &Session, start: usize) -> String {
-    session.messages.iter().skip(start).map(format_entry).collect()
+    let start = turn_starts[lo];
+    let history_text: String = history.iter().skip(start).map(format_entry).collect();
+    format!("{system}{history_text}")
 }
 
 #[cfg(test)]
