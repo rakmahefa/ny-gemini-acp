@@ -119,7 +119,7 @@ impl AgentLoop {
                                 continue 'rounds;
                             }
                             Ok(None) => continue,
-                            Err(error) if cancellation.is_cancelled() => { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
+                            Err(_error) if cancellation.is_cancelled() => { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
                             Err(error) => { let _ = emitter.turn_failed(); return Err(AgentLoopError::Action(error)); }
                         }
                     }
@@ -142,13 +142,24 @@ impl AgentLoop {
 
             for call in executable {
                 ensure_not_cancelled(&cancellation, emitter)?;
-                if !emitter.tool_call_requested(call.id.clone(), call.name.clone()) { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
+                let ui = tools.ui_model(&call.name, &call.arguments);
+                if !emitter.tool_call_requested_with_ui(call.id.clone(), call.name.clone(), ui.clone()) {
+                    let _ = emitter.turn_failed();
+                    return Err(AgentLoopError::SemanticEventRejected);
+                }
                 if !emitter.tool_execution_started(call.id.clone()) { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                 let result = if session.tools_enabled && tools.has_tools() {
                     tools.call(ToolCallRequest { session_id: session.id.clone(), name: call.name.clone(), arguments: call.arguments.clone(), cwd: session.cwd.clone(), additional_dirs: session.additional_directories.clone(), cancellation: cancellation.subscribe() }).await
-                } else { ToolCallResult::error(format!("tool execution disabled for session: {}", call.name)) };
+                } else {
+                    let mut result = ToolCallResult::error(format!("tool execution disabled for session: {}", call.name));
+                    result.ui = ui.map(|model| model.completed(false, Some(serde_json::json!({"text": result.content.clone()}))));
+                    result
+                };
                 ensure_not_cancelled(&cancellation, emitter)?;
-                if !emitter.tool_result_received(call.id.clone(), result.content.clone()) { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
+                if !emitter.tool_result_received_with_ui(call.id.clone(), result.content.clone(), result.ui.clone()) {
+                    let _ = emitter.turn_failed();
+                    return Err(AgentLoopError::SemanticEventRejected);
+                }
                 session.messages.push((Role::Tool, canonical_tool_result(&call.name, &result)));
             }
         }
