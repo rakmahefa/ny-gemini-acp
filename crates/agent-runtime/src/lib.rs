@@ -8,6 +8,7 @@ pub mod runtime;
 pub mod session;
 pub mod state;
 pub mod time;
+pub mod tool_ui;
 
 pub use events::{EventBus, EventContext, EventStream, SemanticEvent, ToolEventContext, TurnEventEmitter};
 pub use execution::{
@@ -22,3 +23,4 @@ pub use providers::{
 };
 pub use runtime::{AgentRuntime, AppState, RuntimeConfig};
 pub use session::SessionManager;
+pub use tool_ui::{ToolUiKind, ToolUiModel, ToolUiStatus};
