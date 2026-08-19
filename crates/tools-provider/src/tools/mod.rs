@@ -13,6 +13,7 @@ pub mod request;
 pub mod sandbox;
 pub mod tool_history;
 pub mod tool_ux;
+pub mod ui;
 
 pub use contracts::{ToolCancellation, ToolEventSink, ToolPermissionMode};
 pub use lifecycle::{LifecycleError, ToolLifecycle, ToolLifecycleState};
