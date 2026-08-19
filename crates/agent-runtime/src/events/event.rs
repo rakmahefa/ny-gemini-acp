@@ -38,6 +38,7 @@ pub enum SemanticEvent {
     },
     ToolExecutionStarted {
         context: ToolEventContext,
+        ui: Option<ToolUiModel>,
     },
     ToolResultReceived {
         context: ToolEventContext,
