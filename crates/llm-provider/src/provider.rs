@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::client::{Client, Config};
 use crate::config::AgentConfig;
 use crate::semantic_stream::GeminiSemanticStream;
-use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelRequest};
+use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest};
 use tokio::sync::mpsc;
 
 #[derive(Clone)]
@@ -21,9 +21,7 @@ impl GeminiProvider {
             proxy: config.proxy.clone(),
             ..Default::default()
         };
-        Ok(Self {
-            client: Arc::new(Client::new(client_config).await?),
-        })
+        Ok(Self { client: Arc::new(Client::new(client_config).await?) })
     }
 
     pub fn client(&self) -> Arc<Client> {
@@ -36,12 +34,7 @@ impl LlmProvider for GeminiProvider {
     async fn stream(&self, request: ModelRequest) -> Result<LlmStream, LlmError> {
         let upstream = self
             .client
-            .stream(
-                &request.prompt,
-                &request.model,
-                request.generation.reasoning_budget,
-                &request.references,
-            )
+            .stream(&request.prompt, &request.model, request.generation.reasoning_budget, &request.references)
             .await
             .map_err(|error| LlmError::Provider(format!("{error:#}")))?;
 
@@ -52,11 +45,21 @@ impl LlmProvider for GeminiProvider {
             let mut upstream = upstream;
             while let Some(item) = upstream.recv().await {
                 match item {
-                    Ok(delta) => {
-                        for event in semantic.feed(&delta) {
-                            if tx.send(Ok(event)).await.is_err() {
-                                return;
-                            }
+                    Ok(crate::client::StreamItem::Text(delta)) => {
+                        for event in semantic.feed(crate::core::frames::GeminiFrameEvent::Text(delta)) {
+                            if tx.send(Ok(event)).await.is_err() { return; }
+                        }
+                    }
+                    Ok(crate::client::StreamItem::ToolCall { id, name, arguments }) => {
+                        let frame = crate::core::frames::GeminiFrameEvent::ToolCall { id, name, arguments };
+                        for event in semantic.feed(frame) {
+                            if tx.send(Ok(event)).await.is_err() { return; }
+                        }
+                    }
+                    Ok(crate::client::StreamItem::Metadata { kind, value }) => {
+                        let frame = crate::core::frames::GeminiFrameEvent::Metadata { kind, value };
+                        for event in semantic.feed(frame) {
+                            if tx.send(Ok(event)).await.is_err() { return; }
                         }
                     }
                     Err(error) => {
@@ -66,28 +69,23 @@ impl LlmProvider for GeminiProvider {
                 }
             }
             for event in semantic.finish() {
-                if tx.send(Ok(event)).await.is_err() {
-                    return;
-                }
+                if tx.send(Ok(event)).await.is_err() { return; }
             }
         });
         Ok(rx)
     }
 
     async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, LlmError> {
-        self.client
-            .upload_image(base64, mime)
-            .await
-            .map_err(|error| LlmError::Provider(format!("{error:#}")))
+        self.client.upload_image(base64, mime).await.map_err(|error| LlmError::Provider(format!("{error:#}")))
     }
 
     fn model_info(&self, model: &str) -> LlmModelInfo {
-        let supports_reasoning = crate::core::models::resolve(
-            model,
-            crate::core::models::DEFAULT_MODEL,
-        )
-        .map(|resolved| crate::core::models::is_thinking_mode(resolved.mode))
-        .unwrap_or(false);
+        let supports_reasoning = crate::core::models::resolve(model, crate::core::models::DEFAULT_MODEL)
+            .map(|resolved| crate::core::models::is_thinking_mode(resolved.mode))
+            .unwrap_or(false);
         LlmModelInfo { supports_reasoning }
     }
 }
+
+#[allow(dead_code)]
+fn _model_event_type_is_stable(_: ModelEvent) {}
