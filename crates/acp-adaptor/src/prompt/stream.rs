@@ -3,7 +3,7 @@ use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::SemanticEvent;
 use tokio::sync::broadcast;
 
-use super::notify::{notify_reasoning, notify_text};
+use super::notify::{notify_reasoning, notify_text, notify_tool_call, notify_tool_call_update};
 
 /// Projects already-validated runtime semantic events into ACP notifications.
 /// No Gemini/protocol parsing and no tool orchestration happens here.
@@ -30,12 +30,10 @@ pub async fn project(
                     | SemanticEvent::TurnCompleted { context } => &context.turn_id,
                     SemanticEvent::ToolCallRequested { context, .. }
                     | SemanticEvent::PermissionRequested { context }
-                    | SemanticEvent::ToolExecutionStarted { context }
+                    | SemanticEvent::ToolExecutionStarted { context, .. }
                     | SemanticEvent::ToolResultReceived { context, .. } => &context.event.turn_id,
                 };
-                if event_turn != turn_id {
-                    continue;
-                }
+                if event_turn != turn_id { continue; }
 
                 match event {
                     SemanticEvent::AssistantDelta { delta, .. } => {
@@ -43,6 +41,15 @@ pub async fn project(
                     }
                     SemanticEvent::ThinkingDelta { delta, .. } => {
                         notify_reasoning(cx, session_id, message_id, delta)?;
+                    }
+                    SemanticEvent::ToolCallRequested { context, ui: Some(ui), .. } => {
+                        notify_tool_call(cx, session_id, &context.tool_call_id, &ui)?;
+                    }
+                    SemanticEvent::ToolExecutionStarted { context, ui: Some(ui) } => {
+                        notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui)?;
+                    }
+                    SemanticEvent::ToolResultReceived { context, ui: Some(ui), .. } => {
+                        notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui)?;
                     }
                     SemanticEvent::TurnCancelled { .. }
                     | SemanticEvent::TurnFailed { .. }
