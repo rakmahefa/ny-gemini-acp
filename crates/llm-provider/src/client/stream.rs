@@ -14,14 +14,14 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, ORIGI
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
-use super::config::{ENDPOINT, TOKEN_TTL, StreamItem};
+use super::config::{ENDPOINT, TOKEN_TTL, StreamItem, StreamResult};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
 
 impl Client {
     pub(crate) async fn run_turn(
         &self,
-        tx: mpsc::Sender<super::StreamItem>,
+        tx: mpsc::Sender<StreamResult>,
         prompt: String,
         refs: Vec<String>,
         resolved: &models::Resolved,
@@ -72,7 +72,7 @@ impl Client {
         decoder: &mut GeminiFrameDecoder,
         emitted: &mut String,
         emitted_tools: &mut HashSet<String>,
-        tx: &mpsc::Sender<super::StreamItem>,
+        tx: &mpsc::Sender<StreamResult>,
     ) -> anyhow::Result<Option<()>> {
         let (url, headers, body) = self.build_request(prompt, refs, resolved).await?;
         let response = self.inner.http.post(&url).headers(headers).body(body).send().await.context("envoi requête Gemini")?;
@@ -207,7 +207,7 @@ async fn emit_frame(
     frame: GeminiFrameEvent,
     emitted: &mut String,
     emitted_tools: &mut HashSet<String>,
-    tx: &mpsc::Sender<StreamItem>,
+    tx: &mpsc::Sender<StreamResult>,
 ) -> anyhow::Result<()> {
     match frame {
         GeminiFrameEvent::Text(candidate) => {
