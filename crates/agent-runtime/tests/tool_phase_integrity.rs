@@ -54,7 +54,7 @@ async fn permission_result_remains_a_valid_terminal_path() {
 
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 5);
-    assert!(matches!(events[3], SemanticEvent::ToolResultReceived { .. }));
+    assert!(matches!(&events[3], SemanticEvent::ToolResultReceived { .. }));
 }
 
 #[tokio::test]
