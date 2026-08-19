@@ -51,7 +51,7 @@ pub(super) enum ProtocolMode {
     IgnoreToolResult { closing: Option<&'static str> },
     IgnoreInlineToolResult,
     ToolBlock { kind: BlockKind, body: String, oversized: bool },
-    InlineToolCall,
+    InlineToolCall { body: String },
 }
 
 #[derive(Debug)]
