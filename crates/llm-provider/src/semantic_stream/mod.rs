@@ -10,7 +10,7 @@ use agent_runtime::ModelEvent;
 
 use self::protocol::ProtocolDetector;
 use self::reasoning::ReasoningDetector;
-use self::types::ReasoningPhase;
+use self::types::ProtocolEvent;
 
 /// Incrementally normalizes Gemini's mixed text/protocol stream into provider-neutral model events.
 ///
@@ -59,22 +59,14 @@ impl GeminiSemanticStream {
         output
     }
 
-    fn project_protocol_event(&mut self, event: types::ProtocolEvent) -> Vec<ModelEvent> {
+    fn project_protocol_event(&mut self, event: ProtocolEvent) -> Vec<ModelEvent> {
         match event {
-            types::ProtocolEvent::Text(text) => self.reasoning.feed(text),
-            types::ProtocolEvent::ToolCall(call) => vec![ModelEvent::ToolCall {
+            ProtocolEvent::Text(text) => self.reasoning.feed(text),
+            ProtocolEvent::ToolCall(call) => vec![ModelEvent::ToolCall {
                 id: call.id,
                 name: call.name,
                 arguments: call.arguments,
             }],
         }
-    }
-
-    #[allow(dead_code)]
-    fn reasoning_phase(&self) -> ReasoningPhase {
-        // Kept private and diagnostic-friendly for future invariant tests.
-        // The actual phase ownership remains inside `ReasoningDetector`.
-        let _ = &self.reasoning;
-        ReasoningPhase::Completed
     }
 }
