@@ -1,4 +1,4 @@
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 use crate::events::TurnEventEmitter;
 use crate::{LlmError, ModelEvent};
@@ -33,7 +33,7 @@ pub(crate) struct ModelRound {
 /// lifecycle events while accumulating the model round result for orchestration.
 ///
 /// `AgentLoop` deliberately owns turn/tool orchestration; this component owns the
-/// presentation-facing assistant/thinking scope transitions induced by `ModelEvent`.
+/// assistant/thinking scope transitions induced by `ModelEvent`.
 pub(crate) async fn consume_model_stream(
     mut stream: mpsc::Receiver<Result<ModelEvent, LlmError>>,
     cancellation: &crate::Cancellation,
@@ -169,14 +169,16 @@ mod tests {
     use super::*;
     use crate::events::EventBus;
     use crate::Cancellation;
-    use tokio::sync::mpsc;
 
     fn emitter() -> TurnEventEmitter {
-        TurnEventEmitter::new(
-            EventBus::new(),
+        let bus = EventBus::new();
+        let mut emitter = TurnEventEmitter::new(
+            bus,
             "sess_0123456789abcdef0123456789abcdef",
             "turn_test",
-        )
+        );
+        assert!(emitter.turn_started());
+        emitter
     }
 
     #[tokio::test]
@@ -191,6 +193,26 @@ mod tests {
 
         assert_eq!(round.text, "answer");
         assert_eq!(round.event_count, 2);
+    }
+
+    #[tokio::test]
+    async fn captures_tool_calls_without_projecting_them_as_assistant_text() {
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(Ok(ModelEvent::ToolCall {
+            id: "call-1".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"q": "rust"}),
+        })).await.unwrap();
+        drop(tx);
+
+        let mut emitter = emitter();
+        let round = consume_model_stream(rx, &Cancellation::new(), &mut emitter).await.unwrap();
+
+        assert_eq!(round.event_count, 1);
+        assert_eq!(round.text, "");
+        assert_eq!(round.tool_calls.len(), 1);
+        assert_eq!(round.tool_calls[0].id, "call-1");
+        assert_eq!(round.tool_calls[0].name, "search");
     }
 
     #[tokio::test]
