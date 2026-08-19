@@ -1,10 +1,12 @@
 mod context;
 mod guard;
+mod permission;
 
+use super::action;
 use super::content::blocks_to_parts;
 use super::notify::notify_usage;
+use super::permission::AcpToolPermissionHandler;
 use super::title::derive_title;
-use super::action;
 use agent_client_protocol::schema::v1::{MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use agent_runtime::events::TurnEventEmitter;
@@ -90,8 +92,11 @@ pub async fn run_turn(
     }
 
     let action_handler = action::shared(cx.clone(), session_id.clone());
+    let permission_handler = Arc::new(AcpToolPermissionHandler::new(cx.clone(), tools.clone()));
     let agent_loop = match AgentLoop::new(llm.clone(), tools.clone(), AgentLoopConfig::default()) {
-        Ok(loop_) => loop_.with_action_handler(action_handler),
+        Ok(loop_) => loop_
+            .with_action_handler(action_handler)
+            .with_permission_handler(permission_handler),
         Err(error) => {
             fail_before_execution(semantic);
             guard.finish().await;
