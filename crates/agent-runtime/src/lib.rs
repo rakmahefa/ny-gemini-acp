@@ -14,7 +14,8 @@ pub use events::{EventBus, EventContext, EventStream, SemanticEvent, ToolEventCo
 pub use execution::{
     AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome,
     AgentThread, AgentThreadHandle, AgentTurn, AgentTurnHandle, Cancellation, RuntimeError,
-    ThreadCommand, ThreadState, TurnManager, TurnState,
+    ThreadCommand, ThreadState, ToolPermissionDecision, ToolPermissionHandler,
+    ToolPermissionRequest, TurnManager, TurnState,
 };
 pub use providers::{
     GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
