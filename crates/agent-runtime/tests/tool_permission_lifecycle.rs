@@ -6,7 +6,7 @@ use agent_runtime::state::Session;
 use agent_runtime::{
     AgentLoop, AgentLoopConfig, Cancellation, EventBus, LlmError, LlmProvider, ModelEvent,
     ModelRequest, SemanticEvent, ToolPermissionDecision, ToolPermissionHandler,
-    ToolPermissionRequest, ToolProvider, TurnEventEmitter,
+    ToolPermissionRequest, TurnEventEmitter,
 };
 use async_trait::async_trait;
 use serde_json::json;
