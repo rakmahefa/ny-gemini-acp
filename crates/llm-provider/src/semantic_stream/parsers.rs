@@ -18,10 +18,16 @@ pub(super) fn parse_inline_tool_call(text: &str, next_id: &mut usize) -> Option<
         Some((name, id)) => (name.trim(), Some(id.trim())),
         None => (header.trim(), None),
     };
-    if name.is_empty() || body.is_empty() { return None; }
+    if name.is_empty() || body.is_empty() {
+        return None;
+    }
     let arguments = serde_json::from_str::<Value>(body).ok()?;
+    let arguments = normalize_arguments(arguments)?;
     Some(ModelToolCall {
-        id: id.filter(|id| !id.is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| allocate_call_id(next_id)),
+        id: id
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| allocate_call_id(next_id)),
         name: name.to_owned(),
         arguments,
     })
@@ -29,10 +35,37 @@ pub(super) fn parse_inline_tool_call(text: &str, next_id: &mut usize) -> Option<
 
 fn parse_tool_value(value: &Value, next_id: &mut usize) -> Option<ModelToolCall> {
     let name = value.get("name").and_then(Value::as_str)?.trim();
-    if name.is_empty() || (value.get("arguments").is_none() && value.get("args").is_none()) { return None; }
-    let arguments = value.get("arguments").or_else(|| value.get("args")).cloned().unwrap_or_else(|| json!({}));
-    let id = value.get("id").or_else(|| value.get("call_id")).and_then(Value::as_str).filter(|id| !id.trim().is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| allocate_call_id(next_id));
-    Some(ModelToolCall { id, name: name.to_owned(), arguments })
+    if name.is_empty() {
+        return None;
+    }
+    let arguments = value.get("arguments").or_else(|| value.get("args"))?.clone();
+    let arguments = normalize_arguments(arguments)?;
+    let id = value
+        .get("id")
+        .or_else(|| value.get("call_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| allocate_call_id(next_id));
+    Some(ModelToolCall {
+        id,
+        name: name.to_owned(),
+        arguments,
+    })
+}
+
+/// Tool arguments are a JSON object in the semantic contract. A few Gemini
+/// dialects serialize that object as a JSON string; accept that representation
+/// only when it decodes back into an object, never an arbitrary scalar.
+fn normalize_arguments(value: Value) -> Option<Value> {
+    match value {
+        Value::Object(_) => Some(value),
+        Value::String(raw) => {
+            let decoded = serde_json::from_str::<Value>(&raw).ok()?;
+            decoded.is_object().then_some(decoded)
+        }
+        _ => None,
+    }
 }
 
 pub(super) fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, String)>> {
@@ -58,7 +91,9 @@ fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
     let attrs = parse_attributes(inner);
     let label = attrs.get("label")?.trim();
     let query = attrs.get("query")?.trim();
-    if label.is_empty() || query.is_empty() { return None; }
+    if label.is_empty() || query.is_empty() {
+        return None;
+    }
     Some((decode_xml(label), decode_xml(query)))
 }
 
@@ -97,7 +132,12 @@ fn parse_attributes(input: &str) -> BTreeMap<String, String> {
 }
 
 fn decode_xml(input: &str) -> String {
-    input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    input
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn find_tag_end(input: &str) -> Option<usize> {

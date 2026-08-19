@@ -2,11 +2,14 @@ use agent_runtime::ModelEvent;
 use serde_json::json;
 
 use super::GeminiSemanticStream;
+use crate::core::frames::GeminiFrameEvent;
 
 fn collect(chunks: &[&str]) -> Vec<ModelEvent> {
     let mut stream = GeminiSemanticStream::new(true);
     let mut out = Vec::new();
-    for chunk in chunks { out.extend(stream.feed(chunk)); }
+    for chunk in chunks {
+        out.extend(stream.feed_text(chunk));
+    }
     out.extend(stream.finish());
     out
 }
@@ -42,11 +45,7 @@ fn detects_inline_tool_call_incrementally() {
         "\n",
     ]), vec![
         ModelEvent::TextDelta("avant\n".into()),
-        ModelEvent::ToolCall {
-            id: "gemini_call_0".into(),
-            name: "shell_exec".into(),
-            arguments: json!({"command": "pwd"}),
-        },
+        ModelEvent::ToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: json!({"command": "pwd"}) },
     ]);
 }
 
@@ -107,16 +106,55 @@ fn assistant_marker_is_normalized_without_corrupting_leading_text() {
 #[test]
 fn non_reasoning_models_pass_through_reasoning_markers() {
     let mut stream = GeminiSemanticStream::new(false);
-    let mut events = stream.feed("<thinking>hidden</thinking>answer");
+    let mut events = stream.feed_text("<thinking>hidden</thinking>answer");
     events.extend(stream.finish());
     assert_eq!(events, vec![ModelEvent::TextDelta("<thinking>hidden</thinking>answer".into())]);
 }
 
 #[test]
+fn structured_duplicate_tool_call_is_suppressed_at_semantic_boundary() {
+    let mut stream = GeminiSemanticStream::new(true);
+    let frame = || GeminiFrameEvent::ToolCall {
+        id: "c1".into(),
+        name: "glob".into(),
+        arguments: json!({"pattern": "*"}),
+    };
+
+    assert_eq!(
+        stream.feed(frame()),
+        vec![ModelEvent::ToolCall {
+            id: "c1".into(),
+            name: "glob".into(),
+            arguments: json!({"pattern": "*"}),
+        }]
+    );
+    assert!(stream.feed(frame()).is_empty());
+}
+
+#[test]
+fn malformed_semantic_tool_call_is_rejected() {
+    let mut stream = GeminiSemanticStream::new(true);
+    assert!(stream
+        .feed(GeminiFrameEvent::ToolCall {
+            id: "   ".into(),
+            name: "glob".into(),
+            arguments: json!({}),
+        })
+        .is_empty());
+    assert!(stream
+        .feed(GeminiFrameEvent::ToolCall {
+            id: "c2".into(),
+            name: "glob".into(),
+            arguments: json!("not-an-object"),
+        })
+        .is_empty());
+}
+
+#[test]
 fn finish_is_idempotent() {
     let mut stream = GeminiSemanticStream::new(true);
-    assert_eq!(stream.feed("answer"), vec![ModelEvent::TextDelta("answer".into())]);
+    assert_eq!(stream.feed_text("answer"), vec![ModelEvent::TextDelta("answer".into())]);
     assert!(stream.finish().is_empty());
     assert!(stream.finish().is_empty());
-    assert!(stream.feed("late").is_empty());
+    assert!(stream.feed_text("late").is_empty());
 }

@@ -73,8 +73,16 @@ fn structured_tool_entries_are_rendered_without_reencoding() {
     });
 
     let p = build_prompt(&s, None);
-    assert!(p.contains("[tool_call shell_exec id=call-1]"));
-    assert!(p.contains("[tool_result shell_exec id=call-1 status=ok] all green"));
+    assert!(p.contains("```tool_call\n"));
+    assert!(p.contains("\"id\":\"call-1\""));
+    assert!(p.contains("\"name\":\"shell_exec\""));
+    assert!(p.contains("\"arguments\":{\"command\":\"cargo test\"}"));
+    assert!(p.contains("[Tool result]:"));
+    assert!(p.contains("\"tool\":\"shell_exec\""));
+    assert!(p.contains("\"status\":\"ok\""));
+    assert!(p.contains("\"content\":\"all green\""));
+    assert!(!p.contains("[tool_call shell_exec id=call-1]"));
+    assert!(!p.contains("[tool_result shell_exec id=call-1 status=ok] all green"));
 }
 
 #[test]
