@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn tool_only_stream_is_not_empty() {
         let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {}}});
-        let raw = format!(")]}\'\n{}\n", wire_line(inner));
+        let raw = format!(")]}\\'\n{}\n", wire_line(inner));
         assert!(!is_empty_stream(&raw));
     }
     #[test]
@@ -282,7 +282,7 @@ mod tests {
     }
     #[test]
     fn final_text_uses_decoder() {
-        let raw = format!(")]}}'\n{}\n", wire_line(inner_with_candidates(json!([["c", ["court"]]]))));
+        let raw = format!(")]}\\'\n{}\n", wire_line(inner_with_candidates(json!([["c", ["court"]]]))));
         assert_eq!(final_text(&raw).unwrap(), "court");
     }
     #[test]
