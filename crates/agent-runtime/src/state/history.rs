@@ -1,9 +1,10 @@
 //! Canonical conversation history owned by the agent runtime.
 //!
-//! The runtime stores semantic history instead of making persisted tool
-//! lifecycles depend on display strings. The `push((Role, String))` adapter
-//! remains temporarily supported so older execution paths can migrate without
-//! breaking persisted sessions.
+//! `History` owns a canonical semantic representation while temporarily exposing
+//! a Vec-like legacy view. This lets the existing execution loop migrate without
+//! flattening the persisted model back into provider-specific strings.
+
+use std::ops::{Deref, DerefMut};
 
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
@@ -57,13 +58,6 @@ impl HistoryEntry {
         }
     }
 
-    pub fn text(&self) -> &str {
-        match self {
-            Self::User { content } | Self::Assistant { content } | Self::ToolResult { content, .. } => content,
-            Self::ToolCall { .. } => "",
-        }
-    }
-
     pub fn approx_chars(&self) -> usize {
         match self {
             Self::User { content } | Self::Assistant { content } => content.chars().count(),
@@ -77,10 +71,20 @@ impl HistoryEntry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, Default)]
 pub struct History {
-    entries: Vec<HistoryEntry>,
+    canonical: Vec<HistoryEntry>,
+    legacy: Vec<(Role, String)>,
+    dirty: bool,
 }
+
+impl PartialEq for History {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries() == other.entries()
+    }
+}
+
+impl Eq for History {}
 
 impl History {
     pub fn new() -> Self {
@@ -88,38 +92,38 @@ impl History {
     }
 
     pub fn len(&self) -> usize {
-        self.entries.len()
+        self.entries().len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries().is_empty()
     }
 
-    pub fn first(&self) -> Option<&HistoryEntry> {
-        self.entries.first()
+    pub fn first(&self) -> Option<HistoryEntry> {
+        self.entries().into_iter().next()
     }
 
-    pub fn last(&self) -> Option<&HistoryEntry> {
-        self.entries.last()
+    pub fn last(&self) -> Option<HistoryEntry> {
+        self.entries().into_iter().last()
     }
 
     pub fn push<E>(&mut self, entry: E)
     where
         E: Into<HistoryEntry>,
     {
-        self.entries.push(entry.into());
+        self.push_canonical(entry.into());
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
-        self.push(HistoryEntry::User { content: content.into() });
+        self.push_canonical(HistoryEntry::User { content: content.into() });
     }
 
     pub fn push_assistant(&mut self, content: impl Into<String>) {
-        self.push(HistoryEntry::Assistant { content: content.into() });
+        self.push_canonical(HistoryEntry::Assistant { content: content.into() });
     }
 
     pub fn push_tool_call(&mut self, id: impl Into<String>, name: impl Into<String>, arguments: Value) {
-        self.push(HistoryEntry::ToolCall { id: id.into(), name: name.into(), arguments });
+        self.push_canonical(HistoryEntry::ToolCall { id: id.into(), name: name.into(), arguments });
     }
 
     pub fn push_tool_result(
@@ -129,7 +133,7 @@ impl History {
         content: impl Into<String>,
         is_ok: bool,
     ) {
-        self.push(HistoryEntry::ToolResult {
+        self.push_canonical(HistoryEntry::ToolResult {
             id: id.into(),
             name: name.into(),
             content: content.into(),
@@ -137,77 +141,148 @@ impl History {
         });
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &HistoryEntry> {
-        self.entries.iter()
+    /// Returns an owned canonical view so callers can safely inspect history even
+    /// while the compatibility Vec view has been mutated by older execution code.
+    pub fn entries(&self) -> Vec<HistoryEntry> {
+        if self.dirty {
+            Self::normalize_legacy_entries(&self.legacy)
+        } else {
+            self.canonical.clone()
+        }
     }
 
     pub fn replace(&mut self, entries: Vec<HistoryEntry>) {
-        self.entries = entries;
+        self.canonical = entries.clone();
+        self.legacy = entries.into_iter().map(to_legacy).collect();
+        self.dirty = false;
     }
 
-    pub fn to_vec(&self) -> Vec<HistoryEntry> {
-        self.entries.clone()
-    }
-
-    pub fn formatted_chars(&self) -> usize {
-        self.entries.iter().map(HistoryEntry::approx_chars).sum()
-    }
-
-    /// Converts legacy flattened tool messages produced by the pre-history-model
-    /// execution path into canonical tool-call/result entries.
     pub fn normalize_legacy(&mut self) {
-        let mut normalized = Vec::with_capacity(self.entries.len());
-        let mut unresolved: Vec<(String, String)> = Vec::new();
+        self.canonical = Self::normalize_legacy_entries(&self.legacy);
+        self.dirty = false;
+    }
 
-        for entry in self.entries.drain(..) {
-            match entry {
-                HistoryEntry::Assistant { content } => {
+    fn push_canonical(&mut self, entry: HistoryEntry) {
+        self.legacy.push(to_legacy(entry.clone()));
+        self.canonical.push(entry);
+        self.dirty = false;
+    }
+
+    fn normalize_legacy_entries(legacy: &[(Role, String)]) -> Vec<HistoryEntry> {
+        let mut normalized = Vec::with_capacity(legacy.len());
+        let mut pending_tool_ids: Vec<(String, String)> = Vec::new();
+
+        for (role, content) in legacy {
+            match role {
+                Role::User => normalized.push(HistoryEntry::User { content: content.clone() }),
+                Role::Assistant => {
                     let mut plain = Vec::new();
                     for line in content.lines() {
                         if let Some((name, id, arguments)) = parse_tool_call_line(line) {
                             if !plain.is_empty() {
-                                normalized.push(HistoryEntry::Assistant {
-                                    content: plain.join("\n"),
-                                });
+                                normalized.push(HistoryEntry::Assistant { content: plain.join("\n") });
                                 plain.clear();
                             }
-                            unresolved.push((name.clone(), id.clone()));
+                            pending_tool_ids.push((name.clone(), id.clone()));
                             normalized.push(HistoryEntry::ToolCall { id, name, arguments });
                         } else {
                             plain.push(line.to_owned());
                         }
                     }
                     if !plain.is_empty() {
-                        normalized.push(HistoryEntry::Assistant {
-                            content: plain.join("\n"),
-                        });
+                        normalized.push(HistoryEntry::Assistant { content: plain.join("\n") });
                     }
                 }
-                HistoryEntry::ToolResult {
-                    id,
-                    name,
-                    content,
-                    is_ok,
-                } if id.is_empty() && name == "legacy" => {
-                    let (resolved_name, resolved_id) = unresolved
-                        .iter()
-                        .rev()
-                        .next()
-                        .cloned()
-                        .unwrap_or_else(|| (name.clone(), id.clone()));
-                    unresolved.pop();
+                Role::Tool => {
+                    let (name, id, is_ok, clean_content) = parse_tool_result(content)
+                        .unwrap_or_else(|| ("legacy".to_owned(), String::new(), true, content.clone()));
+                    if id.is_empty() && name != "legacy" {
+                        if let Some(position) = pending_tool_ids.iter().rposition(|(candidate, _)| candidate == &name) {
+                            let resolved = pending_tool_ids.remove(position);
+                            normalized.push(HistoryEntry::ToolResult {
+                                id: resolved.1,
+                                name,
+                                content: clean_content,
+                                is_ok,
+                            });
+                            continue;
+                        }
+                    }
                     normalized.push(HistoryEntry::ToolResult {
-                        id: resolved_id,
-                        name: resolved_name,
-                        content,
+                        id,
+                        name,
+                        content: clean_content,
                         is_ok,
                     });
                 }
-                other => normalized.push(other),
             }
         }
+        normalized
+    }
+}
 
-        self.entries = normalized;
+impl Deref for History {
+    type Target = Vec<(Role, String)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.legacy
+    }
+}
+
+impl DerefMut for History {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.dirty = true;
+        &mut self.legacy
+    }
+}
+
+impl Serialize for History {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.entries().serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for History {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = Value::deserialize(deserializer)?;
+        if let Ok(entries) = serde_json::from_value::<Vec<HistoryEntry>>(raw.clone()) {
+            let legacy = entries.iter().cloned().map(to_legacy).collect();
+            return Ok(Self { canonical: entries, legacy, dirty: false });
+        }
+
+        let legacy = serde_json::from_value::<Vec<(Role, String)>>(raw)
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            canonical: Self::normalize_legacy_entries(&legacy),
+            legacy,
+            dirty: false,
+        })
+    }
+}
+
+fn to_legacy(entry: HistoryEntry) -> (Role, String) {
+    match entry {
+        HistoryEntry::User { content } => (Role::User, content),
+        HistoryEntry::Assistant { content } => (Role::Assistant, content),
+        HistoryEntry::ToolCall { id, name, arguments } => (
+            Role::Assistant,
+            format!("[tool_call {name} id={id}] {arguments}"),
+        ),
+        HistoryEntry::ToolResult {
+            id,
+            name,
+            content,
+            is_ok,
+        } => (
+            Role::Tool,
+            format!("[tool_result {name} id={id} status={}] {content}", if is_ok { "ok" } else { "error" }),
+        ),
     }
 }
 
@@ -226,21 +301,20 @@ fn parse_tool_call_line(line: &str) -> Option<(String, String, Value)> {
     Some((name.to_owned(), id.to_owned(), value))
 }
 
-impl<'de> Deserialize<'de> for History {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = Value::deserialize(deserializer)?;
-        if let Ok(entries) = serde_json::from_value::<Vec<HistoryEntry>>(raw.clone()) {
-            return Ok(Self { entries });
-        }
-
-        let legacy = serde_json::from_value::<Vec<(Role, String)>>(raw)
-            .map_err(serde::de::Error::custom)?;
-        let entries = legacy.into_iter().map(HistoryEntry::from).collect();
-        Ok(Self { entries })
-    }
+fn parse_tool_result(content: &str) -> Option<(String, String, bool, String)> {
+    let rest = content.strip_prefix("[tool_result ")?;
+    let end = rest.find(']')?;
+    let header = &rest[..end];
+    let body = rest[end + 1..].trim().to_owned();
+    let mut parts = header.split_whitespace();
+    let name = parts.next()?.to_owned();
+    let id = parts
+        .find_map(|part| part.strip_prefix("id=").map(str::to_owned))
+        .unwrap_or_default();
+    let status = parts
+        .find_map(|part| part.strip_prefix("status=").map(str::to_owned))
+        .unwrap_or_else(|| "ok".to_owned());
+    Some((name, id, status == "ok", body))
 }
 
 #[cfg(test)]
@@ -282,8 +356,9 @@ mod tests {
         history.push((Role::Tool, "[tool_result shell_exec status=ok] all green".into()));
         history.normalize_legacy();
 
-        assert!(matches!(history.iter().nth(1), Some(HistoryEntry::Assistant { content }) if content == "I will run them."));
-        assert!(matches!(history.iter().nth(2), Some(HistoryEntry::ToolCall { id, name, .. }) if id == "call-1" && name == "shell_exec"));
-        assert!(matches!(history.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "shell_exec" && content.contains("all green") && *is_ok));
+        let entries = history.entries();
+        assert!(matches!(entries.get(1), Some(HistoryEntry::Assistant { content }) if content == "I will run them."));
+        assert!(matches!(entries.get(2), Some(HistoryEntry::ToolCall { id, name, .. }) if id == "call-1" && name == "shell_exec"));
+        assert!(matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "shell_exec" && content.contains("all green") && *is_ok));
     }
 }
