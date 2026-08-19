@@ -38,9 +38,9 @@ fn tool_call_projection_keeps_structured_input_and_output() {
     .completed(true, Some(serde_json::json!({"text":"fn main() {}"})));
 
     let call = tool_call_from_ui("turn_1/tool_0", &ui);
-    assert_eq!(call.id.0, "turn_1/tool_0");
+    assert_eq!(call.tool_call_id.0, "turn_1/tool_0");
     assert_eq!(call.kind, ToolKind::Read);
     assert_eq!(call.status, ToolCallStatus::Completed);
-    assert_eq!(call.raw_input, serde_json::json!({"path":"src/main.rs","offset":10,"limit":20}));
+    assert_eq!(call.raw_input, Some(serde_json::json!({"path":"src/main.rs","offset":10,"limit":20})));
     assert_eq!(call.raw_output, Some(serde_json::json!({"text":"fn main() {}"})));
 }
