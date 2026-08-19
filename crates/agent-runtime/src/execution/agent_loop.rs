@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
-
-use crate::events::TurnEventEmitter;
+use crate::events::{
+    consume_model_stream, ModelProjectionError, ModelRound, PendingToolCall, TurnEventEmitter,
+};
 use crate::state::{Role, Session};
 use crate::{
     Cancellation, GenerationOptions, LlmError, LlmProvider, ModelEvent, ModelRequest,
@@ -79,14 +79,9 @@ pub enum AgentLoopError {
 
 /// Provider-neutral model/tool orchestration for one logical agent turn.
 ///
-/// Hardening invariants enforced here:
-/// - session identity/model must be usable before a provider request is made;
-/// - every tool call in a round is validated before any tool side effect;
-/// - tool-call ids must be unique within a model turn;
-/// - reasoning cannot resume after assistant text has started;
-/// - active assistant/thinking scopes are closed on stream failure or cancellation;
-/// - cancellation is checked before each externally visible state mutation;
-/// - model rounds and tool-call counts remain bounded by configuration.
+/// The loop owns turn orchestration, tool execution, history updates, and
+/// execution bounds. Model-event lifecycle projection lives in the events
+/// subsystem so provider streams cannot leak presentation concerns here.
 pub struct AgentLoop {
     llm: Arc<dyn LlmProvider>,
     tools: Arc<dyn ToolProvider>,
@@ -260,20 +255,6 @@ impl AgentLoop {
     }
 }
 
-#[derive(Debug)]
-struct PendingToolCall {
-    id: String,
-    name: String,
-    arguments: serde_json::Value,
-}
-
-#[derive(Debug)]
-struct RoundResult {
-    text: String,
-    tool_calls: Vec<PendingToolCall>,
-    event_count: usize,
-}
-
 fn validate_session(session: &Session) -> Result<(), AgentLoopError> {
     if session.id.trim().is_empty() {
         return Err(AgentLoopError::InvalidSession(
@@ -325,132 +306,28 @@ fn ensure_not_cancelled(
 }
 
 async fn consume_stream(
-    mut stream: mpsc::Receiver<Result<ModelEvent, LlmError>>,
+    stream: crate::LlmStream,
     cancellation: &Cancellation,
     emitter: &mut TurnEventEmitter,
-) -> Result<RoundResult, AgentLoopError> {
-    let mut cancel_rx = cancellation.subscribe();
-    let mut text = String::new();
-    let mut tool_calls = Vec::new();
-    let mut event_count = 0usize;
-    let mut assistant_active = false;
-    let mut thinking_active = false;
-    let mut text_started = false;
-
-    loop {
-        let item = tokio::select! {
-            item = stream.recv() => item,
-            changed = cancel_rx.changed() => {
-                if changed.is_ok() && *cancel_rx.borrow() {
-                    close_active_scopes(emitter, &mut thinking_active, &mut assistant_active);
-                    let _ = emitter.turn_cancelled();
-                    return Err(AgentLoopError::Cancelled);
-                }
-                continue;
-            }
-        };
-
-        let Some(item) = item else {
-            break;
-        };
-
-        let event = match item {
-            Ok(event) => event,
-            Err(error) => {
-                close_active_scopes(emitter, &mut thinking_active, &mut assistant_active);
-                let _ = emitter.turn_failed();
-                return Err(AgentLoopError::Llm(error));
-            }
-        };
-        event_count = event_count.saturating_add(1);
-
-        match event {
-            ModelEvent::ReasoningDelta(delta) => {
-                if text_started {
-                    close_active_scopes(emitter, &mut thinking_active, &mut assistant_active);
-                    let _ = emitter.turn_failed();
-                    return Err(AgentLoopError::InvalidToolCall(
-                        "reasoning resumed after assistant text started".into(),
-                    ));
-                }
-                if !assistant_active {
-                    if !emitter.assistant_started() {
-                        let _ = emitter.turn_failed();
-                        return Err(AgentLoopError::SemanticEventRejected);
-                    }
-                    assistant_active = true;
-                }
-                if !thinking_active {
-                    if !emitter.thinking_started() {
-                        let _ = emitter.turn_failed();
-                        return Err(AgentLoopError::SemanticEventRejected);
-                    }
-                    thinking_active = true;
-                }
-                if !emitter.thinking_delta(delta) {
-                    let _ = emitter.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
-            }
-            ModelEvent::TextDelta(delta) => {
-                if !assistant_active {
-                    if !emitter.assistant_started() {
-                        let _ = emitter.turn_failed();
-                        return Err(AgentLoopError::SemanticEventRejected);
-                    }
-                    assistant_active = true;
-                }
-                if thinking_active {
-                    if !emitter.thinking_completed() {
-                        let _ = emitter.turn_failed();
-                        return Err(AgentLoopError::SemanticEventRejected);
-                    }
-                    thinking_active = false;
-                }
-                if !delta.is_empty() {
-                    text_started = true;
-                }
-                if !emitter.assistant_delta(delta.clone()) {
-                    let _ = emitter.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
-                text.push_str(&delta);
-            }
-            ModelEvent::ToolCall { id, name, arguments } => {
-                tool_calls.push(PendingToolCall { id, name, arguments });
-            }
-            ModelEvent::Usage { .. } => {}
+) -> Result<ModelRound, AgentLoopError> {
+    match consume_model_stream(stream, cancellation, emitter).await {
+        Ok(round) => Ok(round),
+        Err(ModelProjectionError::Cancelled) => {
+            let _ = emitter.turn_cancelled();
+            Err(AgentLoopError::Cancelled)
         }
-    }
-
-    if thinking_active && !emitter.thinking_completed() {
-        let _ = emitter.turn_failed();
-        return Err(AgentLoopError::SemanticEventRejected);
-    }
-    if assistant_active && !emitter.assistant_completed() {
-        let _ = emitter.turn_failed();
-        return Err(AgentLoopError::SemanticEventRejected);
-    }
-
-    Ok(RoundResult {
-        text,
-        tool_calls,
-        event_count,
-    })
-}
-
-fn close_active_scopes(
-    emitter: &mut TurnEventEmitter,
-    thinking_active: &mut bool,
-    assistant_active: &mut bool,
-) {
-    if *thinking_active {
-        let _ = emitter.thinking_completed();
-        *thinking_active = false;
-    }
-    if *assistant_active {
-        let _ = emitter.assistant_completed();
-        *assistant_active = false;
+        Err(ModelProjectionError::Llm(error)) => {
+            let _ = emitter.turn_failed();
+            Err(AgentLoopError::Llm(error))
+        }
+        Err(ModelProjectionError::InvalidSequence(message)) => {
+            let _ = emitter.turn_failed();
+            Err(AgentLoopError::InvalidToolCall(message))
+        }
+        Err(ModelProjectionError::SemanticEventRejected) => {
+            let _ = emitter.turn_failed();
+            Err(AgentLoopError::SemanticEventRejected)
+        }
     }
 }
 
@@ -484,6 +361,7 @@ mod tests {
     use serde_json::json;
     use std::collections::VecDeque;
     use std::sync::Mutex;
+    use tokio::sync::mpsc;
 
     #[derive(Default)]
     struct FakeLlm {
