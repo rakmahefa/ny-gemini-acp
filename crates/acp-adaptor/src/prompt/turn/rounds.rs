@@ -64,7 +64,6 @@ pub(crate) async fn run(
     'rounds: for round in 0..max_turns {
         tool_round = round;
         if *ctx.cancel.borrow() {
-            ctx.semantic.turn_cancelled();
             return Err(RoundError::Stop(StopReason::Cancelled));
         }
 
@@ -96,7 +95,6 @@ pub(crate) async fn run(
                     overflow_retry_count += 1;
                     continue;
                 }
-                ctx.semantic.turn_failed();
                 return Err(RoundError::Stop(if overflow {
                     StopReason::MaxTokens
                 } else {
@@ -124,11 +122,9 @@ pub(crate) async fn run(
         let _ = interaction_groups;
 
         if matches!(outcome, stream::StreamOutcome::Cancelled) {
-            ctx.semantic.turn_cancelled();
             return Err(RoundError::Stop(StopReason::Cancelled));
         }
         if let stream::StreamOutcome::Failed(error) = &outcome {
-            ctx.semantic.turn_failed();
             return Err(RoundError::Stop(map_stop_reason_from_error(error)));
         }
 
@@ -178,7 +174,6 @@ pub(crate) async fn run(
             );
             for call in &executable_calls {
                 if *ctx.cancel.borrow() {
-                    ctx.semantic.turn_cancelled();
                     return Err(RoundError::Stop(StopReason::Cancelled));
                 }
                 let result = executor
@@ -220,7 +215,6 @@ pub(crate) async fn run(
                 }
                 Ok(FollowUpOutcome::Rejected) => continue,
                 Ok(FollowUpOutcome::Cancelled) => {
-                    ctx.semantic.turn_cancelled();
                     return Err(RoundError::Stop(StopReason::Cancelled));
                 }
                 Err(error) => {
