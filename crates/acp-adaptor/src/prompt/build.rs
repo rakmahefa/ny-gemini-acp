@@ -16,6 +16,12 @@ fn format_entry(entry: &HistoryEntry) -> String {
             name,
             content,
             is_ok,
+        } if name == "legacy" && id.is_empty() => format!("{content}\n\n"),
+        HistoryEntry::ToolResult {
+            id,
+            name,
+            content,
+            is_ok,
         } => {
             let status = if *is_ok { "ok" } else { "error" };
             format!("[tool_result {name} id={id} status={status}] {content}\n\n")
@@ -34,13 +40,13 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
         Some(ts) => format!("{system}{ts}\n\n"),
         None => system,
     };
-    let n = session.history.len();
+    let n = session.messages.len();
     if n == 0 {
         return system;
     }
 
     let lens: Vec<usize> = session
-        .history
+        .messages
         .iter()
         .map(|entry| format_entry(entry).chars().count())
         .collect();
@@ -67,7 +73,7 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
 }
 
 fn format_history(session: &Session, start: usize) -> String {
-    session.history.iter().skip(start).map(format_entry).collect()
+    session.messages.iter().skip(start).map(format_entry).collect()
 }
 
 #[cfg(test)]
