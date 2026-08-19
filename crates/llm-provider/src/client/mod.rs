@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-pub use config::{ClientInner, Config, StreamItem, DEFAULT_BL};
+pub use config::{ClientInner, Config, StreamItem, StreamResult, DEFAULT_BL};
 
 #[derive(Clone)]
 pub struct Client {
@@ -48,7 +48,7 @@ impl Client {
         Ok(client)
     }
 
-    pub async fn stream(&self, prompt: &str, model: &str, think: Option<u32>, refs: &[String]) -> Result<mpsc::Receiver<StreamItem>> {
+    pub async fn stream(&self, prompt: &str, model: &str, think: Option<u32>, refs: &[String]) -> Result<mpsc::Receiver<StreamResult>> {
         let model_arg = match think {
             Some(t) => format!("{model}@think={t}"),
             None => model.to_string(),
