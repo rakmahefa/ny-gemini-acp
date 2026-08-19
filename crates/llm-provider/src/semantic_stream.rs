@@ -15,7 +15,6 @@ const MAX_TOOL_BLOCK: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReasoningPhase { Detecting, Response, Reasoning, Completed }
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind { ToolCall, FunctionCall, SingleQuoteToolCall }
 impl BlockKind {
@@ -24,22 +23,10 @@ impl BlockKind {
 }
 
 #[derive(Debug)]
-enum ProtocolMode {
-    Normal,
-    IgnoreToolResult { closing: Option<&'static str> },
-    ToolBlock { kind: BlockKind, body: String, oversized: bool },
-}
-
+enum ProtocolMode { Normal, IgnoreToolResult { closing: Option<&'static str> }, ToolBlock { kind: BlockKind, body: String, oversized: bool } }
 #[derive(Debug)]
-struct ProtocolDetector {
-    mode: ProtocolMode,
-    pending: String,
-    at_stream_start: bool,
-    next_call_id: usize,
-}
-impl Default for ProtocolDetector {
-    fn default() -> Self { Self { mode: ProtocolMode::Normal, pending: String::new(), at_stream_start: true, next_call_id: 0 } }
-}
+struct ProtocolDetector { mode: ProtocolMode, pending: String, at_stream_start: bool, next_call_id: usize }
+impl Default for ProtocolDetector { fn default() -> Self { Self { mode: ProtocolMode::Normal, pending: String::new(), at_stream_start: true, next_call_id: 0 } } }
 
 impl ProtocolDetector {
     fn feed(&mut self, chunk: &str) -> Vec<ProtocolEvent> {
@@ -48,14 +35,7 @@ impl ProtocolDetector {
         if self.pending.len() > MAX_PENDING { self.pending.clear(); self.mode = ProtocolMode::Normal; return Vec::new(); }
         self.drain(false)
     }
-
-    fn finish(&mut self) -> Vec<ProtocolEvent> {
-        let events = self.drain(true);
-        self.mode = ProtocolMode::Normal;
-        self.pending.clear();
-        events
-    }
-
+    fn finish(&mut self) -> Vec<ProtocolEvent> { let events = self.drain(true); self.mode = ProtocolMode::Normal; self.pending.clear(); events }
     fn drain(&mut self, final_flush: bool) -> Vec<ProtocolEvent> {
         let mut events = Vec::new();
         loop {
@@ -68,7 +48,6 @@ impl ProtocolDetector {
         }
         events
     }
-
     fn drain_normal(&mut self, events: &mut Vec<ProtocolEvent>, final_flush: bool) -> bool {
         if let Some(start) = self.pending.find(TOOL_RESULT_PREFIX).or_else(|| self.pending.find(TOOL_RESULT_ENVELOPE)) {
             if start > 0 {
@@ -78,20 +57,14 @@ impl ProtocolDetector {
                 self.at_stream_start = false;
                 return true;
             }
-            let Some(newline) = self.pending.find('\n') else {
-                if final_flush { self.pending.clear(); self.mode = ProtocolMode::Normal; }
-                return false;
-            };
+            let Some(newline) = self.pending.find('\n') else { if final_flush { self.pending.clear(); } return false; };
             let first_line = self.pending[..newline].trim_end_matches(['\r','\n']);
-            let closing = if first_line.contains(TOOL_CALL_FENCE) || first_line.contains(FUNCTION_CALL_FENCE) { Some("```") }
-                else if first_line.contains(TOOL_CALL_SINGLE_QUOTE_FENCE) { Some("'''") }
-                else { None };
+            let closing = if first_line.contains(TOOL_CALL_FENCE) || first_line.contains(FUNCTION_CALL_FENCE) { Some("```") } else if first_line.contains(TOOL_CALL_SINGLE_QUOTE_FENCE) { Some("'''") } else { None };
             self.pending.drain(..newline + 1);
             self.mode = ProtocolMode::IgnoreToolResult { closing };
             self.at_stream_start = false;
             return true;
         }
-
         for kind in [BlockKind::ToolCall, BlockKind::SingleQuoteToolCall, BlockKind::FunctionCall] {
             if self.pending.starts_with(kind.opening()) {
                 if !self.pending[kind.opening().len()..].contains('\n') && !final_flush { return false; }
@@ -102,7 +75,6 @@ impl ProtocolDetector {
             }
             if is_prefix(&self.pending, kind.opening()) { return false; }
         }
-
         if let Some(start) = self.pending.find(FOLLOW_UP_PREFIX) {
             if start > 0 {
                 let text = self.pending[..start].to_owned();
@@ -113,17 +85,11 @@ impl ProtocolDetector {
             }
             let candidate = self.pending.clone();
             match parse_follow_up_candidates(&candidate) {
-                Some(_) => {
-                    self.pending.clear();
-                    self.emit_follow_ups(&candidate, events);
-                    self.at_stream_start = false;
-                    return true;
-                }
+                Some(_) => { self.pending.clear(); self.emit_follow_ups(&candidate, events); self.at_stream_start = false; return true; }
                 None if !final_flush && candidate.len() <= MAX_FOLLOW_UP => return false,
                 None => { self.pending.clear(); self.at_stream_start = false; return true; }
             }
         }
-
         if self.at_stream_start {
             let trimmed = self.pending.trim_start();
             if let Some(call) = parse_bare_json(trimmed, &mut self.next_call_id) {
@@ -133,39 +99,28 @@ impl ProtocolDetector {
                 return true;
             }
         }
-
         if self.pending.is_empty() { return false; }
         let text = std::mem::take(&mut self.pending);
         self.emit_text(&text, events);
         self.at_stream_start = false;
         !final_flush
     }
-
     fn drain_tool_result(&mut self, closing: Option<&'static str>, final_flush: bool) -> bool {
         match closing {
             Some(marker) => {
                 if self.pending == marker { self.pending.clear(); self.mode = ProtocolMode::Normal; return true; }
                 let needle = format!("\n{marker}");
-                if let Some(index) = self.pending.find(&needle) {
-                    self.pending.drain(..index + needle.len());
-                    self.mode = ProtocolMode::Normal;
-                    return true;
-                }
+                if let Some(index) = self.pending.find(&needle) { self.pending.drain(..index + needle.len()); self.mode = ProtocolMode::Normal; return true; }
                 if final_flush { self.pending.clear(); self.mode = ProtocolMode::Normal; }
                 false
             }
             None => {
-                if let Some(index) = self.pending.find('\n') {
-                    self.pending.drain(..index + 1);
-                    self.mode = ProtocolMode::Normal;
-                    return true;
-                }
+                if let Some(index) = self.pending.find('\n') { self.pending.drain(..index + 1); self.mode = ProtocolMode::Normal; return true; }
                 if final_flush { self.pending.clear(); self.mode = ProtocolMode::Normal; }
                 false
             }
         }
     }
-
     fn drain_tool_block(&mut self, events: &mut Vec<ProtocolEvent>, final_flush: bool) -> bool {
         let closing = match &self.mode { ProtocolMode::ToolBlock { kind, .. } => kind.closing(), _ => unreachable!() };
         let Some(end) = self.pending.find(closing) else {
@@ -185,7 +140,6 @@ impl ProtocolDetector {
         if !oversized { self.emit_tool_block(kind, &body_text, events); }
         true
     }
-
     fn emit_text(&self, text: &str, events: &mut Vec<ProtocolEvent>) { if !text.is_empty() { events.push(ProtocolEvent::Text(normalize_assistant_marker(text))); } }
     fn emit_tool_block(&mut self, _kind: BlockKind, body: &str, events: &mut Vec<ProtocolEvent>) {
         let Ok(value) = serde_json::from_str::<Value>(body.trim()) else { return; };
@@ -267,7 +221,7 @@ fn parse_bare_json(text: &str, next_id: &mut usize) -> Option<ModelToolCall> { l
 fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, String)>> { let mut cursor = 0; let mut found = false; let mut calls = Vec::new(); while let Some(relative_start) = text[cursor..].find(FOLLOW_UP_PREFIX) { found = true; let start = cursor + relative_start; let after = start + FOLLOW_UP_PREFIX.len(); let end = find_tag_end(&text[after..])?; let absolute_end = after + end; let tag = &text[start..=absolute_end]; calls.push(parse_follow_up_tag(tag)?); cursor = absolute_end + 1; } if found { Some(calls) } else { None } }
 fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> { let inner = tag.strip_prefix(FOLLOW_UP_PREFIX)?.strip_suffix('>')?.trim(); let inner = inner.strip_suffix('/').unwrap_or(inner).trim(); let attrs = parse_attributes(inner); let label = attrs.get("label")?.trim(); let query = attrs.get("query")?.trim(); if label.is_empty() || query.is_empty() { return None; } Some((decode_xml(label), decode_xml(query))) }
 fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> { let mut attrs = std::collections::BTreeMap::new(); let bytes = input.as_bytes(); let mut index = 0; while index < bytes.len() { while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; } if index >= bytes.len() || bytes[index] == b'/' { break; } let key_start = index; while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' { index += 1; } if key_start == index { index += 1; continue; } let key = &input[key_start..index]; while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; } if index >= bytes.len() || bytes[index] != b'=' { break; } index += 1; while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; } if index >= bytes.len() { break; } let value = if bytes[index] == b'\'' || bytes[index] == b'"' { let quote = bytes[index]; index += 1; let value_start = index; while index < bytes.len() && bytes[index] != quote { index += 1; } let value = input[value_start..index].to_owned(); if index < bytes.len() { index += 1; } value } else { let value_start = index; while index < bytes.len() && !bytes[index].is_ascii_whitespace() { index += 1; } input[value_start..index].to_owned() }; attrs.insert(key.to_ascii_lowercase(), value); } attrs }
-fn decode_xml(input: &str) -> String { input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">).replace("&amp;", "&") }
+fn decode_xml(input: &str) -> String { input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&") }
 fn find_tag_end(input: &str) -> Option<usize> { let mut quote = None; for (index, byte) in input.as_bytes().iter().copied().enumerate() { match quote { Some(current) if byte == current => quote = None, Some(_) => {}, None if byte == b'\'' || byte == b'"' => quote = Some(byte), None if byte == b'>' => return Some(index), None => {} } } None }
 
 #[cfg(test)]
