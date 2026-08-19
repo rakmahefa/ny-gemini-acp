@@ -8,7 +8,7 @@ use tokio::sync::{watch, RwLock};
 use crate::Cancellation;
 
 mod busy;
-mod history;
+pub mod history;
 mod persistence;
 mod snapshot;
 pub(crate) mod turn_support;
@@ -108,16 +108,17 @@ impl Store {
 
         let partial = turn_support::take_partial_output(id);
         if !partial.trim().is_empty()
-            && matches!(session.history.last(), Some(HistoryEntry::User { .. }))
+            && matches!(session.messages.last(), Some(HistoryEntry::User { .. }))
         {
-            session.history.push_assistant(partial);
+            session.messages.push_assistant(partial);
         }
+        session.messages.normalize_legacy();
 
         session.updated_at = crate::time::now_iso();
         session.turn_count += 1;
         if let Some(current) = self.get(id).await {
-            if !current.history.is_empty() {
-                let snap_n = current.history.len();
+            if !current.messages.is_empty() {
+                let snap_n = current.messages.len();
                 if let Ok(raw) = serde_json::to_string_pretty(&current) {
                     let _ = tokio::fs::write(self.snapshot_path(id, snap_n), &raw).await;
                 }
