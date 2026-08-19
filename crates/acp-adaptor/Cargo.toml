@@ -17,10 +17,6 @@ path = "src/lib.rs"
 name = "gemini-acp"
 path = "src/bin/main.rs"
 
-[[bin]]
-name = "gemini-acp-snapshot"
-path = "src/bin/snapshot.rs"
-
 [dependencies]
 agent-client-protocol = { workspace = true }
 agent_runtime = { package = "agent-runtime", path = "../agent-runtime" }
