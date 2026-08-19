@@ -68,13 +68,16 @@ impl TurnEventEmitter {
     }
 
     fn bind_tool_identity(&mut self, upstream_id: &str) -> String {
-        let binding = self.tool_bindings.entry(upstream_id.to_owned()).or_default();
-        if binding.is_empty() {
-            binding.push_back(upstream_id.to_owned());
-            return upstream_id.to_owned();
-        }
-        let semantic_id = self.allocate_tool_identity();
-        binding.push_back(semantic_id.clone());
+        let has_existing_binding = self.tool_bindings.contains_key(upstream_id);
+        let semantic_id = if has_existing_binding {
+            self.allocate_tool_identity()
+        } else {
+            upstream_id.to_owned()
+        };
+        self.tool_bindings
+            .entry(upstream_id.to_owned())
+            .or_default()
+            .push_back(semantic_id.clone());
         semantic_id
     }
 
