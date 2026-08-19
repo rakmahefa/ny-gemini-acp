@@ -395,18 +395,18 @@ mod tests {
     }
 
     #[test]
-    fn failure_is_terminal_even_with_open_lifecycle() {
+    fn failure_is_terminal_even_with_open_tool_lifecycle() {
         let mut s = TurnIntegrity::default();
         s.turn_started().unwrap();
-        s.assistant_started().unwrap();
-        s.thinking_started().unwrap();
-        s.tool_call_requested("c").is_err();
-        s.assistant_completed().is_err();
+        s.tool_call_requested("c").unwrap();
+        s.tool_execution_started("c").unwrap();
         s.turn_failed().unwrap();
+        assert_eq!(
+            s.tools.get("c"),
+            Some(&ToolPhase::Terminal(ToolTerminalReason::TurnFailed))
+        );
         assert!(s.turn_completed().is_err());
         assert!(s.turn_failed().is_err());
-        assert!(s.assistant_delta().is_err());
-        assert!(s.thinking_delta().is_err());
     }
 
     #[test]
