@@ -214,6 +214,7 @@ impl ProtocolDetector {
             events.push(ProtocolEvent::ToolCall(call));
         }
         self.mode = ProtocolMode::Normal;
+        strip_protocol_separator(&mut self.pending);
         true
     }
 
@@ -291,8 +292,12 @@ impl ProtocolDetector {
 enum ResultMarker { Legacy, Inline }
 
 fn strip_protocol_separator(pending: &mut String) {
-    if pending.starts_with("\r\n") { pending.drain(..2); }
-    else if pending.starts_with('\n') || pending.starts_with('\r') { pending.drain(..1); }
+    while pending.starts_with("\r\n") {
+        pending.drain(..2);
+    }
+    while pending.starts_with('\n') || pending.starts_with('\r') {
+        pending.drain(..1);
+    }
 }
 
 fn partial_marker_suffix(input: &str, marker: &str) -> Option<usize> {
