@@ -14,7 +14,7 @@ const PRESERVE_TURNS: usize = 10;
 
 #[async_trait::async_trait]
 pub trait AgentActionHandler: Send + Sync {
-    fn supports(&self, name: &str) -> bool;
+    fn supports(&self, name: &str);
     async fn handle(&self, session_id: &str, call_id: &str, name: &str, arguments: serde_json::Value, cancellation: Cancellation) -> Result<Option<String>, String>;
 }
 
@@ -147,7 +147,8 @@ impl AgentLoop {
                     let _ = emitter.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
-                if !emitter.tool_execution_started(call.id.clone()) { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
+                let running_ui = ui.clone().map(|model| model.running());
+                if !emitter.tool_execution_started_with_ui(call.id.clone(), running_ui) { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                 let result = if session.tools_enabled && tools.has_tools() {
                     tools.call(ToolCallRequest { session_id: session.id.clone(), name: call.name.clone(), arguments: call.arguments.clone(), cwd: session.cwd.clone(), additional_dirs: session.additional_directories.clone(), cancellation: cancellation.subscribe() }).await
                 } else {
