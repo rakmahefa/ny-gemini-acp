@@ -18,19 +18,28 @@ enum ReasoningPhase { Detecting, Response, Reasoning, Completed }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind { ToolCall, FunctionCall, SingleQuoteToolCall }
-
 impl BlockKind {
     fn opening(self) -> &'static str { match self { Self::ToolCall => TOOL_CALL_FENCE, Self::FunctionCall => FUNCTION_CALL_FENCE, Self::SingleQuoteToolCall => TOOL_CALL_SINGLE_QUOTE_FENCE } }
     fn closing(self) -> &'static str { match self { Self::SingleQuoteToolCall => "'''", Self::ToolCall | Self::FunctionCall => "```" } }
 }
 
 #[derive(Debug)]
-enum ProtocolMode { Normal, IgnoreToolResult { closing: Option<&'static str> }, ToolBlock { kind: BlockKind, body: String, oversized: bool } }
+enum ProtocolMode {
+    Normal,
+    IgnoreToolResult { closing: Option<&'static str> },
+    ToolBlock { kind: BlockKind, body: String, oversized: bool },
+}
 
 #[derive(Debug)]
-struct ProtocolDetector { mode: ProtocolMode, pending: String, at_stream_start: bool, next_call_id: usize }
-
-impl Default for ProtocolDetector { fn default() -> Self { Self { mode: ProtocolMode::Normal, pending: String::new(), at_stream_start: true, next_call_id: 0 } } }
+struct ProtocolDetector {
+    mode: ProtocolMode,
+    pending: String,
+    at_stream_start: bool,
+    next_call_id: usize,
+}
+impl Default for ProtocolDetector {
+    fn default() -> Self { Self { mode: ProtocolMode::Normal, pending: String::new(), at_stream_start: true, next_call_id: 0 } }
+}
 
 impl ProtocolDetector {
     fn feed(&mut self, chunk: &str) -> Vec<ProtocolEvent> {
@@ -40,7 +49,12 @@ impl ProtocolDetector {
         self.drain(false)
     }
 
-    fn finish(&mut self) -> Vec<ProtocolEvent> { let events = self.drain(true); self.mode = ProtocolMode::Normal; self.pending.clear(); events }
+    fn finish(&mut self) -> Vec<ProtocolEvent> {
+        let events = self.drain(true);
+        self.mode = ProtocolMode::Normal;
+        self.pending.clear();
+        events
+    }
 
     fn drain(&mut self, final_flush: bool) -> Vec<ProtocolEvent> {
         let mut events = Vec::new();
@@ -64,9 +78,14 @@ impl ProtocolDetector {
                 self.at_stream_start = false;
                 return true;
             }
-            let Some(newline) = self.pending.find('\n') else { if final_flush { self.pending.clear(); } return false; };
+            let Some(newline) = self.pending.find('\n') else {
+                if final_flush { self.pending.clear(); self.mode = ProtocolMode::Normal; }
+                return false;
+            };
             let first_line = self.pending[..newline].trim_end_matches(['\r','\n']);
-            let closing = if first_line.contains(TOOL_CALL_FENCE) || first_line.contains(FUNCTION_CALL_FENCE) { Some("```") } else if first_line.contains(TOOL_CALL_SINGLE_QUOTE_FENCE) { Some("'''") } else { None };
+            let closing = if first_line.contains(TOOL_CALL_FENCE) || first_line.contains(FUNCTION_CALL_FENCE) { Some("```") }
+                else if first_line.contains(TOOL_CALL_SINGLE_QUOTE_FENCE) { Some("'''") }
+                else { None };
             self.pending.drain(..newline + 1);
             self.mode = ProtocolMode::IgnoreToolResult { closing };
             self.at_stream_start = false;
@@ -94,7 +113,12 @@ impl ProtocolDetector {
             }
             let candidate = self.pending.clone();
             match parse_follow_up_candidates(&candidate) {
-                Some(_) => { self.pending.clear(); self.emit_follow_ups(&candidate, events); self.at_stream_start = false; return true; }
+                Some(_) => {
+                    self.pending.clear();
+                    self.emit_follow_ups(&candidate, events);
+                    self.at_stream_start = false;
+                    return true;
+                }
                 None if !final_flush && candidate.len() <= MAX_FOLLOW_UP => return false,
                 None => { self.pending.clear(); self.at_stream_start = false; return true; }
             }
@@ -165,7 +189,6 @@ impl ProtocolDetector {
     }
 
     fn emit_text(&self, text: &str, events: &mut Vec<ProtocolEvent>) { if !text.is_empty() { events.push(ProtocolEvent::Text(normalize_assistant_marker(text))); } }
-
     fn emit_tool_block(&mut self, _kind: BlockKind, body: &str, events: &mut Vec<ProtocolEvent>) {
         let Ok(value) = serde_json::from_str::<Value>(body.trim()) else { return; };
         let Some(name) = value.get("name").and_then(Value::as_str) else { return; };
@@ -173,7 +196,6 @@ impl ProtocolDetector {
         let arguments = value.get("arguments").or_else(|| value.get("args")).cloned().unwrap_or_else(|| json!({}));
         events.push(ProtocolEvent::ToolCall(ModelToolCall { id, name: name.to_owned(), arguments }));
     }
-
     fn emit_follow_ups(&mut self, text: &str, events: &mut Vec<ProtocolEvent>) { if let Some(calls) = parse_follow_up_candidates(text) { for (label, query) in calls { events.push(ProtocolEvent::ToolCall(ModelToolCall { id: self.allocate_id(), name: "FollowUp".into(), arguments: json!({"label":label,"query":query}) })); } } }
     fn allocate_id(&mut self) -> String { let id = format!("gemini_call_{}", self.next_call_id); self.next_call_id = self.next_call_id.saturating_add(1); id }
 }
@@ -191,7 +213,6 @@ struct ModelToolCall { id: String, name: String, arguments: Value }
 
 #[derive(Debug)]
 pub struct GeminiSemanticStream { reasoning_phase: ReasoningPhase, reasoning_pending: String, protocol: ProtocolDetector, completed: bool }
-
 impl GeminiSemanticStream {
     pub fn new(supports_reasoning: bool) -> Self { Self { reasoning_phase: if supports_reasoning { ReasoningPhase::Detecting } else { ReasoningPhase::Response }, reasoning_pending: String::new(), protocol: ProtocolDetector::default(), completed: false } }
     pub fn feed(&mut self, delta: &str) -> Vec<ModelEvent> { if delta.is_empty() || self.completed { return Vec::new(); } self.protocol.feed(delta).into_iter().flat_map(|event| self.project_protocol_event(event)).collect() }
@@ -207,8 +228,41 @@ impl GeminiSemanticStream {
     }
     fn project_protocol_event(&mut self, event: ProtocolEvent) -> Vec<ModelEvent> { match event { ProtocolEvent::Text(text) => self.feed_reasoning(text), ProtocolEvent::ToolCall(call) => vec![ModelEvent::ToolCall { id: call.id, name: call.name, arguments: call.arguments }] } }
     fn feed_reasoning(&mut self, delta: String) -> Vec<ModelEvent> { if delta.is_empty() { return Vec::new(); } match self.reasoning_phase { ReasoningPhase::Response => vec![ModelEvent::TextDelta(delta)], ReasoningPhase::Detecting => self.feed_reasoning_detecting(&delta), ReasoningPhase::Reasoning => self.feed_reasoning_body(&delta), ReasoningPhase::Completed => Vec::new() } }
-    fn feed_reasoning_detecting(&mut self, delta: &str) -> Vec<ModelEvent> { self.reasoning_pending.push_str(delta); if let Some(marker_len) = matching_marker_len(&self.reasoning_pending, &REASONING_OPEN_MARKERS) { self.reasoning_pending.drain(..marker_len); self.reasoning_phase = ReasoningPhase::Reasoning; let pending = std::mem::take(&mut self.reasoning_pending); return self.feed_reasoning(pending); } let keep = partial_suffix_for_markers(&self.reasoning_pending, &REASONING_OPEN_MARKERS); if self.reasoning_pending.len() <= keep { return Vec::new(); } let split_at = self.reasoning_pending.len() - keep; let response = self.reasoning_pending[..split_at].to_owned(); self.reasoning_pending.drain(..split_at); self.reasoning_phase = ReasoningPhase::Response; if response.is_empty() { Vec::new() } else { vec![ModelEvent::TextDelta(response)] } }
-    fn feed_reasoning_body(&mut self, delta: &str) -> Vec<ModelEvent> { self.reasoning_pending.push_str(delta); if let Some((idx, marker_len)) = find_marker(&self.reasoning_pending, &REASONING_CLOSE_MARKERS) { let reasoning = self.reasoning_pending[..idx].to_owned(); let response = self.reasoning_pending[idx + marker_len..].to_owned(); self.reasoning_pending.clear(); self.reasoning_phase = ReasoningPhase::Response; let mut events = Vec::new(); if !reasoning.is_empty() { events.push(ModelEvent::ReasoningDelta(reasoning)); } if !response.is_empty() { events.push(ModelEvent::TextDelta(response)); } return events; } let keep = partial_suffix_for_markers(&self.reasoning_pending, &REASONING_CLOSE_MARKERS); if self.reasoning_pending.len() <= keep { return Vec::new(); } let split_at = self.reasoning_pending.len() - keep; let reasoning = self.reasoning_pending[..split_at].to_owned(); self.reasoning_pending.drain(..split_at); if reasoning.is_empty() { Vec::new() } else { vec![ModelEvent::ReasoningDelta(reasoning)] } }
+    fn feed_reasoning_detecting(&mut self, delta: &str) -> Vec<ModelEvent> {
+        self.reasoning_pending.push_str(delta);
+        if let Some(marker_len) = matching_marker_len(&self.reasoning_pending, &REASONING_OPEN_MARKERS) {
+            self.reasoning_pending.drain(..marker_len);
+            self.reasoning_phase = ReasoningPhase::Reasoning;
+            let pending = std::mem::take(&mut self.reasoning_pending);
+            return self.feed_reasoning(pending);
+        }
+        let keep = partial_suffix_for_markers(&self.reasoning_pending, &REASONING_OPEN_MARKERS);
+        if self.reasoning_pending.len() <= keep { return Vec::new(); }
+        let split_at = self.reasoning_pending.len() - keep;
+        let response = self.reasoning_pending[..split_at].to_owned();
+        self.reasoning_pending.drain(..split_at);
+        self.reasoning_phase = ReasoningPhase::Response;
+        if response.is_empty() { Vec::new() } else { vec![ModelEvent::TextDelta(response)] }
+    }
+    fn feed_reasoning_body(&mut self, delta: &str) -> Vec<ModelEvent> {
+        self.reasoning_pending.push_str(delta);
+        if let Some((idx, marker_len)) = find_marker(&self.reasoning_pending, &REASONING_CLOSE_MARKERS) {
+            let reasoning = self.reasoning_pending[..idx].to_owned();
+            let response = self.reasoning_pending[idx + marker_len..].to_owned();
+            self.reasoning_pending.clear();
+            self.reasoning_phase = ReasoningPhase::Response;
+            let mut events = Vec::new();
+            if !reasoning.is_empty() { events.push(ModelEvent::ReasoningDelta(reasoning)); }
+            if !response.is_empty() { events.push(ModelEvent::TextDelta(response)); }
+            return events;
+        }
+        let keep = partial_suffix_for_markers(&self.reasoning_pending, &REASONING_CLOSE_MARKERS);
+        if self.reasoning_pending.len() <= keep { return Vec::new(); }
+        let split_at = self.reasoning_pending.len() - keep;
+        let reasoning = self.reasoning_pending[..split_at].to_owned();
+        self.reasoning_pending.drain(..split_at);
+        if reasoning.is_empty() { Vec::new() } else { vec![ModelEvent::ReasoningDelta(reasoning)] }
+    }
 }
 
 fn is_prefix(value: &str, marker: &str) -> bool { value.len() < marker.len() && marker.starts_with(value) }
@@ -221,7 +275,7 @@ fn parse_bare_json(text: &str, next_id: &mut usize) -> Option<ModelToolCall> { l
 fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, String)>> { let mut cursor = 0; let mut found = false; let mut calls = Vec::new(); while let Some(relative_start) = text[cursor..].find(FOLLOW_UP_PREFIX) { found = true; let start = cursor + relative_start; let after = start + FOLLOW_UP_PREFIX.len(); let end = find_tag_end(&text[after..])?; let absolute_end = after + end; let tag = &text[start..=absolute_end]; calls.push(parse_follow_up_tag(tag)?); cursor = absolute_end + 1; } if found { Some(calls) } else { None } }
 fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> { let inner = tag.strip_prefix(FOLLOW_UP_PREFIX)?.strip_suffix('>')?.trim(); let inner = inner.strip_suffix('/').unwrap_or(inner).trim(); let attrs = parse_attributes(inner); let label = attrs.get("label")?.trim(); let query = attrs.get("query")?.trim(); if label.is_empty() || query.is_empty() { return None; } Some((decode_xml(label), decode_xml(query))) }
 fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> { let mut attrs = std::collections::BTreeMap::new(); let bytes = input.as_bytes(); let mut index = 0; while index < bytes.len() { while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; } if index >= bytes.len() || bytes[index] == b'/' { break; } let key_start = index; while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' { index += 1; } if key_start == index { index += 1; continue; } let key = &input[key_start..index]; while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; } if index >= bytes.len() || bytes[index] != b'=' { break; } index += 1; while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; } if index >= bytes.len() { break; } let value = if bytes[index] == b'\'' || bytes[index] == b'"' { let quote = bytes[index]; index += 1; let value_start = index; while index < bytes.len() && bytes[index] != quote { index += 1; } let value = input[value_start..index].to_owned(); if index < bytes.len() { index += 1; } value } else { let value_start = index; while index < bytes.len() && !bytes[index].is_ascii_whitespace() { index += 1; } input[value_start..index].to_owned() }; attrs.insert(key.to_ascii_lowercase(), value); } attrs }
-fn decode_xml(input: &str) -> String { input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">).replace("&amp;", "&") }
+fn decode_xml(input: &str) -> String { input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&") }
 fn find_tag_end(input: &str) -> Option<usize> { let mut quote = None; for (index, byte) in input.as_bytes().iter().copied().enumerate() { match quote { Some(current) if byte == current => quote = None, Some(_) => {}, None if byte == b'\'' || byte == b'"' => quote = Some(byte), None if byte == b'>' => return Some(index), None => {} } } None }
 
 #[cfg(test)]
