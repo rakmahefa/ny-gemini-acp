@@ -79,75 +79,71 @@ impl GeminiFrameDecoder {
             tracing::trace!(bytes = trimmed.len(), "GeminiFrameDecoder ignored non-JSON line");
             return Vec::new();
         };
-        let Some(inner_str) = extract_wrapped_inner(&value) else { return Vec::new(); };
-        let Ok(inner) = serde_json::from_str::<Value>(inner_str) else {
-            tracing::debug!("GeminiFrameDecoder: wrb.fr inner payload is not valid JSON");
-            return vec![metadata("unparsed_frame", bounded_json(inner_str))];
-        };
+        self.decode_value(value)
+    }
 
+    fn decode_value(&mut self, value: Value) -> Vec<GeminiFrameEvent> {
+        let Some(array) = value.as_array() else { return Vec::new(); };
+        let Some(first) = array.first() else { return Vec::new(); };
+        let Some(record) = first.as_array() else { return Vec::new(); };
+        if record.first().and_then(Value::as_str) != Some("wrb.fr") { return Vec::new(); }
+        let Some(inner) = record.get(2) else { return Vec::new(); };
+        match inner {
+            Value::String(raw) => match serde_json::from_str::<Value>(raw) {
+                Ok(inner_value) => self.decode_inner(inner_value),
+                Err(_) => vec![GeminiFrameEvent::Metadata { kind: "unparsed_frame".into(), value: bounded_json(raw) }],
+            },
+            Value::Object(_) => self.decode_inner(inner.clone()),
+            other => vec![GeminiFrameEvent::Metadata { kind: "unexpected_inner".into(), value: bounded_value(other) }],
+        }
+    }
+
+    fn decode_inner(&mut self, inner: Value) -> Vec<GeminiFrameEvent> {
         let mut events = Vec::new();
-        let mut tools = Vec::new();
-        collect_tool_calls(&inner, &mut tools);
-        for tool in tools {
-            if self.emitted_tool_ids.len() >= MAX_TOOL_EVENTS_PER_STREAM {
-                tracing::warn!("GeminiFrameDecoder: tool event limit reached");
-                break;
-            }
-            let id = tool.id.filter(|id| !id.trim().is_empty()).unwrap_or_else(|| self.allocate_call_id());
-            if !self.emitted_tool_ids.insert(id.clone()) { continue; }
-            events.push(GeminiFrameEvent::ToolCall { id, name: tool.name, arguments: tool.arguments });
-        }
-        if let Some(text) = longest_candidate_text(&inner) {
-            events.insert(0, GeminiFrameEvent::Text(text));
-        }
+        collect_tool_calls(&inner, &mut events, &mut self.emitted_tool_ids, &mut self.next_call_id);
         collect_metadata(&inner, &mut events);
+        if let Some(candidates) = inner.get(4).and_then(Value::as_array) {
+            let mut longest = None::<String>;
+            for candidate in candidates {
+                if let Some(segments) = candidate.get(1).and_then(Value::as_array) {
+                    let text: String = segments.iter().filter_map(Value::as_str).collect();
+                    if !text.is_empty() && longest.as_ref().map_or(true, |current| text.len() > current.len()) {
+                        longest = Some(text);
+                    }
+                }
+            }
+            if let Some(text) = longest { events.push(GeminiFrameEvent::Text(text)); }
+        }
         events
     }
+}
 
-    fn allocate_call_id(&mut self) -> String {
-        let id = format!("gemini_call_{}", self.next_call_id);
-        self.next_call_id = self.next_call_id.saturating_add(1);
-        id
+fn collect_tool_calls(inner: &Value, events: &mut Vec<GeminiFrameEvent>, seen: &mut HashSet<String>, next_id: &mut usize) {
+    fn walk(value: &Value, events: &mut Vec<GeminiFrameEvent>, seen: &mut HashSet<String>, next_id: &mut usize) {
+        match value {
+            Value::Object(map) => {
+                for key in ["functionCall", "function_call", "toolCall", "tool_call", "toolUse", "tool_use"] {
+                    if let Some(call) = map.get(key).and_then(parse_tool_object) {
+                        let id = call.id.unwrap_or_else(|| {
+                            let id = format!("gemini_call_{next_id}");
+                            *next_id += 1;
+                            id
+                        });
+                        if seen.len() >= MAX_TOOL_EVENTS_PER_STREAM || !seen.insert(id.clone()) { continue; }
+                        events.push(GeminiFrameEvent::ToolCall { id, name: call.name, arguments: call.arguments });
+                    }
+                }
+                for value in map.values() { walk(value, events, seen, next_id); }
+            }
+            Value::Array(values) => for value in values { walk(value, events, seen, next_id) },
+            _ => {}
+        }
     }
+    walk(inner, events, seen, next_id);
 }
 
 #[derive(Debug)]
 struct ParsedToolCall { id: Option<String>, name: String, arguments: Value }
-
-fn extract_wrapped_inner(value: &Value) -> Option<&str> {
-    let first = value.as_array()?.get(0)?;
-    if first.get(0).and_then(Value::as_str) != Some("wrb.fr") { return None; }
-    first.get(2).and_then(Value::as_str)
-}
-
-fn longest_candidate_text(inner: &Value) -> Option<String> {
-    let candidates = inner.get(4)?.as_array()?;
-    candidates.iter().filter_map(|part| {
-        let segments = part.get(1)?.as_array()?;
-        let text: String = segments.iter().filter_map(Value::as_str).collect();
-        (!text.is_empty()).then_some(text)
-    }).max_by_key(String::len)
-}
-
-fn collect_tool_calls(value: &Value, out: &mut Vec<ParsedToolCall>) {
-    match value {
-        Value::Array(values) => values.iter().for_each(|value| collect_tool_calls(value, out)),
-        Value::Object(map) => {
-            for key in ["toolCall", "functionCall", "tool_call", "function_call"] {
-                if let Some(candidate) = map.get(key) {
-                    if let Some(parsed) = parse_tool_object(candidate) { out.push(parsed); }
-                    else { collect_tool_calls(candidate, out); }
-                }
-            }
-            if let Some(parsed) = parse_tool_object(value) { out.push(parsed); return; }
-            map.values().for_each(|child| collect_tool_calls(child, out));
-        }
-        Value::String(text) => {
-            if let Ok(value) = serde_json::from_str::<Value>(text) { collect_tool_calls(&value, out); }
-        }
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-}
 
 fn parse_tool_object(value: &Value) -> Option<ParsedToolCall> {
     let map = value.as_object()?;
@@ -159,11 +155,11 @@ fn parse_tool_object(value: &Value) -> Option<ParsedToolCall> {
 }
 
 fn collect_metadata(inner: &Value, events: &mut Vec<GeminiFrameEvent>) {
-    let Some(map) = inner.as_object() else { return; };
+    let map = match inner.as_object() { Some(map) => map, None => return };
     for key in ["usageMetadata", "usage", "finishReason", "blockReason"] {
         if let Some(value) = map.get(key) {
-            if serde_json::to_vec(value).map(|bytes| bytes.len() <= MAX_METADATA_BYTES).unwrap_or(false) {
-                events.push(metadata(key, value.clone()));
+            if serde_json::to_vec(value).ok().is_some_and(|bytes| bytes.len() <= MAX_METADATA_BYTES) {
+                events.push(GeminiFrameEvent::Metadata { kind: key.to_owned(), value: value.clone() });
             } else {
                 tracing::warn!(kind = key, "GeminiFrameDecoder dropped oversized metadata");
             }
@@ -171,8 +167,7 @@ fn collect_metadata(inner: &Value, events: &mut Vec<GeminiFrameEvent>) {
     }
 }
 
-fn metadata(kind: impl Into<String>, value: Value) -> GeminiFrameEvent { GeminiFrameEvent::Metadata { kind: kind.into(), value } }
-
+fn bounded_value(value: Value) -> Value { serde_json::json!({"preview": value.to_string().chars().take(512).collect::<String>()}) }
 fn bounded_json(raw: &str) -> Value { serde_json::json!({"bytes": raw.len(), "preview": raw.chars().take(512).collect::<String>()}) }
 
 fn code_ref_re() -> &'static Regex {
@@ -183,48 +178,43 @@ fn card_content_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"http://googleusercontent\.com/card_content/\d+\n?").expect("regex card"))
 }
-
 pub fn clean_text(text: &str, strip: bool) -> String {
     let out = code_ref_re().replace_all(text, "");
     let out = card_content_re().replace_all(&out, "").into_owned();
     if strip { out.trim().to_string() } else { out }
 }
-
 pub fn bard_error(raw: &str) -> Option<i64> {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| Regex::new(r"BardErrorInfo\s*\[(\d+)\]").expect("regex bard"));
     re.captures(raw)?.get(1)?.as_str().parse().ok()
 }
-
 pub fn detect_safety_block(raw: &str) -> Option<String> {
     if raw.contains("blockReason") {
-        let start = raw.find(r#"\"blockReason\":\"#).or_else(|| raw.find(r#"\"blockReason\": \"#));
-        if let Some(start) = start {
-            let after_colon = &raw[start..];
-            let colon_pos = after_colon.find(':').unwrap_or(0);
-            let rest = after_colon[colon_pos + 1..].trim_start();
-            if let Some(end) = rest.find('"') { let reason = &rest[..end]; if !reason.is_empty() { return Some(format!("Gemini a refusé de répondre (blockReason: {reason}). Reformulez votre prompt.")); } }
+        if let Some(start) = raw.find(r#"\"blockReason\":\"#).or_else(|| raw.find(r#"\"blockReason\": \"#)) {
+            let rest = &raw[start..];
+            let colon = rest.find(':').unwrap_or(0);
+            let rest = rest[colon + 1..].trim_start();
+            if let Some(end) = rest.find('"') {
+                let reason = &rest[..end];
+                if !reason.is_empty() { return Some(format!("Gemini a refusé de répondre (blockReason: {reason}). Reformulez votre prompt.")); }
+            }
         }
         return Some("Gemini a refusé de répondre (politique de sécurité). Reformulez votre prompt.".to_string());
     }
-    let safety_phrases = ["I can't help with that", "I'm not able to help with that", "I cannot fulfill this request", "I won't be able to help", "content safety", "against my safety guidelines", "violates safety policy"];
     let lower = raw.to_lowercase();
-    safety_phrases.iter().find(|phrase| lower.contains(&phrase.to_lowercase())).map(|_| "Gemini a refusé de répondre à ce prompt (politique de contenu). Reformulez votre demande.".to_string())
+    ["I can't help with that", "I'm not able to help with that", "I cannot fulfill this request", "I won't be able to help", "content safety", "against my safety guidelines", "violates safety policy"]
+        .iter().find(|phrase| lower.contains(&phrase.to_lowercase()))
+        .map(|_| "Gemini a refusé de répondre à ce prompt (politique de contenu). Reformulez votre demande.".to_string())
 }
-
 pub fn is_empty_stream(raw: &str) -> bool {
     if !raw.contains("\"wrb.fr\"") { return false; }
     let mut decoder = GeminiFrameDecoder::new();
-    let events = decoder.feed(raw);
-    !events.iter().any(|event| matches!(event, GeminiFrameEvent::Text(text) if !text.is_empty()) || matches!(event, GeminiFrameEvent::ToolCall { .. }))
+    decoder.feed(raw).into_iter().all(|event| !matches!(event, GeminiFrameEvent::Text(ref text) if !text.is_empty()) && !matches!(event, GeminiFrameEvent::ToolCall { .. }))
 }
-
 pub fn final_text(raw: &str) -> Result<String> {
     if let Some(code) = bard_error(raw) { bail!("Gemini upstream rejected request: BardErrorInfo [{code}]"); }
     let mut decoder = GeminiFrameDecoder::new();
-    let mut events = decoder.feed(raw);
-    events.extend(decoder.finish());
-    let text = events.into_iter().filter_map(|event| match event { GeminiFrameEvent::Text(text) => Some(text), _ => None }).max_by_key(String::len).unwrap_or_default();
+    let text = decoder.feed(raw).into_iter().chain(decoder.finish()).filter_map(|event| match event { GeminiFrameEvent::Text(text) => Some(text), _ => None }).max_by_key(String::len).unwrap_or_default();
     Ok(clean_text(&text, true))
 }
 
@@ -282,7 +272,7 @@ mod tests {
     #[test]
     fn tool_only_stream_is_not_empty() {
         let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {}}});
-        let raw = format!(")]}\'\n{}\n", wire_line(inner));
+        let raw = format!(")]}}'\n{}\n", wire_line(inner));
         assert!(!is_empty_stream(&raw));
     }
     #[test]
@@ -292,7 +282,7 @@ mod tests {
     }
     #[test]
     fn final_text_uses_decoder() {
-        let raw = format!(")]}\'\n{}\n", wire_line(inner_with_candidates(json!([["c", ["court"]]]))));
+        let raw = format!(")]}}'\n{}\n", wire_line(inner_with_candidates(json!([["c", ["court"]]]))));
         assert_eq!(final_text(&raw).unwrap(), "court");
     }
     #[test]
