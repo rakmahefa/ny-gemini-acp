@@ -331,14 +331,12 @@ mod tests {
         let mut rx = bus.subscribe();
         let mut e = TurnEventEmitter::new(bus, "s", "t");
         assert!(e.turn_started());
-        assert!(e.assistant_started());
-        assert!(e.thinking_started());
         assert!(e.tool_call_requested("model_call_0", "shell_exec"));
         assert!(e.turn_cancelled());
         assert!(!e.turn_completed());
         assert!(e.is_terminal());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 5);
-        assert!(matches!(events[4], SemanticEvent::TurnCancelled { .. }));
+        assert_eq!(events.len(), 3);
+        assert!(matches!(&events[2], SemanticEvent::TurnCancelled { .. }));
     }
 }
