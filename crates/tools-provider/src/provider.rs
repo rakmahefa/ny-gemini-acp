@@ -108,15 +108,7 @@ impl ToolProvider for DefaultToolProvider {
     }
 
     fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
-        if self
-            .registry
-            .definitions()
-            .iter()
-            .any(|definition| definition.get("name").and_then(Value::as_str) == Some(name))
-        {
-            return Some(ui::pending(name, arguments));
-        }
-        None
+        Some(ui::pending(name, arguments))
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
