@@ -16,10 +16,10 @@ pub struct TurnEventEmitter {
     integrity: TurnIntegrity,
     /// Maps upstream tool-call identities to semantic identities scoped to this turn.
     ///
-    /// An upstream model may restart a stream-local call counter on every internal round.
-    /// Semantic events must not reuse a terminalized identity. A queue also keeps
-    /// the mapping deterministic if an upstream producer ever emits duplicate IDs before
-    /// their lifecycle is fully terminalized.
+    /// The upstream identity is the canonical identity for normal calls so permission,
+    /// execution, ACP and semantic events can refer to the same tool invocation. A
+    /// generated identity is only used as a collision-safe fallback if a producer reuses
+    /// an upstream ID within the same turn.
     tool_bindings: HashMap<String, VecDeque<String>>,
 }
 
@@ -68,8 +68,13 @@ impl TurnEventEmitter {
     }
 
     fn bind_tool_identity(&mut self, upstream_id: &str) -> String {
+        let binding = self.tool_bindings.entry(upstream_id.to_owned()).or_default();
+        if binding.is_empty() {
+            binding.push_back(upstream_id.to_owned());
+            return upstream_id.to_owned();
+        }
         let semantic_id = self.allocate_tool_identity();
-        self.tool_bindings.entry(upstream_id.to_owned()).or_default().push_back(semantic_id.clone());
+        binding.push_back(semantic_id.clone());
         semantic_id
     }
 
@@ -134,8 +139,10 @@ impl TurnEventEmitter {
         true
     }
 
-    /// Records a tool invocation using a semantic identity independent from the
-    /// upstream model call ID. All later lifecycle events resolve through this binding.
+    /// Records a tool invocation using a canonical semantic identity.
+    ///
+    /// For the normal case that identity is exactly the upstream model call ID, allowing
+    /// permission requests and execution notifications to remain correlated end-to-end.
     pub fn tool_call_requested(&mut self, upstream_id: impl Into<String>, name: impl Into<String>) -> bool {
         self.tool_call_requested_with_ui(upstream_id, name, None)
     }
@@ -278,6 +285,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canonical_tool_id_is_preserved_across_permission_and_execution() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        assert!(e.turn_started());
+        assert!(e.tool_call_requested("provider-call-7", "shell_exec"));
+        assert!(e.permission_requested("provider-call-7"));
+        assert!(e.tool_execution_started("provider-call-7"));
+        assert!(e.tool_result_received("provider-call-7", "ok"));
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let ids: Vec<_> = events.iter().filter_map(|event| match event {
+            SemanticEvent::ToolCallRequested { context, .. }
+            | SemanticEvent::PermissionRequested { context }
+            | SemanticEvent::ToolExecutionStarted { context, .. }
+            | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(ids, vec!["provider-call-7", "provider-call-7", "provider-call-7", "provider-call-7"]);
+    }
+
+    #[tokio::test]
     async fn ui_survives_tool_lifecycle_without_changing_identity_or_sequence() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
@@ -298,7 +326,7 @@ mod tests {
             | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
             _ => None,
         }).collect();
-        assert_eq!(ids, vec!["t/tool_0", "t/tool_0", "t/tool_0"]);
+        assert_eq!(ids, vec!["model_call_0", "model_call_0", "model_call_0"]);
         match &events[2] {
             SemanticEvent::ToolExecutionStarted { ui: Some(ui), .. } => assert_eq!(ui.status, crate::ToolUiStatus::Running),
             other => panic!("expected running ui, got {other:?}"),
