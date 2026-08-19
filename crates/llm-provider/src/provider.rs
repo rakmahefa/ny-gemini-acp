@@ -1,7 +1,7 @@
 //! Gemini implementation of the provider-neutral runtime LLM contract.
 use std::sync::Arc;
 
-use crate::client::{Client, Config};
+use crate::client::{Client, Config, StreamItem};
 use crate::config::AgentConfig;
 use crate::semantic_stream::GeminiSemanticStream;
 use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest};
@@ -45,18 +45,18 @@ impl LlmProvider for GeminiProvider {
             let mut upstream = upstream;
             while let Some(item) = upstream.recv().await {
                 match item {
-                    Ok(crate::client::StreamItem::Text(delta)) => {
+                    Ok(StreamItem::Text(delta)) => {
                         for event in semantic.feed(crate::core::frames::GeminiFrameEvent::Text(delta)) {
                             if tx.send(Ok(event)).await.is_err() { return; }
                         }
                     }
-                    Ok(crate::client::StreamItem::ToolCall { id, name, arguments }) => {
+                    Ok(StreamItem::ToolCall { id, name, arguments }) => {
                         let frame = crate::core::frames::GeminiFrameEvent::ToolCall { id, name, arguments };
                         for event in semantic.feed(frame) {
                             if tx.send(Ok(event)).await.is_err() { return; }
                         }
                     }
-                    Ok(crate::client::StreamItem::Metadata { kind, value }) => {
+                    Ok(StreamItem::Metadata { kind, value }) => {
                         let frame = crate::core::frames::GeminiFrameEvent::Metadata { kind, value };
                         for event in semantic.feed(frame) {
                             if tx.send(Ok(event)).await.is_err() { return; }
