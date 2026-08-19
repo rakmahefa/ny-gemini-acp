@@ -134,11 +134,18 @@ impl TurnEventEmitter {
         true
     }
 
+    /// Records a tool invocation using a semantic identity independent from the
+    /// upstream model call ID. All later lifecycle events resolve through this binding.
     pub fn tool_call_requested(&mut self, upstream_id: impl Into<String>, name: impl Into<String>) -> bool {
         self.tool_call_requested_with_ui(upstream_id, name, None)
     }
 
-    pub fn tool_call_requested_with_ui(&mut self, upstream_id: impl Into<String>, name: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+    pub fn tool_call_requested_with_ui(
+        &mut self,
+        upstream_id: impl Into<String>,
+        name: impl Into<String>,
+        ui: Option<ToolUiModel>,
+    ) -> bool {
         let upstream_id = upstream_id.into();
         if upstream_id.is_empty() { return self.reject(IntegrityError::new("tool call identity must be non-empty")); }
         let semantic_id = self.bind_tool_identity(&upstream_id);
@@ -181,7 +188,12 @@ impl TurnEventEmitter {
         self.tool_result_received_with_ui(upstream_id, result, None)
     }
 
-    pub fn tool_result_received_with_ui(&mut self, upstream_id: impl Into<String>, result: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+    pub fn tool_result_received_with_ui(
+        &mut self,
+        upstream_id: impl Into<String>,
+        result: impl Into<String>,
+        ui: Option<ToolUiModel>,
+    ) -> bool {
         let upstream_id = upstream_id.into();
         let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
             return self.reject(IntegrityError::new(format!("tool_result_received references unknown upstream tool {upstream_id}")));
@@ -243,12 +255,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emits_canonical_tool_lifecycle() {
+    async fn emits_canonical_turn_and_tool_lifecycle_with_contiguous_sequences() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
         let mut e = TurnEventEmitter::new(bus, "s", "t");
         assert!(e.turn_started());
         assert!(e.assistant_started());
+        assert!(e.thinking_started());
+        assert!(e.thinking_delta("reason"));
+        assert!(e.thinking_completed());
         assert!(e.assistant_delta("hello"));
         assert!(e.assistant_completed());
         assert!(e.tool_call_requested("model_call_0", "shell_exec"));
@@ -257,8 +272,8 @@ mod tests {
         assert!(e.tool_result_received("model_call_0", "ok"));
         assert!(e.turn_completed());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.iter().map(seq).collect::<Vec<_>>(), (0..9).collect::<Vec<_>>());
-        assert_eq!(e.sequence(), 9);
+        assert_eq!(events.iter().map(seq).collect::<Vec<_>>(), (0..12).collect::<Vec<_>>());
+        assert_eq!(e.sequence(), 12);
         assert!(e.is_terminal());
     }
 
@@ -276,7 +291,7 @@ mod tests {
         assert!(e.tool_result_received_with_ui("model_call_0", "ok", Some(completed.clone())));
         assert!(e.turn_completed());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 4);
+        assert_eq!(events.len(), 5);
         let ids: Vec<_> = events.iter().filter_map(|event| match event {
             SemanticEvent::ToolCallRequested { context, .. }
             | SemanticEvent::ToolExecutionStarted { context, .. }
@@ -284,11 +299,11 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(ids, vec!["t/tool_0", "t/tool_0", "t/tool_0"]);
-        match &events[1] {
+        match &events[2] {
             SemanticEvent::ToolExecutionStarted { ui: Some(ui), .. } => assert_eq!(ui.status, crate::ToolUiStatus::Running),
             other => panic!("expected running ui, got {other:?}"),
         }
-        match &events[2] {
+        match &events[3] {
             SemanticEvent::ToolResultReceived { ui: Some(ui), .. } => assert_eq!(ui.status, crate::ToolUiStatus::Succeeded),
             other => panic!("expected completed ui, got {other:?}"),
         }
@@ -321,7 +336,9 @@ mod tests {
         assert!(e.tool_call_requested("model_call_0", "shell_exec"));
         assert!(e.turn_cancelled());
         assert!(!e.turn_completed());
+        assert!(e.is_terminal());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
         assert_eq!(events.len(), 5);
+        assert!(matches!(events[4], SemanticEvent::TurnCancelled { .. }));
     }
 }
