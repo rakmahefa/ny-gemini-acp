@@ -8,11 +8,13 @@ use tokio::sync::{watch, RwLock};
 use crate::Cancellation;
 
 mod busy;
+pub mod history;
 mod persistence;
 mod snapshot;
 pub(crate) mod turn_support;
 mod types;
 
+pub use history::{History, HistoryEntry};
 pub(crate) use types::MAX_SNAPSHOTS;
 pub use types::{Live, Role, Session, SessionMode, TurnError};
 
@@ -105,9 +107,12 @@ impl Store {
         }
 
         let partial = turn_support::take_partial_output(id);
-        if !partial.trim().is_empty() && matches!(session.messages.last(), Some((Role::User, _))) {
-            session.messages.push((Role::Assistant, partial));
+        if !partial.trim().is_empty()
+            && matches!(session.messages.last(), Some(HistoryEntry::User { .. }))
+        {
+            session.messages.push_assistant(partial);
         }
+        session.messages.normalize_legacy();
 
         session.updated_at = crate::time::now_iso();
         session.turn_count += 1;

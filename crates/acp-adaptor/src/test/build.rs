@@ -1,4 +1,5 @@
 use super::*;
+use agent_runtime::state::{History, HistoryEntry, Role};
 use tools_provider::tools::registry::ToolRegistry;
 use tools_provider::DefaultToolProvider;
 
@@ -9,7 +10,7 @@ fn session(messages: &[(&str, &str)]) -> Session {
         vec![],
         "test-model",
     );
-    s.messages = messages
+    let legacy = messages
         .iter()
         .map(|(role, text)| {
             (
@@ -21,7 +22,8 @@ fn session(messages: &[(&str, &str)]) -> Session {
                 (*text).to_string(),
             )
         })
-        .collect();
+        .collect::<Vec<_>>();
+    s.messages = History::from(legacy);
     s
 }
 
@@ -54,6 +56,28 @@ fn tool_result_est_injecte_sans_double_enveloppe() {
 }
 
 #[test]
+fn structured_tool_entries_are_rendered_without_reencoding() {
+    let mut s = Session::new("s".into(), "/tmp".into(), vec![], "m");
+    s.messages.push(HistoryEntry::User { content: "run".into() });
+    s.messages.push(HistoryEntry::Assistant { content: "I will run it.".into() });
+    s.messages.push(HistoryEntry::ToolCall {
+        id: "call-1".into(),
+        name: "shell_exec".into(),
+        arguments: serde_json::json!({"command": "cargo test"}),
+    });
+    s.messages.push(HistoryEntry::ToolResult {
+        id: "call-1".into(),
+        name: "shell_exec".into(),
+        content: "all green".into(),
+        is_ok: true,
+    });
+
+    let p = build_prompt(&s, None);
+    assert!(p.contains("[tool_call shell_exec id=call-1]"));
+    assert!(p.contains("[tool_result shell_exec id=call-1 status=ok] all green"));
+}
+
+#[test]
 fn fenetre_glissante_12_max() {
     let mut s = session(&[]);
     for i in 0..40 {
@@ -76,7 +100,7 @@ fn troncature_32k_garde_le_tour_courant() {
         msgs.push((Role::User, format!("question {i} ") + &"y".repeat(9_000)));
     }
     let mut s = session(&[]);
-    s.messages = msgs;
+    s.messages = History::from(msgs);
     let p = build_prompt(&s, None);
     assert!(
         p.chars().count() <= 32_000 + 500,
