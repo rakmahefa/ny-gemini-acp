@@ -1,10 +1,12 @@
 mod context;
 mod guard;
+mod permission;
 
+use super::action;
 use super::content::blocks_to_parts;
 use super::notify::notify_usage;
+use permission::AcpToolPermissionHandler;
 use super::title::derive_title;
-use super::action;
 use agent_client_protocol::schema::v1::{MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use agent_runtime::events::TurnEventEmitter;
@@ -39,16 +41,8 @@ pub async fn run_turn(
 ) -> Result<(), AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
-    let span = tracing::info_span!(
-        "turn",
-        session=%session_id,
-        chars_input=tracing::field::Empty,
-        chars_output=tracing::field::Empty,
-        tool_rounds=tracing::field::Empty,
-        outcome=tracing::field::Empty,
-    );
+    let span = tracing::info_span!("turn", session=%session_id, chars_input=tracing::field::Empty, chars_output=tracing::field::Empty, tool_rounds=tracing::field::Empty, outcome=tracing::field::Empty);
     let _enter = span.enter();
-
     let (session, _store_cancel, generation) = match store.begin_turn(sid).await {
         Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
@@ -64,7 +58,6 @@ pub async fn run_turn(
     let mut guard = guard::TurnGuard::new(store.clone(), sid.to_string(), session, generation);
     let (user_text, images) = blocks_to_parts(&req.prompt);
     span.record("chars_input", user_text.chars().count());
-    let message_id = MessageId::from(format!("msg_{}", uuid::Uuid::new_v4().simple()));
 
     {
         let session = guard.session_mut();
@@ -90,8 +83,9 @@ pub async fn run_turn(
     }
 
     let action_handler = action::shared(cx.clone(), session_id.clone());
+    let permission_handler = Arc::new(AcpToolPermissionHandler::new(cx.clone(), tools.clone()));
     let agent_loop = match AgentLoop::new(llm.clone(), tools.clone(), AgentLoopConfig::default()) {
-        Ok(loop_) => loop_.with_action_handler(action_handler),
+        Ok(loop_) => loop_.with_action_handler(action_handler).with_permission_handler(permission_handler),
         Err(error) => {
             fail_before_execution(semantic);
             guard.finish().await;
@@ -101,11 +95,7 @@ pub async fn run_turn(
 
     let result = {
         let session = guard.session_mut();
-        agent_loop
-            .run(session, &refs, cancellation, semantic, |session, provider| {
-                crate::prompt::build::build_prompt(session, Some(provider))
-            })
-            .await
+        agent_loop.run(session, &refs, cancellation, semantic, |session, provider| crate::prompt::build::build_prompt(session, Some(provider))).await
     };
 
     match result {
@@ -125,11 +115,8 @@ pub async fn run_turn(
         Err(error) => {
             let reason = map_agent_error(&error);
             if !semantic.is_terminal() {
-                if matches!(error, agent_runtime::AgentLoopError::Cancelled) {
-                    semantic.turn_cancelled();
-                } else {
-                    semantic.turn_failed();
-                }
+                if matches!(error, agent_runtime::AgentLoopError::Cancelled) { semantic.turn_cancelled(); }
+                else { semantic.turn_failed(); }
             }
             guard.finish().await;
             responder.respond(PromptResponse::new(reason))
