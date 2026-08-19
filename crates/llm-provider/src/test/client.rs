@@ -1,7 +1,6 @@
 use super::*;
 use crate::core::models;
 use payload::decode_freq;
-use crate::client::StreamItem;
 
 #[test]
 fn payload_102_cases() {
