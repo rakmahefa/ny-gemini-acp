@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::ToolUiModel;
 use super::{EventContext, ToolEventContext};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -30,16 +31,19 @@ pub enum SemanticEvent {
     ToolCallRequested {
         context: ToolEventContext,
         name: String,
+        ui: Option<ToolUiModel>,
     },
     PermissionRequested {
         context: ToolEventContext,
     },
     ToolExecutionStarted {
         context: ToolEventContext,
+        ui: Option<ToolUiModel>,
     },
     ToolResultReceived {
         context: ToolEventContext,
         result: String,
+        ui: Option<ToolUiModel>,
     },
     TurnCancelled {
         context: EventContext,

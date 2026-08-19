@@ -6,6 +6,8 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::{mpsc, watch};
 
+use crate::tool_ui::ToolUiModel;
+
 /// Canonical semantic events emitted by an LLM provider.
 ///
 /// Provider wire formats are deliberately normalized before the runtime sees
@@ -145,11 +147,13 @@ pub struct ToolCallRequest {
     pub cancellation: watch::Receiver<bool>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolCallResult {
     pub content: String,
     pub is_ok: bool,
     pub executed: bool,
+    /// Structured, host-neutral presentation data for the tool invocation/result.
+    pub ui: Option<ToolUiModel>,
 }
 
 impl ToolCallResult {
@@ -158,6 +162,7 @@ impl ToolCallResult {
             content: content.into(),
             is_ok: false,
             executed: false,
+            ui: None,
         }
     }
 }
@@ -182,6 +187,8 @@ pub trait ToolProvider: Send + Sync {
     fn definitions(&self) -> Vec<Value>;
     fn prompt_fragment(&self) -> Option<String>;
     fn has_tools(&self) -> bool;
+    /// Returns the host-neutral presentation model for a tool invocation.
+    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel>;
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult;
 }
 
@@ -210,6 +217,9 @@ impl ToolProvider for NullToolProvider {
     }
     fn has_tools(&self) -> bool {
         false
+    }
+    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
+        Some(ToolUiModel::generic(name, arguments.clone()))
     }
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
         ToolCallResult::error(format!("outil indisponible: {}", request.name))

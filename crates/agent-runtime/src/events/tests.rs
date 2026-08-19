@@ -1,4 +1,5 @@
 use super::*;
+use crate::{ToolUiKind, ToolUiModel, ToolUiStatus};
 
 #[test]
 fn creates_turn_started_event() {
@@ -9,18 +10,24 @@ fn creates_turn_started_event() {
 }
 
 #[test]
-fn keeps_tool_call_context() {
+fn keeps_tool_call_context_and_ui() {
     let event_context = EventContext::new("session", "turn", 2);
     let context = ToolEventContext {
         event: event_context,
         tool_call_id: "tool-a".into(),
     };
+    let ui = ToolUiModel::generic("shell_exec", serde_json::json!({"command": "cargo test"}));
 
-    let event = SemanticEvent::ToolExecutionStarted { context };
+    let event = SemanticEvent::ToolExecutionStarted {
+        context,
+        ui: Some(ui.clone()),
+    };
 
     match event {
-        SemanticEvent::ToolExecutionStarted { context } => {
+        SemanticEvent::ToolExecutionStarted { context, ui: Some(actual) } => {
             assert_eq!(context.tool_call_id, "tool-a");
+            assert_eq!(actual.kind, ToolUiKind::Generic);
+            assert_eq!(actual.status, ToolUiStatus::Pending);
         }
         _ => unreachable!(),
     }
