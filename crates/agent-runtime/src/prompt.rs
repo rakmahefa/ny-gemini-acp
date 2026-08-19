@@ -18,7 +18,7 @@ pub fn format_tool_call(id: &str, name: &str, arguments: &Value) -> String {
         "id": id,
         "arguments": arguments,
     });
-    format!("{TOOL_CALL_OPEN}\n{}{TOOL_CALL_CLOSE}", envelope)
+    format!("{TOOL_CALL_OPEN}\n{}\n{TOOL_CALL_CLOSE}", envelope)
 }
 
 /// Serialize an executed tool result onto one protocol-safe line.
