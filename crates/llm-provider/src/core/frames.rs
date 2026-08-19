@@ -94,7 +94,7 @@ impl GeminiFrameDecoder {
                 Err(_) => vec![GeminiFrameEvent::Metadata { kind: "unparsed_frame".into(), value: bounded_json(raw) }],
             },
             Value::Object(_) => self.decode_inner(inner.clone()),
-            other => vec![GeminiFrameEvent::Metadata { kind: "unexpected_inner".into(), value: bounded_value(other) }],
+            other => vec![GeminiFrameEvent::Metadata { kind: "unexpected_inner".into(), value: bounded_value(other.clone()) }],
         }
     }
 
@@ -272,7 +272,7 @@ mod tests {
     #[test]
     fn tool_only_stream_is_not_empty() {
         let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {}}});
-        let raw = format!(")]}}'\n{}\n", wire_line(inner));
+        let raw = format!(")]}\'\n{}\n", wire_line(inner));
         assert!(!is_empty_stream(&raw));
     }
     #[test]
