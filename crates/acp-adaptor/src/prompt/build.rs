@@ -1,15 +1,28 @@
 use agent_runtime::persona;
-use agent_runtime::state::{Role, Session};
+use agent_runtime::state::{HistoryEntry, Session};
 use agent_runtime::ToolProvider;
 pub const MAX_MESSAGES: usize = 12;
 pub const MAX_PROMPT_CHARS: usize = 32_000;
-fn history_prefix(role: &Role) -> &'static str {
-    match role {
-        Role::User => "[User]: ",
-        Role::Assistant => "[Assistant]: ",
-        Role::Tool => "",
+
+fn format_entry(entry: &HistoryEntry) -> String {
+    match entry {
+        HistoryEntry::User { content } => format!("[User]: {content}\n\n"),
+        HistoryEntry::Assistant { content } => format!("[Assistant]: {content}\n\n"),
+        HistoryEntry::ToolCall { id, name, arguments } => {
+            format!("[tool_call {name} id={id}] {arguments}\n\n")
+        }
+        HistoryEntry::ToolResult {
+            id,
+            name,
+            content,
+            is_ok,
+        } => {
+            let status = if *is_ok { "ok" } else { "error" };
+            format!("[tool_result {name} id={id} status={status}] {content}\n\n")
+        }
     }
 }
+
 pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> String {
     let system = persona::system_prompt(session, None);
     let tools_section = if session.tools_enabled {
@@ -21,42 +34,42 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
         Some(ts) => format!("{system}{ts}\n\n"),
         None => system,
     };
-    let n = session.messages.len();
+    let n = session.history.len();
     if n == 0 {
         return system;
     }
+
     let lens: Vec<usize> = session
-        .messages
+        .history
         .iter()
-        .map(|(role, text)| history_prefix(role).len() + text.chars().count() + 2)
+        .map(|entry| format_entry(entry).chars().count())
         .collect();
-    let mut prefix = vec![0usize; n + 1];
-    for i in 0..n {
-        prefix[i + 1] = prefix[i] + lens[i];
-    }
+    let prefix: Vec<usize> = std::iter::once(0)
+        .chain(lens.iter().scan(0usize, |sum, len| {
+            *sum += *len;
+            Some(*sum)
+        }))
+        .collect();
+
     let min_start = n.saturating_sub(MAX_MESSAGES);
     let mut lo = min_start;
-    let mut hi = n - 1;
+    let mut hi = n.saturating_sub(1);
     let budget_ok = |start: usize| prefix[n] - prefix[start] <= MAX_PROMPT_CHARS;
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
         if budget_ok(mid) {
-            hi = mid
+            hi = mid;
         } else {
-            lo = mid + 1
+            lo = mid + 1;
         }
     }
     format!("{system}{}", format_history(session, lo))
 }
+
 fn format_history(session: &Session, start: usize) -> String {
-    let mut out = String::new();
-    for (role, text) in session.messages.iter().skip(start) {
-        out.push_str(history_prefix(role));
-        out.push_str(text);
-        out.push_str("\n\n")
-    }
-    out
+    session.history.iter().skip(start).map(format_entry).collect()
 }
+
 #[cfg(test)]
 #[path = "../test/build.rs"]
 mod tests;
