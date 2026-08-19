@@ -101,7 +101,7 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
             "toolUi": {
                 "kind": format!("{:?}", ui.kind),
                 "status": format!("{:?}", ui.status),
-                "summary": ui.summary,
+                "summary": ui.summary.clone(),
                 "expandable": ui.expandable,
             }
         }
