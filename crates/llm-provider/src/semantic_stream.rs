@@ -9,7 +9,7 @@ const TOOL_CALL_FENCE: &str = "```tool_call";
 const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
 const FUNCTION_CALL_FENCE: &str = "```function_call";
 const FOLLOW_UP_PREFIX: &str = "<FollowUp";
-const MAX_LINE: usize = 256 * 1024;
+const MAX_PENDING: usize = 256 * 1024;
 const MAX_FOLLOW_UP: usize = 64 * 1024;
 const MAX_TOOL_BLOCK: usize = 256 * 1024;
 
@@ -48,7 +48,7 @@ impl BlockKind {
 #[derive(Debug)]
 enum ProtocolMode {
     Normal,
-    IgnoreToolResult,
+    IgnoreToolResult { closing: Option<&'static str> },
     ToolBlock {
         kind: BlockKind,
         body: String,
@@ -59,7 +59,7 @@ enum ProtocolMode {
 #[derive(Debug)]
 struct ProtocolDetector {
     mode: ProtocolMode,
-    line: String,
+    pending: String,
     follow_up: Option<String>,
     at_stream_start: bool,
     next_call_id: usize,
@@ -69,7 +69,7 @@ impl Default for ProtocolDetector {
     fn default() -> Self {
         Self {
             mode: ProtocolMode::Normal,
-            line: String::new(),
+            pending: String::new(),
             follow_up: None,
             at_stream_start: true,
             next_call_id: 0,
@@ -79,160 +79,245 @@ impl Default for ProtocolDetector {
 
 impl ProtocolDetector {
     fn feed(&mut self, chunk: &str) -> Vec<ProtocolEvent> {
-        let mut events = Vec::new();
-        for ch in chunk.chars() {
-            self.line.push(ch);
-            if self.line.len() > MAX_LINE {
-                self.line.clear();
-                continue;
-            }
-            if ch != '\n' {
-                continue;
-            }
-            let line = std::mem::take(&mut self.line);
-            self.process_line(line, &mut events);
+        if chunk.is_empty() {
+            return Vec::new();
         }
-        events
+        self.pending.push_str(chunk);
+        if self.pending.len() > MAX_PENDING {
+            self.pending.clear();
+            self.follow_up = None;
+            self.mode = ProtocolMode::Normal;
+            return Vec::new();
+        }
+        self.drain(false)
     }
 
     fn finish(&mut self) -> Vec<ProtocolEvent> {
+        self.drain(true)
+    }
+
+    fn drain(&mut self, final_flush: bool) -> Vec<ProtocolEvent> {
         let mut events = Vec::new();
-        if let Some(tag) = self.follow_up.take() {
-            self.emit_follow_ups(&tag, &mut events);
+        loop {
+            match self.mode {
+                ProtocolMode::Normal => {
+                    if self.drain_normal(&mut events, final_flush) {
+                        continue;
+                    }
+                    break;
+                }
+                ProtocolMode::IgnoreToolResult { closing } => {
+                    if self.drain_tool_result(&mut events, closing, final_flush) {
+                        continue;
+                    }
+                    break;
+                }
+                ProtocolMode::ToolBlock { .. } => {
+                    if self.drain_tool_block(&mut events, final_flush) {
+                        continue;
+                    }
+                    break;
+                }
+            }
         }
-        if !self.line.is_empty() {
-            let line = std::mem::take(&mut self.line);
-            self.process_line(line, &mut events);
-        }
-        self.follow_up = None;
-        self.mode = ProtocolMode::Normal;
         events
     }
 
-    fn process_line(&mut self, line: String, events: &mut Vec<ProtocolEvent>) {
-        match &mut self.mode {
-            ProtocolMode::Normal => self.process_normal_line(line, events),
-            ProtocolMode::IgnoreToolResult => self.mode = ProtocolMode::Normal,
-            ProtocolMode::ToolBlock { .. } => self.process_tool_block_line(line, events),
+    fn drain_normal(&mut self, events: &mut Vec<ProtocolEvent>, final_flush: bool) -> bool {
+        if let Some(start) = self.pending.find(TOOL_RESULT_PREFIX).or_else(|| self.pending.find(TOOL_RESULT_ENVELOPE)) {
+            if start > 0 {
+                let prefix = self.pending[..start].to_owned();
+                self.pending = self.pending[start..].to_owned();
+                self.emit_text(&prefix, events);
+                self.at_stream_start = false;
+                return true;
+            }
+            let newline = match self.pending.find('\n') {
+                Some(index) => index,
+                None if final_flush => self.pending.len(),
+                None => return false,
+            };
+            let first_line = self.pending[..newline].trim_end_matches(['\r', '\n']).to_owned();
+            let closing = if first_line.contains(TOOL_CALL_FENCE) || first_line.contains(FUNCTION_CALL_FENCE) {
+                Some("```")
+            } else if first_line.contains(TOOL_CALL_SINGLE_QUOTE_FENCE) {
+                Some("'''")
+            } else {
+                None
+            };
+            let consumed = newline.min(self.pending.len());
+            if consumed < self.pending.len() {
+                self.pending.drain(..consumed + 1);
+            } else {
+                self.pending.clear();
+            }
+            self.mode = ProtocolMode::IgnoreToolResult { closing };
+            self.at_stream_start = false;
+            return true;
+        }
+
+        if let Some(kind) = self.match_opening_prefix() {
+            let opening = kind.opening();
+            if self.pending.starts_with(opening) {
+                if !self.pending[opening.len()..].contains('\n') && !final_flush {
+                    return false;
+                }
+                let consumed = opening.len();
+                self.pending.drain(..consumed);
+                self.mode = ProtocolMode::ToolBlock {
+                    kind,
+                    body: String::new(),
+                    oversized: false,
+                };
+                self.at_stream_start = false;
+                return true;
+            }
+            return false;
+        }
+
+        if let Some(start) = self.pending.find(FOLLOW_UP_PREFIX) {
+            if start > 0 {
+                let text = self.pending[..start].to_owned();
+                self.pending = self.pending[start..].to_owned();
+                self.emit_text(&text, events);
+                self.at_stream_start = false;
+                return true;
+            }
+            let candidate = self.pending.clone();
+            match parse_follow_up_candidates(&candidate) {
+                Some(_) => {
+                    self.pending.clear();
+                    self.emit_follow_ups(&candidate, events);
+                    self.at_stream_start = false;
+                    return true;
+                }
+                None if !final_flush && candidate.len() <= MAX_FOLLOW_UP => {
+                    self.follow_up = Some(candidate);
+                    self.pending.clear();
+                    self.at_stream_start = false;
+                    return false;
+                }
+                None => {
+                    self.pending.clear();
+                    self.at_stream_start = false;
+                    return true;
+                }
+            }
+        }
+
+        if self.at_stream_start {
+            let trimmed = self.pending.trim_start();
+            if let Some(call) = parse_bare_json(trimmed, &mut self.next_call_id) {
+                self.pending.clear();
+                events.push(ProtocolEvent::ToolCall(call));
+                self.at_stream_start = false;
+                return true;
+            }
+        }
+
+        if final_flush {
+            if !self.pending.is_empty() {
+                let text = std::mem::take(&mut self.pending);
+                self.emit_text(&text, events);
+            }
+            return false;
+        }
+
+        let text = std::mem::take(&mut self.pending);
+        if !text.is_empty() {
+            self.emit_text(&text, events);
+            self.at_stream_start = false;
+            return true;
+        }
+        false
+    }
+
+    fn drain_tool_result(&mut self, _events: &mut Vec<ProtocolEvent>, closing: Option<&'static str>, final_flush: bool) -> bool {
+        match closing {
+            Some(marker) => {
+                if let Some(end) = self.pending.find(marker) {
+                    let consumed = end + marker.len();
+                    self.pending.drain(..consumed);
+                    self.mode = ProtocolMode::Normal;
+                    return true;
+                }
+                if final_flush {
+                    self.pending.clear();
+                }
+                false
+            }
+            None => {
+                if let Some(index) = self.pending.find('\n') {
+                    self.pending.drain(..index + 1);
+                    self.mode = ProtocolMode::Normal;
+                    return true;
+                }
+                if final_flush {
+                    self.pending.clear();
+                }
+                false
+            }
         }
     }
 
-    fn process_tool_block_line(&mut self, line: String, events: &mut Vec<ProtocolEvent>) {
-        let ProtocolMode::ToolBlock {
-            kind,
-            body,
-            oversized,
-        } = &mut self.mode
-        else {
+    fn drain_tool_block(&mut self, events: &mut Vec<ProtocolEvent>, final_flush: bool) -> bool {
+        let ProtocolMode::ToolBlock { kind, body, oversized } = &mut self.mode else {
             unreachable!();
         };
-
-        let text = line.trim_end_matches(['\r', '\n']);
-        if text == kind.closing() {
-            let body_text = std::mem::take(body);
-            let kind = *kind;
-            let was_oversized = *oversized;
-            self.mode = ProtocolMode::Normal;
-            if !was_oversized {
-                self.emit_tool_block(kind, &body_text, events);
+        let closing = kind.closing();
+        if let Some(end) = self.pending.find(closing) {
+            let body_chunk = self.pending[..end].to_owned();
+            self.pending.drain(..end + closing.len());
+            if !*oversized {
+                body.push_str(&body_chunk);
+                if body.len() <= MAX_TOOL_BLOCK {
+                    let body_text = std::mem::take(body);
+                    let kind_value = *kind;
+                    self.mode = ProtocolMode::Normal;
+                    self.emit_tool_block(kind_value, &body_text, events);
+                    return true;
+                }
             }
-            return;
+            self.mode = ProtocolMode::Normal;
+            return true;
         }
-
         if !*oversized {
-            body.push_str(&line);
+            body.push_str(&self.pending);
+            self.pending.clear();
             if body.len() > MAX_TOOL_BLOCK {
                 *oversized = true;
                 body.clear();
             }
+        } else {
+            self.pending.clear();
         }
+        if final_flush {
+            self.mode = ProtocolMode::Normal;
+        }
+        false
     }
 
-    fn process_normal_line(&mut self, line: String, events: &mut Vec<ProtocolEvent>) {
-        let text = line.trim_end_matches(['\r', '\n']);
-        let trimmed = text.trim_start();
-
-        if trimmed.starts_with(TOOL_RESULT_PREFIX) || trimmed.starts_with(TOOL_RESULT_ENVELOPE) {
-            self.mode = ProtocolMode::IgnoreToolResult;
-            self.at_stream_start = false;
-            return;
-        }
-
-        if let Some(kind) = [
+    fn match_opening_prefix(&self) -> Option<BlockKind> {
+        for kind in [
             BlockKind::ToolCall,
             BlockKind::SingleQuoteToolCall,
             BlockKind::FunctionCall,
-        ]
-        .into_iter()
-        .find(|kind| trimmed.starts_with(kind.opening()))
-        {
-            self.mode = ProtocolMode::ToolBlock {
-                kind,
-                body: String::new(),
-                oversized: false,
-            };
-            self.at_stream_start = false;
-            return;
-        }
-
-        if let Some(tag) = &mut self.follow_up {
-            tag.push_str(text);
-            if tag.len() > MAX_FOLLOW_UP {
-                self.follow_up = None;
-                return;
-            }
-            let candidate = tag.clone();
-            if parse_follow_up_candidates(&candidate).is_some() {
-                self.follow_up = None;
-                self.emit_follow_ups(&candidate, events);
-            }
-            self.at_stream_start = false;
-            return;
-        }
-
-        if text.contains(FOLLOW_UP_PREFIX) {
-            let Some(start) = text.find(FOLLOW_UP_PREFIX) else {
-                return;
-            };
-            let candidate = &text[start..];
-            if parse_follow_up_candidates(candidate).is_some() {
-                self.emit_follow_ups(candidate, events);
-            } else if candidate.len() <= MAX_FOLLOW_UP {
-                self.follow_up = Some(candidate.to_owned());
-            }
-            self.emit_text(&text[..start], events);
-            self.at_stream_start = false;
-            return;
-        }
-
-        if self.at_stream_start {
-            if let Some(call) = parse_bare_json(trimmed, &mut self.next_call_id) {
-                events.push(ProtocolEvent::ToolCall(call));
-                if !trimmed.is_empty() {
-                    self.at_stream_start = false;
-                }
-                return;
-            }
-            if !trimmed.is_empty() {
-                self.at_stream_start = false;
+        ] {
+            if is_prefix(&self.pending, kind.opening()) {
+                return Some(kind);
             }
         }
-
-        self.emit_text(&line, events);
+        None
     }
 
     fn emit_text(&self, text: &str, events: &mut Vec<ProtocolEvent>) {
-        if text.is_empty() {
-            return;
+        if !text.is_empty() {
+            events.push(ProtocolEvent::Text(normalize_assistant_marker(text)));
         }
-        events.push(ProtocolEvent::Text(normalize_assistant_marker(text)));
     }
 
-    fn emit_tool_block(&mut self, kind: BlockKind, body: &str, events: &mut Vec<ProtocolEvent>) {
+    fn emit_tool_block(&mut self, _kind: BlockKind, body: &str, events: &mut Vec<ProtocolEvent>) {
         let normalized = body.trim();
-        if normalized.is_empty() {
-            return;
-        }
         let Ok(value) = serde_json::from_str::<Value>(normalized) else {
             return;
         };
@@ -251,15 +336,11 @@ impl ProtocolDetector {
             .or_else(|| value.get("args"))
             .cloned()
             .unwrap_or_else(|| json!({}));
-        match kind {
-            BlockKind::ToolCall | BlockKind::FunctionCall | BlockKind::SingleQuoteToolCall => {
-                events.push(ProtocolEvent::ToolCall(ModelToolCall {
-                    id,
-                    name: name.to_owned(),
-                    arguments,
-                }));
-            }
-        }
+        events.push(ProtocolEvent::ToolCall(ModelToolCall {
+            id,
+            name: name.to_owned(),
+            arguments,
+        }));
     }
 
     fn emit_follow_ups(&mut self, text: &str, events: &mut Vec<ProtocolEvent>) {
@@ -305,11 +386,7 @@ pub struct GeminiSemanticStream {
 impl GeminiSemanticStream {
     pub fn new(supports_reasoning: bool) -> Self {
         Self {
-            reasoning_phase: if supports_reasoning {
-                ReasoningPhase::Detecting
-            } else {
-                ReasoningPhase::Response
-            },
+            reasoning_phase: if supports_reasoning { ReasoningPhase::Detecting } else { ReasoningPhase::Response },
             reasoning_pending: String::new(),
             protocol: ProtocolDetector::default(),
             completed: false,
@@ -336,18 +413,12 @@ impl GeminiSemanticStream {
             output.extend(self.project_protocol_event(event));
         }
         let pending = std::mem::take(&mut self.reasoning_pending);
-        match self.reasoning_phase {
-            ReasoningPhase::Detecting | ReasoningPhase::Response => {
-                if !pending.is_empty() {
-                    output.push(ModelEvent::TextDelta(pending));
-                }
+        if !pending.is_empty() {
+            match self.reasoning_phase {
+                ReasoningPhase::Reasoning => output.push(ModelEvent::ReasoningDelta(pending)),
+                ReasoningPhase::Detecting | ReasoningPhase::Response => output.push(ModelEvent::TextDelta(pending)),
+                ReasoningPhase::Completed => {}
             }
-            ReasoningPhase::Reasoning => {
-                if !pending.is_empty() {
-                    output.push(ModelEvent::ReasoningDelta(pending));
-                }
-            }
-            ReasoningPhase::Completed => {}
         }
         self.reasoning_phase = ReasoningPhase::Completed;
         self.completed = true;
@@ -357,18 +428,12 @@ impl GeminiSemanticStream {
     fn project_protocol_event(&mut self, event: ProtocolEvent) -> Vec<ModelEvent> {
         match event {
             ProtocolEvent::Text(text) => self.feed_reasoning(text),
-            ProtocolEvent::ToolCall(call) => vec![ModelEvent::ToolCall {
-                id: call.id,
-                name: call.name,
-                arguments: call.arguments,
-            }],
+            ProtocolEvent::ToolCall(call) => vec![ModelEvent::ToolCall { id: call.id, name: call.name, arguments: call.arguments }],
         }
     }
 
     fn feed_reasoning(&mut self, delta: String) -> Vec<ModelEvent> {
-        if delta.is_empty() {
-            return Vec::new();
-        }
+        if delta.is_empty() { return Vec::new(); }
         match self.reasoning_phase {
             ReasoningPhase::Response => vec![ModelEvent::TextDelta(delta)],
             ReasoningPhase::Detecting => self.feed_reasoning_detecting(&delta),
@@ -382,21 +447,17 @@ impl GeminiSemanticStream {
         if let Some(marker_len) = matching_marker_len(&self.reasoning_pending, &REASONING_OPEN_MARKERS) {
             self.reasoning_pending.drain(..marker_len);
             self.reasoning_phase = ReasoningPhase::Reasoning;
-            return self.feed_reasoning(String::new());
+            let pending = std::mem::take(&mut self.reasoning_pending);
+            return self.feed_reasoning(pending);
         }
         let keep = partial_suffix_for_markers(&self.reasoning_pending, &REASONING_OPEN_MARKERS);
-        if self.reasoning_pending.len() <= keep {
-            return Vec::new();
-        }
+        if self.reasoning_pending.len() <= keep { return Vec::new(); }
         let split_at = self.reasoning_pending.len() - keep;
         let response = self.reasoning_pending[..split_at].to_owned();
         self.reasoning_pending.drain(..split_at);
-        self.reasoning_phase = ReasoningPhase::Response;
-        if response.is_empty() {
-            Vec::new()
-        } else {
-            vec![ModelEvent::TextDelta(response)]
-        }
+        if self.reasoning_pending.is_empty() && response.is_empty() { return Vec::new(); }
+        self.reasoning_phase = if self.reasoning_pending.is_empty() { ReasoningPhase::Response } else { ReasoningPhase::Detecting };
+        if response.is_empty() { Vec::new() } else { vec![ModelEvent::TextDelta(response)] }
     }
 
     fn feed_reasoning_body(&mut self, delta: &str) -> Vec<ModelEvent> {
@@ -407,42 +468,31 @@ impl GeminiSemanticStream {
             self.reasoning_pending.clear();
             self.reasoning_phase = ReasoningPhase::Response;
             let mut events = Vec::new();
-            if !reasoning.is_empty() {
-                events.push(ModelEvent::ReasoningDelta(reasoning));
-            }
-            if !response.is_empty() {
-                events.push(ModelEvent::TextDelta(response));
-            }
+            if !reasoning.is_empty() { events.push(ModelEvent::ReasoningDelta(reasoning)); }
+            if !response.is_empty() { events.push(ModelEvent::TextDelta(response)); }
             return events;
         }
         let keep = partial_suffix_for_markers(&self.reasoning_pending, &REASONING_CLOSE_MARKERS);
-        if self.reasoning_pending.len() <= keep {
-            return Vec::new();
-        }
+        if self.reasoning_pending.len() <= keep { return Vec::new(); }
         let split_at = self.reasoning_pending.len() - keep;
         let reasoning = self.reasoning_pending[..split_at].to_owned();
         self.reasoning_pending.drain(..split_at);
-        if reasoning.is_empty() {
-            Vec::new()
-        } else {
-            vec![ModelEvent::ReasoningDelta(reasoning)]
-        }
+        if reasoning.is_empty() { Vec::new() } else { vec![ModelEvent::ReasoningDelta(reasoning)] }
     }
+}
+
+fn is_prefix(value: &str, marker: &str) -> bool {
+    value.len() < marker.len() && marker.starts_with(value)
 }
 
 fn normalize_assistant_marker(text: &str) -> String {
     let trimmed = text.trim_start();
-    if let Some(rest) = trimmed.strip_prefix("[Assistant]:") {
-        return rest.trim_start().to_owned();
-    }
+    if let Some(rest) = trimmed.strip_prefix("[Assistant]:") { return rest.trim_start().to_owned(); }
     text.to_owned()
 }
 
 fn matching_marker_len(buffer: &str, markers: &[&str]) -> Option<usize> {
-    markers
-        .iter()
-        .find(|marker| buffer.starts_with(**marker))
-        .map(|marker| marker.len())
+    markers.iter().find(|marker| buffer.starts_with(**marker)).map(|marker| marker.len())
 }
 
 fn partial_suffix_for_markers(text: &str, markers: &[&str]) -> usize {
@@ -451,48 +501,21 @@ fn partial_suffix_for_markers(text: &str, markers: &[&str]) -> usize {
 
 fn partial_suffix_len(text: &str, marker: &str) -> usize {
     let max = text.len().min(marker.len().saturating_sub(1));
-    for len in (1..=max).rev() {
-        if text.ends_with(&marker[..len]) {
-            return len;
-        }
-    }
+    for len in (1..=max).rev() { if text.ends_with(&marker[..len]) { return len; } }
     0
 }
 
 fn find_marker(buffer: &str, markers: &[&str]) -> Option<(usize, usize)> {
-    markers
-        .iter()
-        .filter_map(|marker| buffer.find(marker).map(|idx| (idx, marker.len())))
-        .min_by_key(|(idx, _)| *idx)
+    markers.iter().filter_map(|marker| buffer.find(marker).map(|idx| (idx, marker.len()))).min_by_key(|(idx, _)| *idx)
 }
 
 fn parse_bare_json(text: &str, next_id: &mut usize) -> Option<ModelToolCall> {
-    let value = serde_json::from_str::<Value>(text).ok()?;
+    let value = serde_json::from_str::<Value>(text.trim()).ok()?;
     let name = value.get("name").and_then(Value::as_str)?.trim();
-    if name.is_empty() || value.get("arguments").is_none() && value.get("args").is_none() {
-        return None;
-    }
-    let arguments = value
-        .get("arguments")
-        .or_else(|| value.get("args"))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let id = value
-        .get("id")
-        .or_else(|| value.get("call_id"))
-        .and_then(Value::as_str)
-        .filter(|id| !id.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| {
-            let id = format!("gemini_call_{}", *next_id);
-            *next_id = next_id.saturating_add(1);
-            id
-        });
-    Some(ModelToolCall {
-        id,
-        name: name.to_owned(),
-        arguments,
-    })
+    if name.is_empty() || (value.get("arguments").is_none() && value.get("args").is_none()) { return None; }
+    let arguments = value.get("arguments").or_else(|| value.get("args")).cloned().unwrap_or_else(|| json!({}));
+    let id = value.get("id").or_else(|| value.get("call_id")).and_then(Value::as_str).filter(|id| !id.trim().is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| { let id = format!("gemini_call_{}", *next_id); *next_id = next_id.saturating_add(1); id });
+    Some(ModelToolCall { id, name: name.to_owned(), arguments })
 }
 
 fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, String)>> {
@@ -506,8 +529,7 @@ fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, String)>> {
         let end = find_tag_end(&text[after..])?;
         let absolute_end = after + end;
         let tag = &text[start..=absolute_end];
-        let (label, query) = parse_follow_up_tag(tag)?;
-        calls.push((label, query));
+        calls.push(parse_follow_up_tag(tag)?);
         cursor = absolute_end + 1;
     }
     if found { Some(calls) } else { None }
@@ -519,9 +541,7 @@ fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
     let attrs = parse_attributes(inner);
     let label = attrs.get("label")?.trim();
     let query = attrs.get("query")?.trim();
-    if label.is_empty() || query.is_empty() {
-        return None;
-    }
+    if label.is_empty() || query.is_empty() { return None; }
     Some((decode_xml(label), decode_xml(query)))
 }
 
@@ -542,17 +562,11 @@ fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
         while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
         if index >= bytes.len() { break; }
         let value = if bytes[index] == b'\'' || bytes[index] == b'"' {
-            let quote = bytes[index];
-            index += 1;
-            let value_start = index;
+            let quote = bytes[index]; index += 1; let value_start = index;
             while index < bytes.len() && bytes[index] != quote { index += 1; }
-            let value = input[value_start..index].to_owned();
-            if index < bytes.len() { index += 1; }
-            value
+            let value = input[value_start..index].to_owned(); if index < bytes.len() { index += 1; } value
         } else {
-            let value_start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() { index += 1; }
-            input[value_start..index].to_owned()
+            let value_start = index; while index < bytes.len() && !bytes[index].is_ascii_whitespace() { index += 1; } input[value_start..index].to_owned()
         };
         attrs.insert(key.to_ascii_lowercase(), value);
     }
@@ -560,12 +574,7 @@ fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
 }
 
 fn decode_xml(input: &str) -> String {
-    input
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
 }
 
 fn find_tag_end(input: &str) -> Option<usize> {
@@ -613,16 +622,12 @@ mod tests {
 
     #[test]
     fn detects_tool_call_incrementally() {
-        assert_eq!(collect(&["```tool_", "call\n{\"id\":\"c1\",\"name\":\"shell_exec\",\"arguments\":{}}\n```\n"]), vec![ModelEvent::ToolCall {
-            id: "c1".into(), name: "shell_exec".into(), arguments: json!({})
-        }]);
+        assert_eq!(collect(&["```tool_", "call\n{\"id\":\"c1\",\"name\":\"shell_exec\",\"arguments\":{}}\n```\n"]), vec![ModelEvent::ToolCall { id: "c1".into(), name: "shell_exec".into(), arguments: json!({}) }]);
     }
 
     #[test]
     fn detects_follow_up_incrementally() {
-        assert_eq!(collect(&["<FollowUp label=\"Run\" ", "query=\"cargo test\" />"]), vec![ModelEvent::ToolCall {
-            id: "gemini_call_0".into(), name: "FollowUp".into(), arguments: json!({"label":"Run","query":"cargo test"})
-        }]);
+        assert_eq!(collect(&["<FollowUp label=\"Run\" ", "query=\"cargo test\" />"]), vec![ModelEvent::ToolCall { id: "gemini_call_0".into(), name: "FollowUp".into(), arguments: json!({"label":"Run","query":"cargo test"}) }]);
     }
 
     #[test]
