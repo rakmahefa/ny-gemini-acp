@@ -5,12 +5,13 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig};
+use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiModel};
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
 use crate::tools::mcp::{McpCatalog, McpServerConfig as ProviderMcpServerConfig};
 use crate::tools::registry::ToolRegistry;
+use crate::tools::ui;
 
 struct ProviderState {
     fallback: Arc<ToolRegistry>,
@@ -106,6 +107,18 @@ impl ToolProvider for DefaultToolProvider {
         self.registry.has_tools()
     }
 
+    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
+        if self
+            .registry
+            .definitions()
+            .iter()
+            .any(|definition| definition.get("name").and_then(Value::as_str) == Some(name))
+        {
+            return Some(ui::pending(name, arguments));
+        }
+        None
+    }
+
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
         let cancellation = ToolCancellation::from_receiver(request.cancellation.clone());
         bind_session_cancellation(&request.session_id, cancellation);
@@ -121,14 +134,28 @@ impl ToolProvider for DefaultToolProvider {
             .await
         {
             Some(crate::tools::registry::ToolResult::Ok(content)) => ToolCallResult {
+                ui: Some(ui::completed(&request.name, &request.arguments, &content, true)),
                 content,
                 is_ok: true,
                 executed: true,
             },
-            Some(crate::tools::registry::ToolResult::Err(content)) => {
-                ToolCallResult::error(content)
-            }
-            None => ToolCallResult::error(format!("Outil inconnu : {}", request.name)),
+            Some(crate::tools::registry::ToolResult::Err(content)) => ToolCallResult {
+                ui: Some(ui::completed(&request.name, &request.arguments, &content, false)),
+                content,
+                is_ok: false,
+                executed: true,
+            },
+            None => ToolCallResult {
+                ui: Some(ui::completed(
+                    &request.name,
+                    &request.arguments,
+                    &format!("Outil inconnu : {}", request.name),
+                    false,
+                )),
+                content: format!("Outil inconnu : {}", request.name),
+                is_ok: false,
+                executed: false,
+            },
         };
 
         unbind_session_cancellation(&request.session_id);
