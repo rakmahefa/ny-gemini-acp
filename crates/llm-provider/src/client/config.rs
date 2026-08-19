@@ -4,9 +4,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::core::cookies::CookieJar;
+use serde_json::Value;
 use tokio::sync::RwLock;
 
-/// Valeur `bl` courante (change à chaque déploiement Google — centralisée ici).
 pub const DEFAULT_BL: &str = "boq_assistant-bard-web-server_20260716.08_p0";
 
 pub(crate) const USER_AGENT: &str =
@@ -14,31 +14,19 @@ pub(crate) const USER_AGENT: &str =
 pub(crate) const TOKEN_TTL: Duration = Duration::from_secs(600);
 pub(crate) const ENDPOINT: &str =
     "_/BardChatUi/data/assistant.lamda.BardFrontendService/StreamGenerate";
-
-/// Endpoint d'initiation de l'upload Scotty (images, cf. §4.2 — refs).
 pub(crate) const UPLOAD_ENDPOINT: &str = "https://content-push.googleapis.com/upload/";
-
-/// Repli si la page `/app` ne fournit pas les jetons de l'upload Scotty.
 pub(crate) const DEFAULT_PUSH_ID: &str = "feeds/mcudyrk2a4khkz";
 pub(crate) const DEFAULT_PCTX: &str = "CgcSBWjK7pYx";
-
-/// Garde-fou : taille maximale d'une image base64 (≈ 24 Mo décodés).
 pub(crate) const MAX_IMAGE_B64: usize = 32 * 1024 * 1024;
-
-/// Hôte attendu pour l'URL d'upload Scotty renvoyée par l'initiation.
 pub(crate) const UPLOAD_HOST: &str = "content-push.googleapis.com";
 
-/// Compteur global monotone pour `_reqid`.
 use std::sync::atomic::AtomicU64;
 pub(crate) static REQID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Fichier de cookies : export EditThisCookie, objet `{cookie, sapisid}`,
-    /// ou chaîne brute `k=v; k2=v2`.
     pub cookie_file: PathBuf,
     pub default_model: String,
-    /// Compte Google (`/u/<n>`) — absent = compte par défaut.
     pub auth_user: Option<u32>,
     pub proxy: Option<String>,
     pub bl: String,
@@ -62,26 +50,33 @@ impl Default for Config {
     }
 }
 
-/// Item du flux : delta de texte, ou erreur (amont) en dernier item.
-pub type StreamItem = Result<String, String>;
+/// Événement normalisé par le décodeur du flux Gemini avant projection sémantique.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamItem {
+    Text(String),
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: Value,
+    },
+    Metadata {
+        kind: String,
+        value: Value,
+    },
+}
 
-/// Sous-ensemble des jetons de la page `/app` (cache ~10 min, best effort).
+pub type StreamResult = Result<StreamItem, String>;
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PageTokens {
-    /// `SNlM0e` — token `at` des requêtes `StreamGenerate`.
     pub(crate) at: Option<String>,
-    /// `qKIAYe` — `Push-ID` de l'upload Scotty.
     pub(crate) push_id: Option<String>,
-    /// `Ylro7b` — `X-Client-Pctx` de l'upload Scotty.
     pub(crate) pctx: Option<String>,
 }
 
-/// Données internes partagées du client.
 pub struct ClientInner {
     pub(crate) http: reqwest::Client,
     pub(crate) config: Config,
-    /// CookieJar chargé + mtime du fichier (rechargé si le fichier change).
     pub(crate) jar: RwLock<(Option<CookieJar>, Option<SystemTime>)>,
-    /// Jetons de page `/app` avec leur horodatage.
     pub(crate) page: RwLock<Option<(PageTokens, Instant)>>,
 }
