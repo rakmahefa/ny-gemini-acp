@@ -358,14 +358,13 @@ fn strip_protocol_separator(pending: &mut String) {
     }
 }
 
-fn is_prefix(value: &str, marker: &str) -> bool {
-    value.len() < marker.len() && marker.starts_with(value)
-}
-
 fn partial_marker_suffix(input: &str, marker: &str) -> Option<usize> {
     let max = input.len().min(marker.len().saturating_sub(1));
     for len in (1..=max).rev() {
         let start = input.len() - len;
+        if !input.is_char_boundary(start) {
+            continue;
+        }
         if marker.starts_with(&input[start..]) {
             return Some(start);
         }
