@@ -4,6 +4,8 @@ pub(super) const REASONING_OPEN_MARKERS: [&str; 4] = ["<thinking>", "<think>", "
 pub(super) const REASONING_CLOSE_MARKERS: [&str; 2] = ["</thinking>", "</think>"];
 pub(super) const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 pub(super) const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
+pub(super) const TOOL_RESULT_INLINE: &str = "[tool_result ";
+pub(super) const TOOL_CALL_INLINE: &str = "[tool_call ";
 pub(super) const TOOL_CALL_FENCE: &str = "```tool_call";
 pub(super) const TOOL_CALL_SINGLE_QUOTE_FENCE: &str = "'''tool_call";
 pub(super) const FUNCTION_CALL_FENCE: &str = "```function_call";
@@ -47,14 +49,10 @@ impl BlockKind {
 #[derive(Debug)]
 pub(super) enum ProtocolMode {
     Normal,
-    IgnoreToolResult {
-        closing: Option<&'static str>,
-    },
-    ToolBlock {
-        kind: BlockKind,
-        body: String,
-        oversized: bool,
-    },
+    IgnoreToolResult { closing: Option<&'static str> },
+    IgnoreInlineToolResult,
+    ToolBlock { kind: BlockKind, body: String, oversized: bool },
+    InlineToolCall { body: String },
 }
 
 #[derive(Debug)]
