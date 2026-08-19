@@ -88,65 +88,67 @@ pub async fn run_turn(
     };
 
     session.messages.push((Role::User, user_text));
-    let mut round_context = RoundContext {
-        llm: &*llm,
-        cx: &cx,
-        session_id: &session_id,
-        sid,
-        message_id: &message_id,
-        cancel: &mut cancel,
-        session,
-        provider: &*tools,
-        semantic,
-        refs: &refs,
-        span: &span,
-    };
 
-    let max_rounds = AgentLoopConfig::default().max_rounds;
-    let outcome = match rounds::run(&mut round_context, max_rounds).await {
-        Ok(outcome) => outcome,
-        Err(rounds::RoundError::Stop(reason)) => {
-            match reason {
-                StopReason::Cancelled => {
-                    round_context.semantic.turn_cancelled();
-                }
-                _ => {
-                    round_context.semantic.turn_failed();
-                }
+    let (output, tool_round, assistant_already_persisted) = {
+        let max_rounds = AgentLoopConfig::default().max_rounds;
+        let mut round_context = RoundContext {
+            llm: &*llm,
+            cx: &cx,
+            session_id: &session_id,
+            sid,
+            message_id: &message_id,
+            cancel: &mut cancel,
+            session,
+            provider: &*tools,
+            semantic,
+            refs: &refs,
+            span: &span,
+        };
+
+        let outcome = match rounds::run(&mut round_context, max_rounds).await {
+            Ok(outcome) => outcome,
+            Err(rounds::RoundError::Stop(reason)) => {
+                match reason {
+                    StopReason::Cancelled => round_context.semantic.turn_cancelled(),
+                    _ => round_context.semantic.turn_failed(),
+                };
+                return responder.respond(PromptResponse::new(reason));
             }
-            return responder.respond(PromptResponse::new(reason));
+            Err(rounds::RoundError::Acp(error)) => {
+                round_context.semantic.turn_failed();
+                return Err(error);
+            }
+        };
+
+        let RoundOutcome {
+            output,
+            tool_round,
+            assistant_already_persisted,
+        } = outcome;
+        span.record("tool_rounds", tool_round);
+        span.record("chars_output", output.chars().count());
+
+        if !assistant_already_persisted && !output.trim().is_empty() {
+            round_context
+                .session
+                .messages
+                .push((Role::Assistant, output.clone()));
         }
-        Err(rounds::RoundError::Acp(error)) => {
-            round_context.semantic.turn_failed();
-            return Err(error);
+
+        if let Err(error) = notify_usage(
+            &cx,
+            &session_id,
+            &crate::prompt::build::build_prompt(round_context.session, Some(round_context.provider)),
+            &output,
+        ) {
+            tracing::warn!(session=%session_id,"notify_usage a échoué: {error}");
         }
+
+        (output, tool_round, assistant_already_persisted)
     };
 
-    let RoundOutcome {
-        output,
-        tool_round,
-        assistant_already_persisted,
-    } = outcome;
-    span.record("tool_rounds", tool_round);
-    span.record("chars_output", output.chars().count());
-
-    if !assistant_already_persisted && !output.trim().is_empty() {
-        round_context
-            .session
-            .messages
-            .push((Role::Assistant, output.clone()));
-    }
-
-    if let Err(error) = notify_usage(
-        &cx,
-        &session_id,
-        &crate::prompt::build::build_prompt(round_context.session, Some(round_context.provider)),
-        &output,
-    ) {
-        tracing::warn!(session=%session_id,"notify_usage a échoué: {error}");
-    }
-
+    let _ = (tool_round, assistant_already_persisted);
     guard.finish().await;
-    round_context.semantic.turn_completed();
+    semantic.turn_completed();
     responder.respond(PromptResponse::new(StopReason::EndTurn))
 }
