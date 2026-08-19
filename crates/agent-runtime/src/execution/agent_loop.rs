@@ -3,7 +3,11 @@ use std::sync::Arc;
 
 use crate::events::{consume_model_stream, ModelProjectionError, ModelRound, PendingToolCall, TurnEventEmitter};
 use crate::state::{Role, Session};
-use crate::{Cancellation, GenerationOptions, LlmError, LlmProvider, ModelEvent, ModelRequest, ToolCallRequest, ToolCallResult, ToolProvider};
+use crate::{
+    Cancellation, GenerationOptions, LlmError, LlmProvider, ModelEvent, ModelRequest,
+    ToolCallRequest, ToolCallResult, ToolPermissionDecision, ToolPermissionHandler,
+    ToolPermissionRequest, ToolProvider,
+};
 
 const DEFAULT_MAX_ROUNDS: usize = 20;
 const DEFAULT_MAX_TOOL_CALLS_PER_ROUND: usize = 32;
@@ -23,11 +27,7 @@ pub struct AgentLoopConfig {
     pub max_rounds: usize,
     pub max_tool_calls_per_round: usize,
 }
-
-impl Default for AgentLoopConfig {
-    fn default() -> Self { Self { max_rounds: DEFAULT_MAX_ROUNDS, max_tool_calls_per_round: DEFAULT_MAX_TOOL_CALLS_PER_ROUND } }
-}
-
+impl Default for AgentLoopConfig { fn default() -> Self { Self { max_rounds: DEFAULT_MAX_ROUNDS, max_tool_calls_per_round: DEFAULT_MAX_TOOL_CALLS_PER_ROUND } } }
 impl AgentLoopConfig {
     fn validate(self) -> Result<Self, AgentLoopError> {
         if self.max_rounds == 0 { return Err(AgentLoopError::InvalidConfig("max_rounds must be greater than zero".into())); }
@@ -54,20 +54,21 @@ pub enum AgentLoopError {
     #[error("agent action failed: {0}")] Action(String),
 }
 
-/// The single provider-neutral model/tool orchestration engine for a logical turn.
+/// Provider-neutral model/tool orchestration. Host-specific permission policy is injected separately.
 pub struct AgentLoop {
     llm: Arc<dyn LlmProvider>,
     tools: Arc<dyn ToolProvider>,
     config: AgentLoopConfig,
     action_handler: Option<Arc<dyn AgentActionHandler>>,
+    permission_handler: Option<Arc<dyn ToolPermissionHandler>>,
 }
 
 impl AgentLoop {
     pub fn new(llm: Arc<dyn LlmProvider>, tools: Arc<dyn ToolProvider>, config: AgentLoopConfig) -> Result<Self, AgentLoopError> {
-        Ok(Self { llm, tools, config: config.validate()?, action_handler: None })
+        Ok(Self { llm, tools, config: config.validate()?, action_handler: None, permission_handler: None })
     }
-
     pub fn with_action_handler(mut self, handler: Arc<dyn AgentActionHandler>) -> Self { self.action_handler = Some(handler); self }
+    pub fn with_permission_handler(mut self, handler: Arc<dyn ToolPermissionHandler>) -> Self { self.permission_handler = Some(handler); self }
     pub fn config(&self) -> AgentLoopConfig { self.config }
 
     pub async fn run<F>(&self, session: &mut Session, references: &[String], cancellation: Cancellation, emitter: &mut TurnEventEmitter, build_prompt: F) -> Result<AgentLoopOutcome, AgentLoopError>
@@ -75,7 +76,6 @@ impl AgentLoop {
         validate_session(session)?;
         if cancellation.is_cancelled() { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
         if !emitter.turn_started() { return Err(AgentLoopError::SemanticEventRejected); }
-
         let tools = self.tools.for_session(&session.id).await;
         let mut seen_tool_ids = HashSet::new();
         let mut total_tool_calls = 0usize;
@@ -88,8 +88,7 @@ impl AgentLoop {
             let stream = match self.llm.stream(request).await {
                 Ok(stream) => stream,
                 Err(error) => {
-                    let overflow = is_context_error(&error);
-                    if overflow && !overflow_retry {
+                    if is_context_error(&error) && !overflow_retry {
                         compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS);
                         overflow_retry = true;
                         continue 'rounds;
@@ -114,10 +113,7 @@ impl AgentLoop {
                     if handler.supports(&call.name) {
                         ensure_not_cancelled(&cancellation, emitter)?;
                         match handler.handle(&session.id, &call.id, &call.name, call.arguments, cancellation.clone()).await {
-                            Ok(Some(user_text)) => {
-                                if !user_text.trim().is_empty() { session.messages.push((Role::User, user_text)); }
-                                continue 'rounds;
-                            }
+                            Ok(Some(user_text)) => { if !user_text.trim().is_empty() { session.messages.push((Role::User, user_text)); } continue 'rounds; }
                             Ok(None) => continue,
                             Err(_error) if cancellation.is_cancelled() => { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
                             Err(error) => { let _ = emitter.turn_failed(); return Err(AgentLoopError::Action(error)); }
@@ -147,8 +143,48 @@ impl AgentLoop {
                     let _ = emitter.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
+
+                let permission_request = ToolPermissionRequest {
+                    session_id: session.id.clone(),
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    arguments: call.arguments.clone(),
+                    cwd: session.cwd.clone(),
+                    additional_dirs: session.additional_directories.clone(),
+                };
+
+                if let Some(permission_handler) = &self.permission_handler {
+                    if permission_handler.needs_permission(session, &permission_request) {
+                        if !emitter.permission_requested(call.id.clone()) {
+                            let _ = emitter.turn_failed();
+                            return Err(AgentLoopError::SemanticEventRejected);
+                        }
+                        match permission_handler.request_permission(session, &permission_request, cancellation.clone()).await {
+                            ToolPermissionDecision::Allow => {}
+                            ToolPermissionDecision::Reject(message) => {
+                                let mut result = ToolCallResult::error(message.clone());
+                                result.ui = ui.map(|model| model.completed(false, Some(serde_json::json!({"text": message}))));
+                                ensure_not_cancelled(&cancellation, emitter)?;
+                                if !emitter.tool_result_received_with_ui(call.id.clone(), result.content.clone(), result.ui.clone()) {
+                                    let _ = emitter.turn_failed();
+                                    return Err(AgentLoopError::SemanticEventRejected);
+                                }
+                                session.messages.push((Role::Tool, canonical_tool_result(&call.name, &result)));
+                                continue;
+                            }
+                            ToolPermissionDecision::Cancelled => {
+                                let _ = emitter.turn_cancelled();
+                                return Err(AgentLoopError::Cancelled);
+                            }
+                        }
+                    }
+                }
+
                 let running_ui = ui.clone().map(|model| model.running());
-                if !emitter.tool_execution_started_with_ui(call.id.clone(), running_ui) { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
+                if !emitter.tool_execution_started_with_ui(call.id.clone(), running_ui) {
+                    let _ = emitter.turn_failed();
+                    return Err(AgentLoopError::SemanticEventRejected);
+                }
                 let result = if session.tools_enabled && tools.has_tools() {
                     tools.call(ToolCallRequest { session_id: session.id.clone(), name: call.name.clone(), arguments: call.arguments.clone(), cwd: session.cwd.clone(), additional_dirs: session.additional_directories.clone(), cancellation: cancellation.subscribe() }).await
                 } else {
@@ -174,7 +210,6 @@ fn validate_session(session: &Session) -> Result<(), AgentLoopError> {
     if session.model.trim().is_empty() { return Err(AgentLoopError::InvalidSession("model must not be empty".into())); }
     Ok(())
 }
-
 fn validate_tool_calls(calls: &[PendingToolCall], seen: &mut HashSet<String>) -> Result<(), AgentLoopError> {
     for call in calls {
         if call.id.trim().is_empty() { return Err(AgentLoopError::InvalidToolCall("tool call id must not be empty".into())); }
@@ -183,25 +218,19 @@ fn validate_tool_calls(calls: &[PendingToolCall], seen: &mut HashSet<String>) ->
     }
     Ok(())
 }
-
 fn ensure_not_cancelled(cancellation: &Cancellation, emitter: &mut TurnEventEmitter) -> Result<(), AgentLoopError> {
     if cancellation.is_cancelled() { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
     Ok(())
 }
-
 fn is_context_error(error: &LlmError) -> bool {
     let text = error.to_string().to_ascii_lowercase();
     text.contains("context") || text.contains("too long") || text.contains("tokens")
 }
-
 fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
     if messages.len() <= 1 { return; }
     let mut turns: Vec<Vec<(Role, String)>> = Vec::new();
     let mut current = Vec::new();
-    for message in messages.iter() {
-        if message.0 == Role::User && !current.is_empty() { turns.push(std::mem::take(&mut current)); }
-        current.push(message.clone());
-    }
+    for message in messages.iter() { if message.0 == Role::User && !current.is_empty() { turns.push(std::mem::take(&mut current)); } current.push(message.clone()); }
     if !current.is_empty() { turns.push(current); }
     if turns.len() <= PRESERVE_TURNS { return; }
     let current_chars: usize = messages.iter().map(|(_, text)| text.len()).sum();
@@ -216,7 +245,6 @@ fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
     for (i, turn) in turns.into_iter().enumerate() { if i >= tail_end || !evict.contains(&i) { compacted.extend(turn); } }
     *messages = compacted;
 }
-
 async fn consume_stream(stream: crate::LlmStream, cancellation: &Cancellation, emitter: &mut TurnEventEmitter) -> Result<ModelRound, AgentLoopError> {
     match consume_model_stream(stream, cancellation, emitter).await {
         Ok(round) => Ok(round),
@@ -226,16 +254,20 @@ async fn consume_stream(stream: crate::LlmStream, cancellation: &Cancellation, e
         Err(ModelProjectionError::SemanticEventRejected) => { let _ = emitter.turn_failed(); Err(AgentLoopError::SemanticEventRejected) }
     }
 }
-
 fn format_tool_calls(text: &str, calls: &[PendingToolCall]) -> String {
     let mut result = text.trim().to_owned();
-    for call in calls { if !result.is_empty() { result.push('\n'); } result.push_str(&format!("[tool_call {} id={}] {}", call.name, call.id, call.arguments)); }
+    for call in calls {
+        if !result.is_empty() { result.push('\n'); }
+        let block = serde_json::json!({"name": call.name, "id": call.id, "arguments": call.arguments});
+        result.push_str("```tool_call\n");
+        result.push_str(&block.to_string());
+        result.push_str("\n```");
+    }
     result
 }
-
 fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
-    let status = if result.is_ok { "ok" } else { "error" };
-    format!("[tool_result {name} status={status}] {}", result.content)
+    let envelope = serde_json::json!({"tool": name, "content": result.content});
+    format!("[Tool result]: {envelope}")
 }
 
 #[cfg(test)]
@@ -260,7 +292,8 @@ mod tests {
     fn session() -> Session { Session::new("sess_0123456789abcdef0123456789abcdef".into(), std::env::temp_dir(), vec![], "fake-model") }
     fn emitter() -> TurnEventEmitter { TurnEventEmitter::new(crate::EventBus::new(), "sess_0123456789abcdef0123456789abcdef", "turn_test") }
 
-    #[tokio::test] async fn completes_text_round() {
+    #[tokio::test]
+    async fn completes_text_round() {
         let llm = Arc::new(FakeLlm::default());
         llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("hello".into()))]);
         let agent = AgentLoop::new(llm, Arc::new(crate::NullToolProvider), AgentLoopConfig::default()).unwrap();
@@ -269,7 +302,8 @@ mod tests {
         assert_eq!(outcome.output, "hello"); assert_eq!(outcome.rounds, 1);
     }
 
-    #[test] fn rejects_zero_limits() {
+    #[test]
+    fn rejects_zero_limits() {
         assert!(AgentLoop::new(Arc::new(crate::NullLlmProvider), Arc::new(crate::NullToolProvider), AgentLoopConfig { max_rounds: 0, max_tool_calls_per_round: 1 }).is_err());
     }
 }
