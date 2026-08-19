@@ -14,11 +14,19 @@ enum StreamPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolTerminalReason {
+    Result,
+    PermissionDenied,
+    TurnCancelled,
+    TurnFailed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolPhase {
     Requested,
     Permission,
     Executing,
-    Terminal,
+    Terminal(ToolTerminalReason),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -158,6 +166,11 @@ impl TurnIntegrity {
                 "tool_call_requested requires a non-empty tool_call_id",
             ));
         }
+        if self.assistant == StreamPhase::Active || self.thinking == StreamPhase::Active {
+            return Err(IntegrityError::new(
+                "tool_call_requested requires text streams to be closed",
+            ));
+        }
         if self.tools.contains_key(id) {
             return Err(IntegrityError::new(format!(
                 "tool call {id} was already requested"
@@ -203,10 +216,17 @@ impl TurnIntegrity {
     pub(super) fn tool_result_received(&mut self, id: &str) -> Result<(), IntegrityError> {
         self.ensure_active("tool_result_received")?;
         match self.tools.get_mut(id) {
-            Some(s @ (ToolPhase::Requested | ToolPhase::Permission | ToolPhase::Executing)) => {
-                *s = ToolPhase::Terminal;
+            Some(s @ ToolPhase::Executing) => {
+                *s = ToolPhase::Terminal(ToolTerminalReason::Result);
                 Ok(())
             }
+            Some(s @ ToolPhase::Permission) => {
+                *s = ToolPhase::Terminal(ToolTerminalReason::PermissionDenied);
+                Ok(())
+            }
+            Some(ToolPhase::Requested) => Err(IntegrityError::new(format!(
+                "tool_result_received for tool {id} requires execution or an explicit permission decision"
+            ))),
             Some(s) => Err(IntegrityError::new(format!(
                 "tool_result_received for tool {id} is invalid from state {s:?}"
             ))),
@@ -217,11 +237,11 @@ impl TurnIntegrity {
     }
 
     pub(super) fn turn_cancelled(&mut self) -> Result<(), IntegrityError> {
-        self.finish_terminal("turn_cancelled")
+        self.finish_terminal("turn_cancelled", ToolTerminalReason::TurnCancelled)
     }
 
     pub(super) fn turn_failed(&mut self) -> Result<(), IntegrityError> {
-        self.finish_terminal("turn_failed")
+        self.finish_terminal("turn_failed", ToolTerminalReason::TurnFailed)
     }
 
     pub(super) fn turn_completed(&mut self) -> Result<(), IntegrityError> {
@@ -236,22 +256,32 @@ impl TurnIntegrity {
                 "turn_completed cannot close an active text stream",
             ));
         }
-        if self.tools.values().any(|s| *s != ToolPhase::Terminal) {
+        if self
+            .tools
+            .values()
+            .any(|state| !matches!(state, ToolPhase::Terminal(_)))
+        {
             return Err(IntegrityError::new(
-                "turn_completed cannot close a turn with an active tool call",
+                "turn_completed cannot close a turn with a non-terminal tool call",
             ));
         }
         self.phase = TurnPhase::Terminal;
         Ok(())
     }
 
-    fn finish_terminal(&mut self, event: &str) -> Result<(), IntegrityError> {
+    fn finish_terminal(
+        &mut self,
+        event: &str,
+        tool_reason: ToolTerminalReason,
+    ) -> Result<(), IntegrityError> {
         self.ensure_active(event)?;
         self.phase = TurnPhase::Terminal;
         self.assistant = StreamPhase::Idle;
         self.thinking = StreamPhase::Idle;
-        for s in self.tools.values_mut() {
-            *s = ToolPhase::Terminal;
+        for state in self.tools.values_mut() {
+            if !matches!(state, ToolPhase::Terminal(_)) {
+                *state = ToolPhase::Terminal(tool_reason);
+            }
         }
         Ok(())
     }
@@ -288,12 +318,65 @@ mod tests {
     }
 
     #[test]
-    fn tools() {
+    fn tool_lifecycle_requires_real_execution_for_results() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.tool_call_requested("c").unwrap();
+        assert!(s.tool_result_received("c").is_err());
+        assert_eq!(s.tools.get("c"), Some(&ToolPhase::Requested));
+
+        s.tool_execution_started("c").unwrap();
+        s.tool_result_received("c").unwrap();
+        assert_eq!(
+            s.tools.get("c"),
+            Some(&ToolPhase::Terminal(ToolTerminalReason::Result))
+        );
+        s.turn_completed().unwrap();
+    }
+
+    #[test]
+    fn permission_result_is_an_explicit_terminal_outcome() {
         let mut s = TurnIntegrity::default();
         s.turn_started().unwrap();
         s.tool_call_requested("c").unwrap();
         s.permission_requested("c").unwrap();
         s.tool_result_received("c").unwrap();
+        assert_eq!(
+            s.tools.get("c"),
+            Some(&ToolPhase::Terminal(ToolTerminalReason::PermissionDenied))
+        );
+        assert!(s.tool_execution_started("c").is_err());
+        s.turn_completed().unwrap();
+    }
+
+    #[test]
+    fn tool_call_cannot_overlap_open_text_stream() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+
+        s.assistant_started().unwrap();
+        assert!(s.tool_call_requested("assistant-open").is_err());
+        s.assistant_completed().unwrap();
+
+        s.assistant_started().unwrap();
+        s.thinking_started().unwrap();
+        assert!(s.tool_call_requested("thinking-open").is_err());
+        s.thinking_completed().unwrap();
+        s.assistant_completed().unwrap();
+
+        s.tool_call_requested("closed-streams").unwrap();
+    }
+
+    #[test]
+    fn terminal_tool_states_are_immutable() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.tool_call_requested("c").unwrap();
+        s.tool_execution_started("c").unwrap();
+        s.tool_result_received("c").unwrap();
+        assert!(s.permission_requested("c").is_err());
+        assert!(s.tool_execution_started("c").is_err());
+        assert!(s.tool_result_received("c").is_err());
         s.turn_completed().unwrap();
     }
 
@@ -303,22 +386,27 @@ mod tests {
         s.turn_started().unwrap();
         s.tool_call_requested("c").unwrap();
         s.turn_cancelled().unwrap();
+        assert_eq!(
+            s.tools.get("c"),
+            Some(&ToolPhase::Terminal(ToolTerminalReason::TurnCancelled))
+        );
         assert!(s.turn_completed().is_err());
         assert!(s.turn_cancelled().is_err());
     }
 
     #[test]
-    fn failure_is_terminal_even_with_open_lifecycle() {
+    fn failure_is_terminal_even_with_open_tool_lifecycle() {
         let mut s = TurnIntegrity::default();
         s.turn_started().unwrap();
-        s.assistant_started().unwrap();
-        s.thinking_started().unwrap();
         s.tool_call_requested("c").unwrap();
+        s.tool_execution_started("c").unwrap();
         s.turn_failed().unwrap();
+        assert_eq!(
+            s.tools.get("c"),
+            Some(&ToolPhase::Terminal(ToolTerminalReason::TurnFailed))
+        );
         assert!(s.turn_completed().is_err());
         assert!(s.turn_failed().is_err());
-        assert!(s.assistant_delta().is_err());
-        assert!(s.thinking_delta().is_err());
     }
 
     #[test]
