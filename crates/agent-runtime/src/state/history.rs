@@ -1,8 +1,9 @@
 //! Canonical conversation history owned by the agent runtime.
 //!
-//! The runtime deliberately stores semantic history instead of flattening tool
-//! calls and tool results into display strings. Provider/ACP projections can
-//! render this model differently without changing the persisted conversation.
+//! The runtime stores semantic history instead of making persisted tool
+//! lifecycles depend on display strings. The `push((Role, String))` adapter
+//! remains temporarily supported so older execution paths can migrate without
+//! breaking persisted sessions.
 
 use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
@@ -30,6 +31,21 @@ pub enum HistoryEntry {
         content: String,
         is_ok: bool,
     },
+}
+
+impl From<(Role, String)> for HistoryEntry {
+    fn from((role, content): (Role, String)) -> Self {
+        match role {
+            Role::User => Self::User { content },
+            Role::Assistant => Self::Assistant { content },
+            Role::Tool => Self::ToolResult {
+                id: String::new(),
+                name: "legacy".to_owned(),
+                content,
+                is_ok: true,
+            },
+        }
+    }
 }
 
 impl HistoryEntry {
@@ -87,8 +103,11 @@ impl History {
         self.entries.last()
     }
 
-    pub fn push(&mut self, entry: HistoryEntry) {
-        self.entries.push(entry);
+    pub fn push<E>(&mut self, entry: E)
+    where
+        E: Into<HistoryEntry>,
+    {
+        self.entries.push(entry.into());
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
@@ -133,6 +152,78 @@ impl History {
     pub fn formatted_chars(&self) -> usize {
         self.entries.iter().map(HistoryEntry::approx_chars).sum()
     }
+
+    /// Converts legacy flattened tool messages produced by the pre-history-model
+    /// execution path into canonical tool-call/result entries.
+    pub fn normalize_legacy(&mut self) {
+        let mut normalized = Vec::with_capacity(self.entries.len());
+        let mut unresolved: Vec<(String, String)> = Vec::new();
+
+        for entry in self.entries.drain(..) {
+            match entry {
+                HistoryEntry::Assistant { content } => {
+                    let mut plain = Vec::new();
+                    for line in content.lines() {
+                        if let Some((name, id, arguments)) = parse_tool_call_line(line) {
+                            if !plain.is_empty() {
+                                normalized.push(HistoryEntry::Assistant {
+                                    content: plain.join("\n"),
+                                });
+                                plain.clear();
+                            }
+                            unresolved.push((name.clone(), id.clone()));
+                            normalized.push(HistoryEntry::ToolCall { id, name, arguments });
+                        } else {
+                            plain.push(line.to_owned());
+                        }
+                    }
+                    if !plain.is_empty() {
+                        normalized.push(HistoryEntry::Assistant {
+                            content: plain.join("\n"),
+                        });
+                    }
+                }
+                HistoryEntry::ToolResult {
+                    id,
+                    name,
+                    content,
+                    is_ok,
+                } if id.is_empty() && name == "legacy" => {
+                    let (resolved_name, resolved_id) = unresolved
+                        .iter()
+                        .rev()
+                        .next()
+                        .cloned()
+                        .unwrap_or_else(|| (name.clone(), id.clone()));
+                    unresolved.pop();
+                    normalized.push(HistoryEntry::ToolResult {
+                        id: resolved_id,
+                        name: resolved_name,
+                        content,
+                        is_ok,
+                    });
+                }
+                other => normalized.push(other),
+            }
+        }
+
+        self.entries = normalized;
+    }
+}
+
+fn parse_tool_call_line(line: &str) -> Option<(String, String, Value)> {
+    let rest = line.strip_prefix("[tool_call ")?;
+    let end = rest.find(']')?;
+    let header = &rest[..end];
+    let arguments = rest[end + 1..].trim();
+    let mut parts = header.splitn(2, " id=");
+    let name = parts.next()?.trim();
+    let id = parts.next()?.trim();
+    if name.is_empty() || id.is_empty() || arguments.is_empty() {
+        return None;
+    }
+    let value = serde_json::from_str(arguments).ok()?;
+    Some((name.to_owned(), id.to_owned(), value))
 }
 
 impl<'de> Deserialize<'de> for History {
@@ -145,23 +236,9 @@ impl<'de> Deserialize<'de> for History {
             return Ok(Self { entries });
         }
 
-        // Compatibility with sessions written before the canonical history model:
-        // `messages: [["user", "text"], ["assistant", "text"], ...]`.
         let legacy = serde_json::from_value::<Vec<(Role, String)>>(raw)
             .map_err(serde::de::Error::custom)?;
-        let entries = legacy
-            .into_iter()
-            .map(|(role, content)| match role {
-                Role::User => HistoryEntry::User { content },
-                Role::Assistant => HistoryEntry::Assistant { content },
-                Role::Tool => HistoryEntry::ToolResult {
-                    id: String::new(),
-                    name: "legacy".to_owned(),
-                    content,
-                    is_ok: true,
-                },
-            })
-            .collect();
+        let entries = legacy.into_iter().map(HistoryEntry::from).collect();
         Ok(Self { entries })
     }
 }
@@ -192,5 +269,21 @@ mod tests {
         assert_eq!(history.len(), 3);
         assert!(matches!(history.first(), Some(HistoryEntry::User { content }) if content == "hello"));
         assert!(matches!(history.last(), Some(HistoryEntry::ToolResult { content, .. }) if content == "done"));
+    }
+
+    #[test]
+    fn normalizes_flattened_tool_messages() {
+        let mut history = History::new();
+        history.push((Role::User, "run tests".into()));
+        history.push((
+            Role::Assistant,
+            "I will run them.\n[tool_call shell_exec id=call-1] {\"command\":\"cargo test\"}".into(),
+        ));
+        history.push((Role::Tool, "[tool_result shell_exec status=ok] all green".into()));
+        history.normalize_legacy();
+
+        assert!(matches!(history.iter().nth(1), Some(HistoryEntry::Assistant { content }) if content == "I will run them."));
+        assert!(matches!(history.iter().nth(2), Some(HistoryEntry::ToolCall { id, name, .. }) if id == "call-1" && name == "shell_exec"));
+        assert!(matches!(history.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "shell_exec" && content.contains("all green") && *is_ok));
     }
 }
