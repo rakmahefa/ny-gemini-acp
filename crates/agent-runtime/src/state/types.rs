@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
-use super::history::History;
+use super::History;
 
 pub const MAX_SNAPSHOTS: usize = 10;
 
@@ -86,8 +86,8 @@ pub struct Session {
     pub mode: SessionMode,
     #[serde(default)]
     pub turn_count: u64,
-    #[serde(alias = "messages")]
-    pub history: History,
+    #[serde(alias = "history")]
+    pub messages: History,
 }
 
 impl Session {
@@ -110,7 +110,7 @@ impl Session {
             tools_enabled: true,
             mode: SessionMode::Default,
             turn_count: 0,
-            history: History::new(),
+            messages: History::new(),
         }
     }
 
@@ -128,7 +128,7 @@ impl Session {
             tools_enabled: self.tools_enabled,
             mode: self.mode,
             turn_count: 0,
-            history: self.history.clone(),
+            messages: self.messages.clone(),
         }
     }
 }
