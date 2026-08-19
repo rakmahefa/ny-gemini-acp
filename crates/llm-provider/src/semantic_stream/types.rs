@@ -37,7 +37,6 @@ impl BlockKind {
             Self::SingleQuoteToolCall => TOOL_CALL_SINGLE_QUOTE_FENCE,
         }
     }
-
     pub(super) fn closing(self) -> &'static str {
         match self {
             Self::SingleQuoteToolCall => "'''",
@@ -52,7 +51,7 @@ pub(super) enum ProtocolMode {
     IgnoreToolResult { closing: Option<&'static str> },
     IgnoreInlineToolResult,
     ToolBlock { kind: BlockKind, body: String, oversized: bool },
-    InlineToolCall { body: String },
+    InlineToolCall,
 }
 
 #[derive(Debug)]
