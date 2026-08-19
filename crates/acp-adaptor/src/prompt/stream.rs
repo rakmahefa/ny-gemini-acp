@@ -1,165 +1,58 @@
-//! Normalized model stream -> ACP output orchestration.
-//!
-//! This module owns semantic stream lifecycle emission. Model semantics are
-//! produced by the LLM provider; this adapter only projects them to ACP.
-
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
-use agent_runtime::{LlmError, ModelEvent, TurnEventEmitter};
-use tokio::sync::{mpsc, watch};
-use tools_provider::tools::executor::emit_error_chunk;
-use tools_provider::tools::parse::ParsedToolCall;
+use agent_runtime::SemanticEvent;
+use tokio::sync::broadcast;
 
-use super::{
-    error::actionable_stream_error,
-    follow_up::StreamNormalizer,
-    interaction::InteractionGroup,
-    notify::{notify_reasoning, notify_text},
-    stream_contract::{SemanticStreamContract, StreamDelta},
-};
+use super::notify::{notify_reasoning, notify_text};
 
-pub enum StreamOutcome {
-    Complete,
-    Cancelled,
-    Failed(String),
-}
-
-pub struct StreamResult {
-    pub outcome: StreamOutcome,
-    pub assistant: String,
-    pub tool_calls: Vec<ParsedToolCall>,
-    pub(crate) interaction_groups: Vec<InteractionGroup>,
-}
-
-pub async fn consume(
-    mut rx: mpsc::Receiver<Result<ModelEvent, LlmError>>,
-    cancel: &mut watch::Receiver<bool>,
+/// Projects already-validated runtime semantic events into ACP notifications.
+/// No Gemini/protocol parsing and no tool orchestration happens here.
+pub async fn project(
+    mut events: broadcast::Receiver<SemanticEvent>,
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     message_id: &MessageId,
-    semantic: &mut TurnEventEmitter,
-) -> Result<StreamResult, AcpError> {
-    let mut stream_contract = SemanticStreamContract::new();
-    let mut follow_up_stream = StreamNormalizer::default();
-    let mut assistant = String::new();
-    let mut tool_calls = Vec::new();
-    let mut interaction_groups = Vec::new();
-    let mut thinking_active = false;
-    semantic.assistant_started();
+    turn_id: &str,
+) -> Result<(), AcpError> {
+    loop {
+        match events.recv().await {
+            Ok(event) => {
+                let event_turn = match &event {
+                    SemanticEvent::TurnStarted { context }
+                    | SemanticEvent::AssistantStarted { context }
+                    | SemanticEvent::AssistantDelta { context, .. }
+                    | SemanticEvent::AssistantCompleted { context }
+                    | SemanticEvent::ThinkingStarted { context }
+                    | SemanticEvent::ThinkingDelta { context, .. }
+                    | SemanticEvent::ThinkingCompleted { context }
+                    | SemanticEvent::TurnCancelled { context }
+                    | SemanticEvent::TurnFailed { context }
+                    | SemanticEvent::TurnCompleted { context } => &context.turn_id,
+                    SemanticEvent::ToolCallRequested { context, .. }
+                    | SemanticEvent::PermissionRequested { context }
+                    | SemanticEvent::ToolExecutionStarted { context }
+                    | SemanticEvent::ToolResultReceived { context, .. } => &context.event.turn_id,
+                };
+                if event_turn != turn_id {
+                    continue;
+                }
 
-    let outcome = loop {
-        tokio::select! {
-            _ = cancel.changed() => break StreamOutcome::Cancelled,
-            item = rx.recv() => {
-                let Some(item) = item else { break StreamOutcome::Complete };
-                match item {
-                    Ok(ModelEvent::TextDelta(delta)) => {
-                        if thinking_active {
-                            semantic.thinking_completed();
-                            thinking_active = false;
-                        }
-                        let delta = handle_response_chunk(
-                            &delta,
-                            &mut stream_contract,
-                            &mut follow_up_stream,
-                            &mut assistant,
-                            semantic,
-                            cx,
-                            session_id,
-                            message_id,
-                        )?;
-                        tool_calls.extend(delta.tool_calls);
-                        interaction_groups.extend(delta.interaction_groups);
+                match event {
+                    SemanticEvent::AssistantDelta { delta, .. } => {
+                        notify_text(cx, session_id, message_id, delta)?;
                     }
-                    Ok(ModelEvent::ReasoningDelta(text)) => {
-                        if !thinking_active {
-                            semantic.thinking_started();
-                            thinking_active = true;
-                        }
-                        semantic.thinking_delta(&text);
-                        notify_reasoning(cx, session_id, message_id, text)?;
+                    SemanticEvent::ThinkingDelta { delta, .. } => {
+                        notify_reasoning(cx, session_id, message_id, delta)?;
                     }
-                    Ok(ModelEvent::ToolCall { .. }) => {
-                        break StreamOutcome::Failed("structured provider tool calls are not yet supported by the ACP text-tool projection".to_owned());
-                    }
-                    Ok(ModelEvent::Usage { .. }) => {}
-                    Err(error) => break StreamOutcome::Failed(error.to_string()),
+                    SemanticEvent::TurnCancelled { .. }
+                    | SemanticEvent::TurnFailed { .. }
+                    | SemanticEvent::TurnCompleted { .. } => break,
+                    _ => {}
                 }
             }
-        }
-    };
-
-    if thinking_active {
-        semantic.thinking_completed();
-    }
-
-    let final_delta = match stream_contract.finish() {
-        Ok(delta) => delta,
-        Err(error) => {
-            tracing::error!(%error, "semantic stream contract violated at EOF");
-            emit_error_chunk(cx, session_id, message_id, "Internal stream integrity failure: protocol output was rejected.");
-            Default::default()
-        }
-    };
-    tool_calls.extend(final_delta.tool_calls);
-    interaction_groups.extend(final_delta.interaction_groups);
-    if !final_delta.visible.is_empty() {
-        assistant.push_str(&final_delta.visible);
-        let safe_message = follow_up_stream.push(&final_delta.visible);
-        if !safe_message.is_empty() {
-            semantic.assistant_delta(&safe_message);
-            notify_text(cx, session_id, message_id, safe_message)?;
+            Err(broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(broadcast::error::RecvError::Closed) => break,
         }
     }
-
-    let follow_up_tail = follow_up_stream.finish();
-    if !follow_up_tail.is_empty() {
-        assistant.push_str(&follow_up_tail);
-        semantic.assistant_delta(&follow_up_tail);
-        notify_text(cx, session_id, message_id, follow_up_tail)?;
-    }
-
-    if !matches!(outcome, StreamOutcome::Cancelled) {
-        semantic.assistant_completed();
-    }
-    if let StreamOutcome::Failed(error) = &outcome {
-        emit_error_chunk(cx, session_id, message_id, &actionable_stream_error(error));
-    }
-
-    Ok(StreamResult {
-        outcome,
-        assistant,
-        tool_calls,
-        interaction_groups,
-    })
-}
-
-fn handle_response_chunk(
-    text: &str,
-    stream_contract: &mut SemanticStreamContract,
-    follow_up_stream: &mut StreamNormalizer,
-    assistant: &mut String,
-    semantic: &mut TurnEventEmitter,
-    cx: &ConnectionTo<Client>,
-    session_id: &SessionId,
-    message_id: &MessageId,
-) -> Result<StreamDelta, AcpError> {
-    let delta = match stream_contract.feed(text) {
-        Ok(delta) => delta,
-        Err(error) => {
-            tracing::error!(%error, "semantic stream contract violation; dropping unsafe delta");
-            emit_error_chunk(cx, session_id, message_id, "Internal stream integrity failure: unsafe protocol output was rejected.");
-            return Ok(StreamDelta::default());
-        }
-    };
-
-    if !delta.visible.is_empty() {
-        assistant.push_str(&delta.visible);
-        let safe_message = follow_up_stream.push(&delta.visible);
-        if !safe_message.is_empty() {
-            semantic.assistant_delta(&safe_message);
-            notify_text(cx, session_id, message_id, safe_message)?;
-        }
-    }
-    Ok(delta)
+    Ok(())
 }

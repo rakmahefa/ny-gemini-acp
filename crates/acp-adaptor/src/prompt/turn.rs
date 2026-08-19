@@ -1,20 +1,32 @@
 mod context;
 mod guard;
-mod rounds;
+
 use super::content::blocks_to_parts;
 use super::notify::notify_usage;
 use super::title::derive_title;
-use agent_client_protocol::schema::v1::{
-    MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason,
-};
+use super::action;
+use agent_client_protocol::schema::v1::{MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, Store, TurnError};
-use agent_runtime::{LlmProvider, ToolProvider};
+use agent_runtime::{AgentLoop, AgentLoopConfig, Cancellation, LlmProvider, ToolProvider};
 use tools_provider::tools::executor::safe_session_update;
-use rounds::{RoundContext, RoundOutcome};
 use std::sync::Arc;
-const MAX_TURNS: usize = 20;
+
+fn fail_before_execution(semantic: &mut TurnEventEmitter) {
+    if semantic.is_terminal() { return; }
+    let _ = semantic.turn_started();
+    let _ = semantic.turn_failed();
+}
+
+fn map_agent_error(error: &agent_runtime::AgentLoopError) -> StopReason {
+    match error {
+        agent_runtime::AgentLoopError::Cancelled => StopReason::Cancelled,
+        agent_runtime::AgentLoopError::MaxRounds(_) => StopReason::MaxTokens,
+        _ => StopReason::EndTurn,
+    }
+}
+
 pub async fn run_turn(
     store: Arc<Store>,
     tools: Arc<dyn ToolProvider>,
@@ -23,89 +35,104 @@ pub async fn run_turn(
     responder: Responder<PromptResponse>,
     cx: ConnectionTo<Client>,
     semantic: &mut TurnEventEmitter,
+    cancellation: Cancellation,
 ) -> Result<(), AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
-    let span = tracing::info_span!("turn",session=%session_id,chars_input=tracing::field::Empty,chars_output=tracing::field::Empty,tool_rounds=tracing::field::Empty,outcome=tracing::field::Empty);
+    let span = tracing::info_span!(
+        "turn",
+        session=%session_id,
+        chars_input=tracing::field::Empty,
+        chars_output=tracing::field::Empty,
+        tool_rounds=tracing::field::Empty,
+        outcome=tracing::field::Empty,
+    );
     let _enter = span.enter();
-    let (session, mut cancel, generation) = match store.begin_turn(sid).await {
-        Ok(t) => t,
+
+    let (session, _store_cancel, generation) = match store.begin_turn(sid).await {
+        Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
-            semantic.turn_failed();
-            return responder.respond_with_error(
-                AcpError::invalid_params()
-                    .data(serde_json::json!({"session_id":session_id.to_string()})),
-            );
+            fail_before_execution(semantic);
+            return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string()})));
         }
         Err(TurnError::AlreadyRunning) => {
-            semantic.turn_failed();
-            return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id":session_id.to_string(),"error":"a turn is already running; send session/cancel first"})));
+            fail_before_execution(semantic);
+            return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string(), "error": "a turn is already running; send session/cancel first"})));
         }
     };
+
     let mut guard = guard::TurnGuard::new(store.clone(), sid.to_string(), session, generation);
-    let session = guard.session_mut();
     let (user_text, images) = blocks_to_parts(&req.prompt);
     span.record("chars_input", user_text.chars().count());
     let message_id = MessageId::from(format!("msg_{}", uuid::Uuid::new_v4().simple()));
-    if session.title.is_none() && !user_text.trim().is_empty() {
-        let title = derive_title(&user_text);
-        session.title = Some(title.clone());
-        safe_session_update(
-            &cx,
-            &session_id,
-            SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)),
-        );
+
+    {
+        let session = guard.session_mut();
+        if session.title.is_none() && !user_text.trim().is_empty() {
+            let title = derive_title(&user_text);
+            session.title = Some(title.clone());
+            safe_session_update(&cx, &session_id, SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)));
+        }
     }
+
     let refs = match context::upload_images(&*llm, &cx, &session_id, &images).await {
-        Ok(r) => r,
+        Ok(refs) => refs,
         Err(()) => {
-            semantic.turn_failed();
+            fail_before_execution(semantic);
+            guard.finish().await;
             return responder.respond(PromptResponse::new(StopReason::Refusal));
         }
     };
-    session.messages.push((Role::User, user_text));
-    let mut round_context = RoundContext {
-        llm: &*llm,
-        cx: &cx,
-        session_id: &session_id,
-        sid,
-        message_id: &message_id,
-        cancel: &mut cancel,
-        session,
-        provider: &*tools,
-        semantic,
-        refs: &refs,
-        span: &span,
-    };
-    let outcome = match rounds::run(&mut round_context, MAX_TURNS).await {
-        Ok(o) => o,
-        Err(rounds::RoundError::Stop(reason)) => {
-            return responder.respond(PromptResponse::new(reason))
+
+    {
+        let session = guard.session_mut();
+        session.messages.push((Role::User, user_text));
+    }
+
+    let action_handler = action::shared(cx.clone(), session_id.clone());
+    let agent_loop = match AgentLoop::new(llm.clone(), tools.clone(), AgentLoopConfig::default()) {
+        Ok(loop_) => loop_.with_action_handler(action_handler),
+        Err(error) => {
+            fail_before_execution(semantic);
+            guard.finish().await;
+            return Err(AcpError::internal_error().data(serde_json::json!({"error": error.to_string()})));
         }
-        Err(rounds::RoundError::Acp(e)) => return Err(e),
     };
-    let RoundOutcome {
-        output,
-        tool_round,
-        assistant_already_persisted,
-    } = outcome;
-    span.record("tool_rounds", tool_round);
-    span.record("chars_output", output.chars().count());
-    if !assistant_already_persisted && !output.trim().is_empty() {
-        round_context
-            .session
-            .messages
-            .push((Role::Assistant, output.clone()));
+
+    let result = {
+        let session = guard.session_mut();
+        agent_loop
+            .run(session, &refs, cancellation, semantic, |session, provider| {
+                crate::prompt::build::build_prompt(session, Some(provider))
+            })
+            .await
+    };
+
+    match result {
+        Ok(outcome) => {
+            span.record("tool_rounds", outcome.rounds);
+            span.record("chars_output", outcome.output.chars().count());
+            let usage_prompt = {
+                let session = guard.session_mut();
+                crate::prompt::build::build_prompt(session, Some(&*tools))
+            };
+            if let Err(error) = notify_usage(&cx, &session_id, &usage_prompt, &outcome.output) {
+                tracing::warn!(session=%session_id, "notify_usage a échoué: {error}");
+            }
+            guard.finish().await;
+            responder.respond(PromptResponse::new(StopReason::EndTurn))
+        }
+        Err(error) => {
+            let reason = map_agent_error(&error);
+            if !semantic.is_terminal() {
+                if matches!(error, agent_runtime::AgentLoopError::Cancelled) {
+                    semantic.turn_cancelled();
+                } else {
+                    semantic.turn_failed();
+                }
+            }
+            guard.finish().await;
+            responder.respond(PromptResponse::new(reason))
+        }
     }
-    if let Err(error) = notify_usage(
-        &cx,
-        &session_id,
-        &crate::prompt::build::build_prompt(round_context.session, Some(round_context.provider)),
-        &output,
-    ) {
-        tracing::warn!(session=%session_id,"notify_usage a échoué: {error}");
-    }
-    guard.finish().await;
-    semantic.turn_completed();
-    responder.respond(PromptResponse::new(StopReason::EndTurn))
 }

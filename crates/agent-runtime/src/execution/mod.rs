@@ -7,7 +7,7 @@ mod thread;
 mod turn;
 mod turn_manager;
 
-pub use agent_loop::{AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome};
+pub use agent_loop::{AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome};
 pub use cancellation::Cancellation;
 pub use command::ThreadCommand;
 pub use error::RuntimeError;
