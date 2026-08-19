@@ -92,3 +92,54 @@ impl ToolUiModel {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_is_explicit_and_terminal() {
+        let pending = ToolUiModel::generic("shell_exec", serde_json::json!({"command": "cargo test"}));
+        assert_eq!(pending.status, ToolUiStatus::Pending);
+
+        let running = pending.clone().running();
+        assert_eq!(running.status, ToolUiStatus::Running);
+        assert_eq!(running.input["command"], "cargo test");
+
+        let succeeded = running
+            .clone()
+            .completed(true, Some(serde_json::json!({"text": "ok"})));
+        assert_eq!(succeeded.status, ToolUiStatus::Succeeded);
+        assert_eq!(succeeded.output.as_ref().unwrap()["text"], "ok");
+
+        let failed = running
+            .clone()
+            .completed(false, Some(serde_json::json!({"text": "failed"})));
+        assert_eq!(failed.status, ToolUiStatus::Failed);
+
+        let cancelled = running.cancelled(Some(serde_json::json!({"text": "cancelled"})));
+        assert_eq!(cancelled.status, ToolUiStatus::Cancelled);
+    }
+
+    #[test]
+    fn primary_surface_stays_separate_from_raw_output() {
+        let ui = ToolUiModel::pending(
+            ToolUiKind::FileEdit,
+            "Edit file",
+            "src/main.rs",
+            serde_json::json!({"path": "src/main.rs", "replace_all": false}),
+        );
+        assert_eq!(ui.title, "Edit file");
+        assert_eq!(ui.summary, "src/main.rs");
+        assert!(ui.output.is_none());
+        assert!(ui.expandable);
+    }
+
+    #[test]
+    fn generic_tool_identity_is_human_readable_without_parsing_runtime_text() {
+        let ui = ToolUiModel::generic("list_directory", serde_json::json!({}));
+        assert_eq!(ui.kind, ToolUiKind::Generic);
+        assert_eq!(ui.title, "list directory");
+        assert_eq!(ui.summary, "Run list_directory");
+    }
+}
