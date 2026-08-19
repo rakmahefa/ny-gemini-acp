@@ -1,6 +1,8 @@
 use agent_runtime::persona;
+use agent_runtime::prompt::{format_tool_call, format_tool_result};
 use agent_runtime::state::{HistoryEntry, Session};
 use agent_runtime::ToolProvider;
+
 pub const MAX_MESSAGES: usize = 12;
 pub const MAX_PROMPT_CHARS: usize = 32_000;
 
@@ -9,7 +11,7 @@ fn format_entry(entry: &HistoryEntry) -> String {
         HistoryEntry::User { content } => format!("[User]: {content}\n\n"),
         HistoryEntry::Assistant { content } => format!("[Assistant]: {content}\n\n"),
         HistoryEntry::ToolCall { id, name, arguments } => {
-            format!("[tool_call {name} id={id}] {arguments}\n\n")
+            format!("{}\n\n", format_tool_call(id, name, arguments))
         }
         HistoryEntry::ToolResult {
             id,
@@ -17,11 +19,7 @@ fn format_entry(entry: &HistoryEntry) -> String {
             content,
             is_ok,
         } => {
-            let status = if *is_ok { "ok" } else { "error" };
-            if name == "legacy" && id.is_empty() {
-                return format!("{content}\n\n");
-            }
-            format!("[tool_result {name} id={id} status={status}] {content}\n\n")
+            format!("{}\n\n", format_tool_result(id, name, content, *is_ok))
         }
     }
 }

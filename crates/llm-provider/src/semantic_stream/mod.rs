@@ -6,6 +6,8 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashSet;
+
 use agent_runtime::ModelEvent;
 use crate::core::frames::GeminiFrameEvent;
 
@@ -17,11 +19,13 @@ use self::types::ProtocolEvent;
 ///
 /// Structured tool calls bypass text marker parsing. Text still goes through the
 /// protocol/reasoning detectors as a compatibility fallback for Gemini Web's
-/// textual tool-call dialects.
+/// textual tool-call dialects. Duplicate tool-call ids are suppressed here so
+/// execution remains at-most-once even if an upstream frame is replayed.
 #[derive(Debug)]
 pub struct GeminiSemanticStream {
     reasoning: ReasoningDetector,
     protocol: ProtocolDetector,
+    emitted_tool_ids: HashSet<String>,
     completed: bool,
 }
 
@@ -30,6 +34,7 @@ impl GeminiSemanticStream {
         Self {
             reasoning: ReasoningDetector::new(supports_reasoning),
             protocol: ProtocolDetector::default(),
+            emitted_tool_ids: HashSet::new(),
             completed: false,
         }
     }
@@ -40,9 +45,7 @@ impl GeminiSemanticStream {
         }
         match frame {
             GeminiFrameEvent::Text(text) => self.feed_text(&text),
-            GeminiFrameEvent::ToolCall { id, name, arguments } => {
-                vec![ModelEvent::ToolCall { id, name, arguments }]
-            }
+            GeminiFrameEvent::ToolCall { id, name, arguments } => self.project_tool_call(id, name, arguments),
             GeminiFrameEvent::Metadata { kind, value } => self.project_metadata(&kind, value),
         }
     }
@@ -77,12 +80,27 @@ impl GeminiSemanticStream {
     fn project_protocol_event(&mut self, event: ProtocolEvent) -> Vec<ModelEvent> {
         match event {
             ProtocolEvent::Text(text) => self.reasoning.feed(text),
-            ProtocolEvent::ToolCall(call) => vec![ModelEvent::ToolCall {
-                id: call.id,
-                name: call.name,
-                arguments: call.arguments,
-            }],
+            ProtocolEvent::ToolCall(call) => self.project_tool_call(call.id, call.name, call.arguments),
         }
+    }
+
+    fn project_tool_call(
+        &mut self,
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    ) -> Vec<ModelEvent> {
+        let id = id.trim().to_owned();
+        let name = name.trim().to_owned();
+        if id.is_empty() || name.is_empty() || !arguments.is_object() {
+            tracing::warn!(id = %id, name = %name, "dropping malformed semantic tool call");
+            return Vec::new();
+        }
+        if !self.emitted_tool_ids.insert(id.clone()) {
+            tracing::debug!(%id, "suppressing duplicate semantic tool call");
+            return Vec::new();
+        }
+        vec![ModelEvent::ToolCall { id, name, arguments }]
     }
 
     fn project_metadata(&self, kind: &str, value: serde_json::Value) -> Vec<ModelEvent> {

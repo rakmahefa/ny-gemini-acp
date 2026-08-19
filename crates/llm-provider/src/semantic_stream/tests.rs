@@ -2,11 +2,14 @@ use agent_runtime::ModelEvent;
 use serde_json::json;
 
 use super::GeminiSemanticStream;
+use crate::core::frames::GeminiFrameEvent;
 
 fn collect(chunks: &[&str]) -> Vec<ModelEvent> {
     let mut stream = GeminiSemanticStream::new(true);
     let mut out = Vec::new();
-    for chunk in chunks { out.extend(stream.feed_text(chunk)); }
+    for chunk in chunks {
+        out.extend(stream.feed_text(chunk));
+    }
     out.extend(stream.finish());
     out
 }
@@ -106,6 +109,45 @@ fn non_reasoning_models_pass_through_reasoning_markers() {
     let mut events = stream.feed_text("<thinking>hidden</thinking>answer");
     events.extend(stream.finish());
     assert_eq!(events, vec![ModelEvent::TextDelta("<thinking>hidden</thinking>answer".into())]);
+}
+
+#[test]
+fn structured_duplicate_tool_call_is_suppressed_at_semantic_boundary() {
+    let mut stream = GeminiSemanticStream::new(true);
+    let frame = || GeminiFrameEvent::ToolCall {
+        id: "c1".into(),
+        name: "glob".into(),
+        arguments: json!({"pattern": "*"}),
+    };
+
+    assert_eq!(
+        stream.feed(frame()),
+        vec![ModelEvent::ToolCall {
+            id: "c1".into(),
+            name: "glob".into(),
+            arguments: json!({"pattern": "*"}),
+        }]
+    );
+    assert!(stream.feed(frame()).is_empty());
+}
+
+#[test]
+fn malformed_semantic_tool_call_is_rejected() {
+    let mut stream = GeminiSemanticStream::new(true);
+    assert!(stream
+        .feed(GeminiFrameEvent::ToolCall {
+            id: "   ".into(),
+            name: "glob".into(),
+            arguments: json!({}),
+        })
+        .is_empty());
+    assert!(stream
+        .feed(GeminiFrameEvent::ToolCall {
+            id: "c2".into(),
+            name: "glob".into(),
+            arguments: json!("not-an-object"),
+        })
+        .is_empty());
 }
 
 #[test]

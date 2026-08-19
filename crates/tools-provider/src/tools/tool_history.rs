@@ -4,24 +4,15 @@
 //! `'''`, `[Assistant]:`, `<thinking>` ou même un ancien marqueur de tool result.
 //! Il ne doit donc jamais être concaténé directement au protocole textuel.
 
-use serde::Serialize;
-
-#[derive(Debug, Serialize)]
-struct ToolResultEnvelope<'a> {
-    tool: &'a str,
-    content: &'a str,
-}
-
-/// Encode un résultat d'outil sur une seule ligne JSON.
+/// Encode un résultat d'outil selon le même contrat canonique que l'agent runtime.
 ///
-/// Les retours à la ligne, guillemets et caractères de contrôle sont échappés
-/// par serde_json : le contenu ne peut donc pas créer une nouvelle ligne ni un
-/// faux marqueur de protocole dans l'historique.
+/// Cette fonction conserve sa signature historique pour les appelants du
+/// tools-provider. Les résultats générés à ce niveau n'ont pas encore de
+/// contexte d'exécution sémantique, donc l'identifiant est volontairement vide
+/// et le statut est `ok`; les résultats runtime complets passent par
+/// `agent_runtime::format_tool_result`.
 pub fn encode(tool: &str, content: &str) -> String {
-    let envelope = ToolResultEnvelope { tool, content };
-    let json = serde_json::to_string(&envelope)
-        .expect("ToolResultEnvelope contient uniquement des chaînes sérialisables");
-    format!("[Tool result]: {json}")
+    agent_runtime::format_tool_result("", tool, content, true)
 }
 
 #[cfg(test)]
@@ -51,7 +42,7 @@ mod tests {
     fn empty_content_is_preserved() {
         assert_eq!(
             encode("file_read", ""),
-            "[Tool result]: {\"tool\":\"file_read\",\"content\":\"\"}"
+            "[Tool result]: {\"content\":\"\",\"id\":\"\",\"status\":\"ok\",\"tool\":\"file_read\"}"
         );
     }
 }
