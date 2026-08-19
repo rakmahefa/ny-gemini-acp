@@ -75,6 +75,6 @@ async fn tool_call_cannot_overlap_an_open_assistant_stream() {
     assert!(emitter.turn_completed());
 
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-    assert_eq!(events.len(), 6);
-    assert_eq!(events.iter().map(event_sequence).collect::<Vec<_>>(), (0..6).collect::<Vec<_>>());
+    assert_eq!(events.len(), 7);
+    assert_eq!(events.iter().map(event_sequence).collect::<Vec<_>>(), (0..7).collect::<Vec<_>>());
 }
