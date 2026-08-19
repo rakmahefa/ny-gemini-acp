@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
+use crate::ToolUiModel;
 
 /// Owns and validates the semantic sequence for one turn.
 /// Invalid transitions never reach the event bus and do not consume a sequence number.
@@ -136,6 +137,15 @@ impl TurnEventEmitter {
     /// Records a tool invocation using a semantic identity independent from the
     /// upstream model call ID. All later lifecycle events resolve through this binding.
     pub fn tool_call_requested(&mut self, upstream_id: impl Into<String>, name: impl Into<String>) -> bool {
+        self.tool_call_requested_with_ui(upstream_id, name, None)
+    }
+
+    pub fn tool_call_requested_with_ui(
+        &mut self,
+        upstream_id: impl Into<String>,
+        name: impl Into<String>,
+        ui: Option<ToolUiModel>,
+    ) -> bool {
         let upstream_id = upstream_id.into();
         if upstream_id.is_empty() { return self.reject(IntegrityError::new("tool call identity must be non-empty")); }
         let semantic_id = self.bind_tool_identity(&upstream_id);
@@ -144,7 +154,7 @@ impl TurnEventEmitter {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolCallRequested { context, name: name.into() });
+        self.publish(SemanticEvent::ToolCallRequested { context, name: name.into(), ui });
         true
     }
 
@@ -171,13 +181,22 @@ impl TurnEventEmitter {
     }
 
     pub fn tool_result_received(&mut self, upstream_id: impl Into<String>, result: impl Into<String>) -> bool {
+        self.tool_result_received_with_ui(upstream_id, result, None)
+    }
+
+    pub fn tool_result_received_with_ui(
+        &mut self,
+        upstream_id: impl Into<String>,
+        result: impl Into<String>,
+        ui: Option<ToolUiModel>,
+    ) -> bool {
         let upstream_id = upstream_id.into();
         let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
             return self.reject(IntegrityError::new(format!("tool_result_received references unknown upstream tool {upstream_id}")));
         };
         if let Err(e) = self.integrity.tool_result_received(&semantic_id) { return self.reject(e); }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolResultReceived { context, result: result.into() });
+        self.publish(SemanticEvent::ToolResultReceived { context, result: result.into(), ui });
         self.release_tool_identity(&upstream_id);
         true
     }
@@ -361,5 +380,27 @@ mod tests {
         let ids: Vec<_> = events.iter().filter_map(|event| match event { SemanticEvent::ToolCallRequested { context, .. } | SemanticEvent::PermissionRequested { context } | SemanticEvent::ToolExecutionStarted { context } | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()), _ => None }).collect();
         assert_eq!(ids, vec!["turn_a/tool_0", "turn_a/tool_0", "turn_a/tool_0", "turn_a/tool_0", "turn_b/tool_0", "turn_b/tool_0", "turn_b/tool_0", "turn_b/tool_0"]);
         assert_ne!(ids[0], ids[4]);
+    }
+
+    #[tokio::test]
+    async fn tool_ui_is_carried_without_affecting_integrity_sequence() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe();
+        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        let ui = ToolUiModel::generic("shell_exec", serde_json::json!({"command":"ls"}));
+        assert!(e.turn_started());
+        assert!(e.tool_call_requested_with_ui("call", "shell_exec", Some(ui.clone())));
+        assert!(e.tool_execution_started("call"));
+        assert!(e.tool_result_received_with_ui("call", "ok", Some(ui.completed(true, Some(serde_json::json!({"text":"ok"}))))));
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        match &events[1] {
+            SemanticEvent::ToolCallRequested { ui: Some(value), .. } => assert_eq!(value.status, crate::ToolUiStatus::Pending),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        match &events[3] {
+            SemanticEvent::ToolResultReceived { ui: Some(value), .. } => assert_eq!(value.status, crate::ToolUiStatus::Succeeded),
+            other => panic!("unexpected event: {other:?}"),
+        }
+        assert_eq!(e.sequence(), 4);
     }
 }
