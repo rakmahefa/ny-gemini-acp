@@ -16,5 +16,4 @@ pub mod agent;
 pub mod elicitation;
 pub mod handlers;
 pub mod prompt;
-pub mod thought;
 pub mod utils;

@@ -1,7 +1,7 @@
 //! Normalized model stream -> ACP output orchestration.
 //!
-//! This module owns semantic stream lifecycle emission. `turn.rs` only
-//! coordinates the turn and consumes the normalized stream result.
+//! This module owns semantic stream lifecycle emission. Model semantics are
+//! produced by the LLM provider; this adapter only projects them to ACP.
 
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
@@ -14,7 +14,7 @@ use super::{
     error::actionable_stream_error,
     follow_up::StreamNormalizer,
     interaction::InteractionGroup,
-    notify::notify_text,
+    notify::{notify_reasoning, notify_text},
     stream_contract::{SemanticStreamContract, StreamDelta},
 };
 
@@ -31,75 +31,14 @@ pub struct StreamResult {
     pub(crate) interaction_groups: Vec<InteractionGroup>,
 }
 
-async fn handle_text_delta(
-    text: &str,
-    thought_stream: &mut crate::thought::ThoughtStream,
-    stream_contract: &mut SemanticStreamContract,
-    follow_up_stream: &mut StreamNormalizer,
-    assistant: &mut String,
-    tool_calls: &mut Vec<ParsedToolCall>,
-    interaction_groups: &mut Vec<InteractionGroup>,
-    thinking_active: &mut bool,
-    semantic: &mut TurnEventEmitter,
-    cx: &ConnectionTo<Client>,
-    session_id: &SessionId,
-    message_id: &MessageId,
-) -> Result<(), AcpError> {
-    for event in thought_stream.feed(text) {
-        match event {
-            crate::thought::ThoughtEvent::ThoughtStart => {
-                if !*thinking_active {
-                    semantic.thinking_started();
-                    *thinking_active = true;
-                }
-            }
-            crate::thought::ThoughtEvent::ThoughtChunk(text) => {
-                if !*thinking_active {
-                    semantic.thinking_started();
-                    *thinking_active = true;
-                }
-                semantic.thinking_delta(&text);
-                crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
-            }
-            crate::thought::ThoughtEvent::ThoughtEnd => {
-                if *thinking_active {
-                    semantic.thinking_completed();
-                    *thinking_active = false;
-                }
-            }
-            crate::thought::ThoughtEvent::ResponseChunk(text) => {
-                if *thinking_active {
-                    semantic.thinking_completed();
-                    *thinking_active = false;
-                }
-                let delta = handle_response_chunk(
-                    &text,
-                    stream_contract,
-                    follow_up_stream,
-                    assistant,
-                    semantic,
-                    cx,
-                    session_id,
-                    message_id,
-                )?;
-                tool_calls.extend(delta.tool_calls);
-                interaction_groups.extend(delta.interaction_groups);
-            }
-        }
-    }
-    Ok(())
-}
-
 pub async fn consume(
     mut rx: mpsc::Receiver<Result<ModelEvent, LlmError>>,
     cancel: &mut watch::Receiver<bool>,
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     message_id: &MessageId,
-    is_thinking_model: bool,
     semantic: &mut TurnEventEmitter,
 ) -> Result<StreamResult, AcpError> {
-    let mut thought_stream = crate::thought::ThoughtStream::new(is_thinking_model);
     let mut stream_contract = SemanticStreamContract::new();
     let mut follow_up_stream = StreamNormalizer::default();
     let mut assistant = String::new();
@@ -115,20 +54,22 @@ pub async fn consume(
                 let Some(item) = item else { break StreamOutcome::Complete };
                 match item {
                     Ok(ModelEvent::TextDelta(delta)) => {
-                        handle_text_delta(
+                        if thinking_active {
+                            semantic.thinking_completed();
+                            thinking_active = false;
+                        }
+                        let delta = handle_response_chunk(
                             &delta,
-                            &mut thought_stream,
                             &mut stream_contract,
                             &mut follow_up_stream,
                             &mut assistant,
-                            &mut tool_calls,
-                            &mut interaction_groups,
-                            &mut thinking_active,
                             semantic,
                             cx,
                             session_id,
                             message_id,
-                        ).await?;
+                        )?;
+                        tool_calls.extend(delta.tool_calls);
+                        interaction_groups.extend(delta.interaction_groups);
                     }
                     Ok(ModelEvent::ReasoningDelta(text)) => {
                         if !thinking_active {
@@ -136,7 +77,7 @@ pub async fn consume(
                             thinking_active = true;
                         }
                         semantic.thinking_delta(&text);
-                        crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
+                        notify_reasoning(cx, session_id, message_id, text)?;
                     }
                     Ok(ModelEvent::ToolCall { .. }) => {
                         break StreamOutcome::Failed("structured provider tool calls are not yet supported by the ACP text-tool projection".to_owned());
@@ -147,50 +88,6 @@ pub async fn consume(
             }
         }
     };
-
-    drop(rx);
-    for event in thought_stream.finish() {
-        match event {
-            crate::thought::ThoughtEvent::ThoughtStart => {
-                if !thinking_active {
-                    semantic.thinking_started();
-                    thinking_active = true;
-                }
-            }
-            crate::thought::ThoughtEvent::ThoughtChunk(text) => {
-                if !thinking_active {
-                    semantic.thinking_started();
-                    thinking_active = true;
-                }
-                semantic.thinking_delta(&text);
-                crate::thought::notify_thought(cx, session_id, message_id, &text).await?;
-            }
-            crate::thought::ThoughtEvent::ThoughtEnd => {
-                if thinking_active {
-                    semantic.thinking_completed();
-                    thinking_active = false;
-                }
-            }
-            crate::thought::ThoughtEvent::ResponseChunk(text) => {
-                if thinking_active {
-                    semantic.thinking_completed();
-                    thinking_active = false;
-                }
-                let delta = handle_response_chunk(
-                    &text,
-                    &mut stream_contract,
-                    &mut follow_up_stream,
-                    &mut assistant,
-                    semantic,
-                    cx,
-                    session_id,
-                    message_id,
-                )?;
-                tool_calls.extend(delta.tool_calls);
-                interaction_groups.extend(delta.interaction_groups);
-            }
-        }
-    }
 
     if thinking_active {
         semantic.thinking_completed();
@@ -229,7 +126,12 @@ pub async fn consume(
         emit_error_chunk(cx, session_id, message_id, &actionable_stream_error(error));
     }
 
-    Ok(StreamResult { outcome, assistant, tool_calls, interaction_groups })
+    Ok(StreamResult {
+        outcome,
+        assistant,
+        tool_calls,
+        interaction_groups,
+    })
 }
 
 fn handle_response_chunk(

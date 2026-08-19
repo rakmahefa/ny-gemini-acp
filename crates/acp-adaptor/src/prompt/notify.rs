@@ -1,4 +1,4 @@
-//! Notifications ACP : chunks texte, usage tokens.
+//! Notifications ACP : chunks texte, reasoning et usage tokens.
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
     TextContent, UsageUpdate,
@@ -47,6 +47,25 @@ pub fn notify_text(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+                .message_id(message_id.clone()),
+        ),
+    ))
+}
+
+/// ACP presentation of already-normalized model reasoning.
+pub fn notify_reasoning(
+    cx: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    message_id: &MessageId,
+    text: String,
+) -> Result<(), AcpError> {
+    if text.is_empty() {
+        return Ok(());
+    }
+    cx.send_notification(SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AgentThoughtChunk(
             ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
                 .message_id(message_id.clone()),
         ),
