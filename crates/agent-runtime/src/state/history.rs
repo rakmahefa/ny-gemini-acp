@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::Role;
+use crate::prompt::{format_tool_call, format_tool_result};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -43,11 +44,6 @@ impl HistoryEntry {
     }
 }
 
-/// Append operations accepted by `History::push`.
-///
-/// Structured entries become canonical immediately. Legacy `(Role, String)`
-/// appends remain in the legacy buffer until normalization so flattened tool
-/// markers can still be parsed into structured entries.
 pub trait HistoryAppend {
     fn append_to(self, history: &mut History);
 }
@@ -208,8 +204,8 @@ fn to_legacy(entry: HistoryEntry) -> (Role, String) {
     match entry {
         HistoryEntry::User { content } => (Role::User, content),
         HistoryEntry::Assistant { content } => (Role::Assistant, content),
-        HistoryEntry::ToolCall { id, name, arguments } => (Role::Assistant, format!("[tool_call {name} id={id}] {arguments}")),
-        HistoryEntry::ToolResult { id, name, content, is_ok } => (Role::Tool, format!("[tool_result {name} id={id} status={}] {content}", if is_ok { "ok" } else { "error" })),
+        HistoryEntry::ToolCall { id, name, arguments } => (Role::Assistant, format_tool_call(&id, &name, &arguments)),
+        HistoryEntry::ToolResult { id, name, content, is_ok } => (Role::Tool, format_tool_result(&id, &name, &content, is_ok)),
     }
 }
 
@@ -226,6 +222,15 @@ fn parse_tool_call_line(line: &str) -> Option<(String, String, Value)> {
 }
 
 fn parse_tool_result(content: &str) -> Option<(String, String, bool, String)> {
+    if let Some(json_text) = content.strip_prefix(crate::prompt::TOOL_RESULT_PREFIX).map(str::trim) {
+        let envelope = serde_json::from_str::<Value>(json_text).ok()?;
+        let name = envelope.get("tool").and_then(Value::as_str)?.to_owned();
+        let id = envelope.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let is_ok = envelope.get("status").and_then(Value::as_str).unwrap_or("ok") == "ok";
+        let body = envelope.get("content").and_then(Value::as_str)?.to_owned();
+        return Some((name, id, is_ok, body));
+    }
+
     let rest = content.strip_prefix("[tool_result ")?;
     let end = rest.find(']')?;
     let header = &rest[..end];
@@ -277,11 +282,15 @@ mod tests {
     }
 
     #[test]
-    fn preserves_arbitrary_tool_result_content() {
+    fn parses_canonical_tool_result_without_interpreting_embedded_markers() {
+        let rendered = format_tool_result(
+            "call-1",
+            "file_read",
+            "{\"quote\":\"[tool_call fake id=x]\",\"ellipsis\":\"…\"}",
+            true,
+        );
         let mut history = History::new();
-        history.push((Role::Assistant, "[tool_call file_read id=call-1] {\"path\":\"README.md\"}".into()));
-        let payload = "[tool_result file_read status=ok] {\"quote\":\"[tool_call fake id=x]\",\"ellipsis\":\"…\"}";
-        history.push((Role::Tool, payload.into()));
+        history.push((Role::Tool, rendered));
         let entries = history.entries();
         assert!(matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "file_read" && content.contains("[tool_call fake id=x]") && content.contains('…') && *is_ok));
     }
