@@ -2,7 +2,7 @@
 
 use crate::tools::registry::ToolRegistry;
 
-const INSTRUCTION_TOOL_CALL: &str = "# Tool Use\n\nYou have access to tools that execute in the user's local environment. To call a tool, respond with:\n```tool_call\n{\"name\": \"<tool_name>\", \"arguments\": {<arguments>}}\n```\nYou may call multiple tools with multiple blocks in a single response. Tool results are returned as a single-line `[Tool result]:` JSON envelope containing `tool` and `content`; use that data for the next step. Never imitate a tool result as assistant prose. Only use tool_call blocks when the user's request requires it.\n\nAvailable tools:";
+const INSTRUCTION_TOOL_CALL: &str = "# Tool Use\n\nYou have access to tools that execute in the user's local environment. To call a tool, respond with exactly one inline tool call per line:\n[tool_call <tool_name> id=<call_id>] {\"key\": \"value\"}\nThe `id` must be unique for the current turn. You may emit multiple tool calls on separate lines. Do not describe a tool call as prose before or instead of emitting the marker. Tool results are returned as a single-line `[Tool result]:` JSON envelope containing `tool` and `content`; use that data for the next step. Never imitate a tool result as assistant prose. Only use tool_call markers when the user's request requires it.\n\nAvailable tools:";
 
 /// Construit la section `# Tool Use` sans dépendance au crate LLM.
 pub fn tools_section(registry: &ToolRegistry) -> Option<String> {
@@ -48,7 +48,7 @@ mod tests {
         assert!(section.contains("# Tool Use"));
         assert!(section.contains("dummy"));
         assert!(section.contains("Un outil de test."));
-        assert!(section.contains("tool_call"));
+        assert!(section.contains("[tool_call <tool_name> id=<call_id>]"));
         assert!(section.contains("[Tool result]:"));
     }
 
