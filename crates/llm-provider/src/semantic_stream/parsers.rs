@@ -14,22 +14,14 @@ pub(super) fn parse_inline_tool_call(text: &str, next_id: &mut usize) -> Option<
     let header_end = rest.find(']')?;
     let header = &rest[..header_end];
     let body = rest[header_end + 1..].trim();
-    let id = header
-        .strip_prefix("tool_name=")
-        .and_then(|_| None)
-        .or_else(|| header.split_once(" id=").map(|(_, id)| id.trim()))
-        .filter(|id| !id.is_empty())
-        .map(ToOwned::to_owned);
-    let name = header
-        .split_once(" id=")
-        .map(|(name, _)| name.trim())
-        .unwrap_or(header.trim());
-    if name.is_empty() || body.is_empty() {
-        return None;
-    }
+    let (name, id) = match header.split_once(" id=") {
+        Some((name, id)) => (name.trim(), Some(id.trim())),
+        None => (header.trim(), None),
+    };
+    if name.is_empty() || body.is_empty() { return None; }
     let arguments = serde_json::from_str::<Value>(body).ok()?;
     Some(ModelToolCall {
-        id: id.unwrap_or_else(|| allocate_call_id(next_id)),
+        id: id.filter(|id| !id.is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| allocate_call_id(next_id)),
         name: name.to_owned(),
         arguments,
     })
@@ -37,21 +29,9 @@ pub(super) fn parse_inline_tool_call(text: &str, next_id: &mut usize) -> Option<
 
 fn parse_tool_value(value: &Value, next_id: &mut usize) -> Option<ModelToolCall> {
     let name = value.get("name").and_then(Value::as_str)?.trim();
-    if name.is_empty() || (value.get("arguments").is_none() && value.get("args").is_none()) {
-        return None;
-    }
-    let arguments = value
-        .get("arguments")
-        .or_else(|| value.get("args"))
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    let id = value
-        .get("id")
-        .or_else(|| value.get("call_id"))
-        .and_then(Value::as_str)
-        .filter(|id| !id.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| allocate_call_id(next_id));
+    if name.is_empty() || (value.get("arguments").is_none() && value.get("args").is_none()) { return None; }
+    let arguments = value.get("arguments").or_else(|| value.get("args")).cloned().unwrap_or_else(|| json!({}));
+    let id = value.get("id").or_else(|| value.get("call_id")).and_then(Value::as_str).filter(|id| !id.trim().is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| allocate_call_id(next_id));
     Some(ModelToolCall { id, name: name.to_owned(), arguments })
 }
 
