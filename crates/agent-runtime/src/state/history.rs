@@ -86,6 +86,16 @@ impl PartialEq for History {
 
 impl Eq for History {}
 
+impl From<Vec<(Role, String)>> for History {
+    fn from(legacy: Vec<(Role, String)>) -> Self {
+        Self {
+            canonical: Self::normalize_legacy_entries(&legacy),
+            legacy,
+            dirty: false,
+        }
+    }
+}
+
 impl History {
     pub fn new() -> Self {
         Self::default()
@@ -141,8 +151,6 @@ impl History {
         });
     }
 
-    /// Returns an owned canonical view so callers can safely inspect history even
-    /// while the compatibility Vec view has been mutated by older execution code.
     pub fn entries(&self) -> Vec<HistoryEntry> {
         if self.dirty {
             Self::normalize_legacy_entries(&self.legacy)
@@ -258,11 +266,7 @@ impl<'de> Deserialize<'de> for History {
 
         let legacy = serde_json::from_value::<Vec<(Role, String)>>(raw)
             .map_err(serde::de::Error::custom)?;
-        Ok(Self {
-            canonical: Self::normalize_legacy_entries(&legacy),
-            legacy,
-            dirty: false,
-        })
+        Ok(Self::from(legacy))
     }
 }
 
