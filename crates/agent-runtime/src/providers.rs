@@ -139,6 +139,12 @@ impl ToolServerConfig {
 
 #[derive(Debug)]
 pub struct ToolCallRequest {
+    /// Canonical runtime identity for this invocation.
+    ///
+    /// The value is allocated by `TurnEventEmitter` and must be reused by
+    /// permission, execution, ACP notifications and history. Provider-local
+    /// model IDs remain internal metadata and must not be regenerated here.
+    pub call_id: String,
     pub session_id: String,
     pub name: String,
     pub arguments: Value,
