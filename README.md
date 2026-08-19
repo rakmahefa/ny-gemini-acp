@@ -49,6 +49,16 @@ The most important invariant is:
 
 Zed remains the primary interactive client. The runtime must not become coupled to Zed-specific presentation or ACP transport details.
 
+## Release artifact
+
+The project intentionally releases a single executable:
+
+```text
+gemini-acp
+```
+
+It is the ACP agent used by Zed. Development utilities and provider implementation modules are not shipped as separate release binaries unless they acquire an independent product role.
+
 ## Crate responsibilities
 
 ### `acp-adaptor`
