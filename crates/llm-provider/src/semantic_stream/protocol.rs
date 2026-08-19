@@ -2,8 +2,8 @@ use serde_json::json;
 
 use super::parsers::{allocate_call_id, parse_bare_json, parse_follow_up_candidates};
 use super::types::{
-    BlockKind, ModelToolCall, ProtocolEvent, ProtocolMode, MAX_FOLLOW_UP, MAX_PENDING,
-    MAX_TOOL_BLOCK, TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX, FOLLOW_UP_PREFIX,
+    BlockKind, ModelToolCall, ProtocolEvent, ProtocolMode, FOLLOW_UP_PREFIX, MAX_FOLLOW_UP,
+    MAX_PENDING, MAX_TOOL_BLOCK, TOOL_RESULT_ENVELOPE, TOOL_RESULT_PREFIX,
 };
 
 #[derive(Debug)]
@@ -101,27 +101,26 @@ impl ProtocolDetector {
             return true;
         }
 
-        for kind in [
-            BlockKind::ToolCall,
-            BlockKind::SingleQuoteToolCall,
-            BlockKind::FunctionCall,
-        ] {
-            if self.pending.starts_with(kind.opening()) {
-                if !self.pending[kind.opening().len()..].contains('\n') && !final_flush {
-                    return false;
-                }
-                self.pending.drain(..kind.opening().len());
-                self.mode = ProtocolMode::ToolBlock {
-                    kind,
-                    body: String::new(),
-                    oversized: false,
-                };
+        if let Some((start, kind)) = self.find_tool_marker() {
+            if start > 0 {
+                let text = self.pending[..start].to_owned();
+                self.pending.drain(..start);
+                self.emit_text(&text, events);
                 self.at_stream_start = false;
                 return true;
             }
-            if is_prefix(&self.pending, kind.opening()) {
+
+            if !self.pending[kind.opening().len()..].contains('\n') && !final_flush {
                 return false;
             }
+            self.pending.drain(..kind.opening().len());
+            self.mode = ProtocolMode::ToolBlock {
+                kind,
+                body: String::new(),
+                oversized: false,
+            };
+            self.at_stream_start = false;
+            return true;
         }
 
         if let Some(start) = self.pending.find(FOLLOW_UP_PREFIX) {
@@ -160,13 +159,57 @@ impl ProtocolDetector {
             }
         }
 
+        if let Some(start) = self.find_partial_tool_marker() {
+            if start > 0 {
+                let text = self.pending[..start].to_owned();
+                self.pending.drain(..start);
+                self.emit_text(&text, events);
+                self.at_stream_start = false;
+                return true;
+            }
+            return false;
+        }
+
+        if let Some(start) = partial_marker_suffix(&self.pending, FOLLOW_UP_PREFIX) {
+            if start > 0 {
+                let text = self.pending[..start].to_owned();
+                self.pending.drain(..start);
+                self.emit_text(&text, events);
+                self.at_stream_start = false;
+                return true;
+            }
+            return false;
+        }
+
         if self.pending.is_empty() {
             return false;
         }
         let text = std::mem::take(&mut self.pending);
         self.emit_text(&text, events);
         self.at_stream_start = false;
-        !final_flush
+        false
+    }
+
+    fn find_tool_marker(&self) -> Option<(usize, BlockKind)> {
+        [
+            BlockKind::ToolCall,
+            BlockKind::SingleQuoteToolCall,
+            BlockKind::FunctionCall,
+        ]
+        .into_iter()
+        .filter_map(|kind| self.pending.find(kind.opening()).map(|index| (index, kind)))
+        .min_by_key(|(index, _)| *index)
+    }
+
+    fn find_partial_tool_marker(&self) -> Option<usize> {
+        [
+            BlockKind::ToolCall.opening(),
+            BlockKind::SingleQuoteToolCall.opening(),
+            BlockKind::FunctionCall.opening(),
+        ]
+        .into_iter()
+        .filter_map(|marker| partial_marker_suffix(&self.pending, marker))
+        .min()
     }
 
     fn drain_tool_result(&mut self, closing: Option<&'static str>, final_flush: bool) -> bool {
@@ -319,11 +362,140 @@ fn is_prefix(value: &str, marker: &str) -> bool {
     value.len() < marker.len() && marker.starts_with(value)
 }
 
+fn partial_marker_suffix(input: &str, marker: &str) -> Option<usize> {
+    let max = input.len().min(marker.len().saturating_sub(1));
+    for len in (1..=max).rev() {
+        let start = input.len() - len;
+        if marker.starts_with(&input[start..]) {
+            return Some(start);
+        }
+    }
+    None
+}
+
 fn normalize_assistant_marker(text: &str) -> String {
     let trimmed = text.trim_start();
     if let Some(rest) = trimmed.strip_prefix("[Assistant]:") {
         rest.trim_start().to_owned()
     } else {
         text.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn drain(detector: &mut ProtocolDetector, chunks: &[&str]) -> Vec<ProtocolEvent> {
+        let mut events = Vec::new();
+        for chunk in chunks {
+            events.extend(detector.feed(chunk));
+        }
+        events.extend(detector.finish());
+        events
+    }
+
+    fn tool_call(event: &ProtocolEvent) -> (&str, &serde_json::Value) {
+        match event {
+            ProtocolEvent::ToolCall(call) => (&call.name, &call.arguments),
+            other => panic!("expected tool call, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn detects_tool_call_after_assistant_text() {
+        let mut detector = ProtocolDetector::default();
+        let events = drain(
+            &mut detector,
+            &[
+                "Je vais vérifier les fichiers.\n\n",
+                "```tool_call\n",
+                "{\"name\":\"glob\",\"arguments\":{\"pattern\":\"**/*\"}}\n",
+                "```\n",
+            ],
+        );
+
+        assert!(matches!(events[0], ProtocolEvent::Text(ref text) if text.contains("Je vais vérifier")));
+        let (name, args) = tool_call(&events[1]);
+        assert_eq!(name, "glob");
+        assert_eq!(args["pattern"], "**/*");
+    }
+
+    #[test]
+    fn continues_parsing_text_tool_text() {
+        let mut detector = ProtocolDetector::default();
+        let events = drain(
+            &mut detector,
+            &[
+                "avant\n",
+                "```tool_call\n{\"name\":\"list_directory\",\"arguments\":{}}\n```\n",
+                "après",
+            ],
+        );
+
+        assert!(matches!(events[0], ProtocolEvent::Text(ref text) if text.contains("avant")));
+        assert_eq!(tool_call(&events[1]).0, "list_directory");
+        assert!(matches!(events[2], ProtocolEvent::Text(ref text) if text.contains("après")));
+    }
+
+    #[test]
+    fn preserves_tool_marker_split_across_chunks_after_text() {
+        let mut detector = ProtocolDetector::default();
+        let events = drain(
+            &mut detector,
+            &[
+                "avant\n",
+                "```to",
+                "ol_call\n{\"name\":\"glob\",\"arguments\":{\"pattern\":\"*.rs\"}}\n```",
+            ],
+        );
+
+        assert!(matches!(events[0], ProtocolEvent::Text(ref text) if text.contains("avant")));
+        assert_eq!(tool_call(&events[1]).0, "glob");
+    }
+
+    #[test]
+    fn detects_multiple_tool_calls_after_text() {
+        let mut detector = ProtocolDetector::default();
+        let events = drain(
+            &mut detector,
+            &[
+                "Je vais inspecter le workspace.\n",
+                "```tool_call\n{\"name\":\"list_directory\",\"arguments\":{}}\n```\n",
+                "Puis chercher les fichiers.\n",
+                "```tool_call\n{\"name\":\"glob\",\"arguments\":{\"pattern\":\"**/*\"}}\n```\n",
+            ],
+        );
+
+        assert!(matches!(events[0], ProtocolEvent::Text(ref text) if text.contains("inspecter")));
+        assert_eq!(tool_call(&events[1]).0, "list_directory");
+        assert!(matches!(events[2], ProtocolEvent::Text(ref text) if text.contains("Puis chercher")));
+        assert_eq!(tool_call(&events[3]).0, "glob");
+    }
+
+    #[test]
+    fn does_not_drop_partial_tool_marker_at_stream_boundary() {
+        let mut detector = ProtocolDetector::default();
+        assert!(detector.feed("avant ```too").iter().any(|event| matches!(event, ProtocolEvent::Text(text) if text.contains("avant"))));
+        assert!(detector.feed("l_call\n").is_empty());
+        let events = detector.feed("{\"name\":\"glob\",\"arguments\":{}}\n```\n");
+        assert_eq!(tool_call(&events[0]).0, "glob");
+    }
+
+    #[test]
+    fn bare_json_tool_call_still_works_only_at_stream_start() {
+        let mut detector = ProtocolDetector::default();
+        let events = drain(
+            &mut detector,
+            &["{\"name\":\"glob\",\"arguments\":{\"pattern\":\"*.rs\"}}"],
+        );
+        assert_eq!(tool_call(&events[0]).0, "glob");
+    }
+
+    #[test]
+    fn ordinary_text_containing_tool_word_is_preserved() {
+        let mut detector = ProtocolDetector::default();
+        let events = drain(&mut detector, &["Use the word tool_call in this explanation."]);
+        assert!(matches!(events[0], ProtocolEvent::Text(ref text) if text.contains("tool_call")));
     }
 }
