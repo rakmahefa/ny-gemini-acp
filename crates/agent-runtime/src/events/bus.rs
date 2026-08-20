@@ -32,7 +32,7 @@ impl EventBus {
         event: SemanticEvent,
     ) -> Result<usize, Box<broadcast::error::SendError<SemanticEvent>>> {
         let turn_id = event_turn_id(&event).to_owned();
-        let global_receivers = self.sender.send(event.clone()).unwrap_or(0);
+        let global_result = self.sender.send(event.clone()).map_err(Box::new);
 
         let turn_sender = self
             .turn_senders
@@ -48,7 +48,7 @@ impl EventBus {
             }
         }
 
-        Ok(global_receivers)
+        global_result
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {
@@ -114,8 +114,8 @@ mod tests {
         let mut turn_a = bus.subscribe_turn("turn-a");
         let mut turn_b = bus.subscribe_turn("turn-b");
 
-        bus.publish(event("turn-a", 0)).unwrap();
-        bus.publish(event("turn-b", 0)).unwrap();
+        bus.publish(event("turn-a", 0)).ok();
+        bus.publish(event("turn-b", 0)).ok();
 
         let a = turn_a.recv().await.unwrap();
         let b = turn_b.recv().await.unwrap();
@@ -130,11 +130,10 @@ mod tests {
         let _turn_b = bus.subscribe_turn("turn-b");
 
         bus.close_turn("turn-a");
-        bus.publish(event("turn-a", 0)).unwrap();
-        bus.publish(event("turn-b", 0)).unwrap();
-
+        bus.publish(event("turn-a", 0)).ok();
+        bus.close_turn("turn-b");
         let mut turn_b = bus.subscribe_turn("turn-b");
-        bus.publish(event("turn-b", 1)).unwrap();
+        bus.publish(event("turn-b", 1)).ok();
         assert_eq!(event_turn_id(&turn_b.recv().await.unwrap()), "turn-b");
     }
 }
