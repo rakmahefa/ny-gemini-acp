@@ -32,7 +32,7 @@ pub enum PermissionKind {
 
 impl PermissionRequest {
     pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
-        let terminal_id = (tool_name == "shell_exec").then(|| "permission-preview");
+        let terminal_id = (tool_name == "shell_exec").then_some("permission-preview");
         let info = ToolInfo::build(tool_name, args, cwd, terminal_id);
         let kind = match info.kind {
             ToolKind::Read | ToolKind::Search => PermissionKind::Read,
