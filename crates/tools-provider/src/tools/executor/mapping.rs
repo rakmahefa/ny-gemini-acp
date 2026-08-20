@@ -1,23 +1,7 @@
 use super::super::lifecycle::{ToolLifecycle, ToolLifecycleState};
-use super::super::registry::ToolResult as RegistryToolResult;
-use super::ToolResult;
 use agent_client_protocol::schema::v1::StopReason;
 use serde_json::{json, Map, Value};
 
-pub(super) fn registry_result(result: RegistryToolResult) -> ToolResult {
-    match result {
-        RegistryToolResult::Ok(content) => ToolResult {
-            content,
-            is_ok: true,
-            executed: true,
-        },
-        RegistryToolResult::Err(content) => ToolResult {
-            content,
-            is_ok: false,
-            executed: true,
-        },
-    }
-}
 pub(super) fn lifecycle_meta(
     tool_name: &str,
     lifecycle: &ToolLifecycle,
@@ -47,6 +31,7 @@ fn lifecycle_state_label(state: ToolLifecycleState) -> &'static str {
         ToolLifecycleState::Cancelled => "cancelled",
     }
 }
+
 #[allow(dead_code)]
 pub fn map_stop_reason(gemini_finish: Option<&str>) -> StopReason {
     match gemini_finish {
