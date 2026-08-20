@@ -89,6 +89,8 @@ impl ToolServerConfig {
 
 #[derive(Debug)]
 pub struct ToolCallRequest {
+    /// Canonical model/tool invocation identity. Providers must preserve it for UX correlation.
+    pub call_id: String,
     pub session_id: String,
     pub name: String,
     pub arguments: Value,
@@ -126,7 +128,9 @@ pub trait ToolProvider: Send + Sync {
     fn definitions(&self) -> Vec<Value>;
     fn prompt_fragment(&self) -> Option<String>;
     fn has_tools(&self) -> bool;
-    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel>;
+    /// Returns the host-neutral presentation model for a concrete invocation.
+    /// The call ID is part of the UX contract so terminal content can be correlated end-to-end.
+    fn ui_model(&self, call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel>;
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult;
 }
 
@@ -141,7 +145,7 @@ impl ToolProvider for NullToolProvider {
     fn definitions(&self) -> Vec<Value> { Vec::new() }
     fn prompt_fragment(&self) -> Option<String> { None }
     fn has_tools(&self) -> bool { false }
-    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> { Some(ToolUiModel::generic(name, arguments.clone())) }
+    fn ui_model(&self, _call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> { Some(ToolUiModel::generic(name, arguments.clone())) }
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult { ToolCallResult::error(format!("outil indisponible: {}", request.name)) }
 }
 
