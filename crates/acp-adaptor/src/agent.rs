@@ -48,7 +48,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                     turn_manager
                         .start(sid.clone(), move |cancellation| async move {
                             let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
-                            let projection_rx = events.subscribe();
+                            let projection_rx = events.subscribe_turn(&turn_id);
                             let projection_cx = turn_cx.clone();
                             let projection_session_id = session_id.clone();
                             let projection_turn_id = turn_id.clone();
@@ -72,7 +72,8 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                             };
 
                             interactive::scope(interactive_context, async move {
-                                let mut semantic = TurnEventEmitter::new(events, sid.clone(), turn_id);
+                                let emitter_events = events.clone();
+                                let mut semantic = TurnEventEmitter::new(emitter_events, sid.clone(), turn_id.clone());
                                 let turn_context = prompt::TurnContext {
                                     store,
                                     tools,
@@ -89,6 +90,8 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                 }
 
                                 let projection_result = projection.await;
+                                events.close_turn(&turn_id);
+
                                 let result = match projection_result {
                                     Ok(Ok(())) => turn_result,
                                     Ok(Err(error)) => {
