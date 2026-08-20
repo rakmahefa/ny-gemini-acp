@@ -1,8 +1,7 @@
 //! ACP notifications : messages, reasoning, tool UI and usage.
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
-    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
-    UsageUpdate,
+    ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, TextContent, ToolCall,
+    ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
@@ -111,15 +110,23 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
     .unwrap_or_default()
 }
 
-fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
-    let content = ui
-        .output
+fn rich_content(ui: &ToolUiModel) -> Option<Vec<ToolCallContent>> {
+    let value = ui.output.as_ref()?.get("content")?.clone();
+    serde_json::from_value(value).ok()
+}
+
+fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
+    ui.output
         .as_ref()
         .and_then(|value| value.get("text"))
         .and_then(serde_json::Value::as_str)
         .filter(|text| !text.is_empty())
         .map(|text| vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))])
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
+    let content = rich_content(ui).unwrap_or_else(|| fallback_text_content(ui));
 
     ToolCall::new(ToolCallId::from(tool_call_id.to_owned()), ui.title.clone())
         .kind(tool_kind(ui.kind))
