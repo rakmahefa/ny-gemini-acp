@@ -7,7 +7,7 @@ use agent_client_protocol::schema::v1::{
 use serde_json::{json, Map, Value};
 
 use super::super::sandbox::{RiskLevel, ShellAnalysis};
-use super::super::tool_ux::{classify_risk, ToolInfo};
+use super::super::tool_ux::{bounded_raw_input, classify_risk, ToolInfo};
 use super::ToolExecutor;
 
 #[derive(Debug, Clone)]
@@ -31,7 +31,12 @@ pub enum PermissionKind {
 
 impl PermissionRequest {
     pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
-        let info = ToolInfo::build(tool_name, args, cwd, None);
+        let info = ToolInfo::build(
+            tool_name,
+            args,
+            cwd,
+            (tool_name == "shell_exec").then(|| "permission-preview").as_deref(),
+        );
         let kind = match info.kind {
             ToolKind::Read | ToolKind::Search => PermissionKind::Read,
             ToolKind::Edit => PermissionKind::Write,
@@ -121,6 +126,14 @@ impl<'a> ToolExecutor<'a> {
         request: &PermissionRequest,
         call_id: &ToolCallId,
     ) -> PermissionResult {
+        let terminal_id = (request.tool_name == "shell_exec")
+            .then(|| format!("terminal-{call_id}"));
+        let info = ToolInfo::build(
+            &request.tool_name,
+            &serde_json::Value::Object(serde_json::Map::new()),
+            self.cwd,
+            terminal_id.as_deref(),
+        );
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(match request.kind {
                 PermissionKind::Read => ToolKind::Read,
@@ -129,6 +142,9 @@ impl<'a> ToolExecutor<'a> {
                 PermissionKind::Network => ToolKind::Fetch,
             })
             .status(ToolCallStatus::Pending)
+            .content(info.content)
+            .locations(info.locations)
+            .raw_input(bounded_raw_input(&serde_json::json!({"tool": request.tool_name})))
             .meta(permission_meta(request));
         let options = vec![
             PermissionOption::new(
