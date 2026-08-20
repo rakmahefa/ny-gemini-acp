@@ -2,7 +2,7 @@ use crate::{handlers, prompt};
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use agent_runtime::events::TurnEventEmitter;
-use agent_runtime::{AppState, RuntimeError, ToolProvider, TurnManager};
+use agent_runtime::{AppState, RuntimeError, TurnManager};
 use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
