@@ -226,3 +226,167 @@ fn validate_tool_calls(calls: &[PendingToolCall], seen: &mut HashSet<String>) ->
     }
     Ok(())
 }
+
+fn ensure_not_cancelled(cancellation: &Cancellation, emitter: &mut TurnEventEmitter) -> Result<(), AgentLoopError> {
+    if cancellation.is_cancelled() {
+        let _ = emitter.turn_cancelled();
+        return Err(AgentLoopError::Cancelled);
+    }
+    Ok(())
+}
+
+fn is_context_error(error: &LlmError) -> bool {
+    let text = error.to_string().to_ascii_lowercase();
+    text.contains("context") || text.contains("too long") || text.contains("tokens")
+}
+
+fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
+    if messages.len() <= 1 { return; }
+    let mut turns: Vec<Vec<(Role, String)>> = Vec::new();
+    let mut current = Vec::new();
+    for message in messages.iter() {
+        if message.0 == Role::User && !current.is_empty() {
+            turns.push(std::mem::take(&mut current));
+        }
+        current.push(message.clone());
+    }
+    if !current.is_empty() { turns.push(current); }
+    if turns.len() <= PRESERVE_TURNS { return; }
+
+    let current_chars: usize = messages.iter().map(|(_, text)| text.len()).sum();
+    if current_chars <= target_chars { return; }
+
+    let tail_end = turns.len().saturating_sub(PRESERVE_TURNS);
+    let mut candidates: Vec<(usize, usize)> = (0..tail_end)
+        .map(|i| (i, turns[i].iter().map(|(_, t)| t.len()).sum()))
+        .collect();
+    candidates.sort_by_key(|(_, chars)| std::cmp::Reverse(*chars));
+
+    let mut remaining = current_chars;
+    let mut evict = HashSet::new();
+    for (i, chars) in candidates {
+        if remaining <= target_chars { break; }
+        evict.insert(i);
+        remaining -= chars;
+    }
+
+    let mut compacted = Vec::new();
+    for (i, turn) in turns.into_iter().enumerate() {
+        if i >= tail_end || !evict.contains(&i) {
+            compacted.extend(turn);
+        }
+    }
+    *messages = compacted;
+}
+
+async fn consume_stream(
+    stream: crate::LlmStream,
+    cancellation: &Cancellation,
+    emitter: &mut TurnEventEmitter,
+) -> Result<ModelRound, AgentLoopError> {
+    match consume_model_stream(stream, cancellation, emitter).await {
+        Ok(round) => Ok(round),
+        Err(ModelProjectionError::Cancelled) => {
+            let _ = emitter.turn_cancelled();
+            Err(AgentLoopError::Cancelled)
+        }
+        Err(ModelProjectionError::Llm(error)) => {
+            let _ = emitter.turn_failed();
+            Err(AgentLoopError::Llm(error))
+        }
+        Err(ModelProjectionError::InvalidSequence(message)) => {
+            let _ = emitter.turn_failed();
+            Err(AgentLoopError::InvalidToolCall(message))
+        }
+        Err(ModelProjectionError::SemanticEventRejected) => {
+            let _ = emitter.turn_failed();
+            Err(AgentLoopError::SemanticEventRejected)
+        }
+    }
+}
+
+fn format_tool_calls(text: &str, calls: &[PendingToolCall]) -> String {
+    let mut result = text.trim().to_owned();
+    for call in calls {
+        if !result.is_empty() { result.push('\n'); }
+        result.push_str(&format!("[tool_call {} id={}] {}", call.name, call.id, call.arguments));
+    }
+    result
+}
+
+fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
+    let status = if result.is_ok { "ok" } else { "error" };
+    format!("[tool_result {name} status={status}] {}", result.content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ModelEvent;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use tokio::sync::mpsc;
+
+    #[derive(Default)]
+    struct FakeLlm { rounds: Mutex<VecDeque<Vec<Result<ModelEvent, LlmError>>>> }
+
+    #[async_trait::async_trait]
+    impl LlmProvider for FakeLlm {
+        async fn stream(&self, _: ModelRequest) -> Result<crate::LlmStream, LlmError> {
+            let items = self.rounds.lock().unwrap().pop_front().unwrap_or_default();
+            let (tx, rx) = mpsc::channel(items.len().max(1));
+            for item in items {
+                tx.send(item).await.map_err(|_| LlmError::Provider("fake channel closed".into()))?;
+            }
+            drop(tx);
+            Ok(rx)
+        }
+        async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> {
+            Err(LlmError::Unavailable("not supported".into()))
+        }
+        fn model_info(&self, _: &str) -> crate::LlmModelInfo {
+            crate::LlmModelInfo { supports_reasoning: true }
+        }
+    }
+
+    fn session() -> Session {
+        Session::new(
+            "sess_0123456789abcdef0123456789abcdef".into(),
+            std::env::temp_dir(),
+            vec![],
+            "fake-model",
+        )
+    }
+
+    fn emitter() -> TurnEventEmitter {
+        TurnEventEmitter::new(
+            crate::EventBus::new(),
+            "sess_0123456789abcdef0123456789abcdef",
+            "turn_test",
+        )
+    }
+
+    #[tokio::test]
+    async fn completes_text_round() {
+        let llm = Arc::new(FakeLlm::default());
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("hello".into()))]);
+        let agent = AgentLoop::new(llm, Arc::new(crate::NullToolProvider), AgentLoopConfig::default()).unwrap();
+        let mut session = session();
+        let mut emitter = emitter();
+        let outcome = agent
+            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into())
+            .await
+            .unwrap();
+        assert_eq!(outcome.output, "hello");
+        assert_eq!(outcome.rounds, 1);
+    }
+
+    #[test]
+    fn rejects_zero_limits() {
+        assert!(AgentLoop::new(
+            Arc::new(crate::NullLlmProvider),
+            Arc::new(crate::NullToolProvider),
+            AgentLoopConfig { max_rounds: 0, max_tool_calls_per_round: 1 },
+        ).is_err());
+    }
+}
