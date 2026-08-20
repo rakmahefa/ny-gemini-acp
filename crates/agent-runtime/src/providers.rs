@@ -1,6 +1,6 @@
 //! Provider-neutral contracts owned by the agent runtime.
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -188,7 +188,9 @@ pub trait ToolProvider: Send + Sync {
     fn prompt_fragment(&self) -> Option<String>;
     fn has_tools(&self) -> bool;
     /// Returns the host-neutral presentation model for a tool invocation.
-    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel>;
+    /// `cwd` is part of the presentation contract because paths/locations are
+    /// inherently workspace-relative.
+    fn ui_model(&self, name: &str, arguments: &Value, cwd: &Path) -> Option<ToolUiModel>;
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult;
 }
 
@@ -218,7 +220,7 @@ impl ToolProvider for NullToolProvider {
     fn has_tools(&self) -> bool {
         false
     }
-    fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
+    fn ui_model(&self, name: &str, arguments: &Value, _: &Path) -> Option<ToolUiModel> {
         Some(ToolUiModel::generic(name, arguments.clone()))
     }
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
