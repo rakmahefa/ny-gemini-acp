@@ -1,7 +1,8 @@
 //! ACP notifications : messages, reasoning, tool UI and usage.
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, TextContent, ToolCall,
-    ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind, UsageUpdate,
+    ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
+    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+    UsageUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
@@ -15,7 +16,6 @@ pub fn usage_update(prompt: &str, assistant: &str) -> UsageUpdate {
     UsageUpdate::new(used, CONTEXT_TOKENS)
 }
 
-/// Emits a non-fatal ACP error chunk from provider-facing turn orchestration.
 pub fn emit_error_chunk(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -34,7 +34,6 @@ pub fn emit_error_chunk(
     .ok();
 }
 
-/// ACP notification sink for already-normalized assistant text.
 pub fn notify_text(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -54,7 +53,6 @@ pub fn notify_text(
     ))
 }
 
-/// ACP presentation of already-normalized model reasoning.
 pub fn notify_reasoning(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -137,7 +135,6 @@ fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
         .meta(tool_ui_meta(ui))
 }
 
-/// Projects the semantic tool request into ACP's native tool-call lifecycle.
 pub fn notify_tool_call(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -151,7 +148,6 @@ pub fn notify_tool_call(
     ))
 }
 
-/// Projects a semantic tool lifecycle update into ACP's native ToolCallUpdate.
 pub fn notify_tool_call_update(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
