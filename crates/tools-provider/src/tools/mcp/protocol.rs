@@ -117,7 +117,7 @@ fn parse_json_rpc_value(value: Value, expected_id: Option<u64>) -> Result<RpcRes
     if object.get("jsonrpc").and_then(Value::as_str) != Some("2.0") { return Err(McpError::Protocol("JSON-RPC response has invalid jsonrpc version".into())); }
     let id = object.get("id").cloned().ok_or_else(|| McpError::Protocol("JSON-RPC response has no id".into()))?;
     if let Some(expected_id) = expected_id {
-        if id != Value::from(expected_id) {
+        if id.as_u64() != Some(expected_id) {
             return Err(McpError::Protocol(format!("JSON-RPC response id mismatch: expected {expected_id}, got {id}")));
         }
     }
