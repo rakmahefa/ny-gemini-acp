@@ -1,17 +1,17 @@
 //! Session-aware builtin/MCP implementation of the runtime `ToolProvider` contract.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
-use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiModel};
+use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiKind, ToolUiModel};
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
 use crate::tools::mcp::{McpCatalog, McpServerConfig as ProviderMcpServerConfig};
 use crate::tools::registry::ToolRegistry;
-use crate::tools::ui;
+use crate::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 
 struct ProviderState {
     fallback: Arc<ToolRegistry>,
@@ -44,6 +44,66 @@ impl DefaultToolProvider {
         }
         Ok(Self::new(registry))
     }
+}
+
+fn ui_kind(name: &str) -> ToolUiKind {
+    match name {
+        "file_read" => ToolUiKind::FileRead,
+        "file_write" => ToolUiKind::FileWrite,
+        "file_edit" => ToolUiKind::FileEdit,
+        "glob" => ToolUiKind::Glob,
+        "list_directory" => ToolUiKind::DirectoryList,
+        "search" => ToolUiKind::Search,
+        "search_and_read" => ToolUiKind::SearchAndRead,
+        "shell_exec" => ToolUiKind::Shell,
+        "replace_in_file" => ToolUiKind::ReplaceInFile,
+        "AskUserQuestion" => ToolUiKind::AskUserQuestion,
+        _ => ToolUiKind::Generic,
+    }
+}
+
+fn pending_ui(name: &str, arguments: &Value) -> ToolUiModel {
+    let info = ToolInfo::build(name, arguments, Path::new("."), None);
+    ToolUiModel::pending(
+        ui_kind(name),
+        info.title.clone(),
+        info.title,
+        bounded_raw_input(arguments),
+    )
+}
+
+fn completed_ui(
+    name: &str,
+    arguments: &Value,
+    content: &str,
+    is_ok: bool,
+    cwd: &Path,
+) -> ToolUiModel {
+    let rendered = result_update(name, arguments, content, is_ok, cwd, None);
+    let output = json!({
+        "text": content,
+        "content": rendered.content,
+        "locations": rendered.locations,
+    });
+
+    pending_ui(name, arguments).completed(is_ok, Some(output))
+}
+
+fn pending_ui_with_rich_content(name: &str, arguments: &Value) -> ToolUiModel {
+    let info = ToolInfo::build(name, arguments, Path::new("."), None);
+    let output = json!({
+        "content": info.content,
+        "locations": info.locations,
+    });
+
+    let mut ui = ToolUiModel::pending(
+        ui_kind(name),
+        info.title.clone(),
+        info.title,
+        bounded_raw_input(arguments),
+    );
+    ui.output = Some(output);
+    ui
 }
 
 #[async_trait::async_trait]
@@ -108,7 +168,7 @@ impl ToolProvider for DefaultToolProvider {
     }
 
     fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
-        Some(ui::pending(name, arguments))
+        Some(pending_ui_with_rich_content(name, arguments))
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
@@ -126,28 +186,44 @@ impl ToolProvider for DefaultToolProvider {
             .await
         {
             Some(crate::tools::registry::ToolResult::Ok(content)) => ToolCallResult {
-                ui: Some(ui::completed(&request.name, &request.arguments, &content, true)),
+                ui: Some(completed_ui(
+                    &request.name,
+                    &request.arguments,
+                    &content,
+                    true,
+                    &request.cwd,
+                )),
                 content,
                 is_ok: true,
                 executed: true,
             },
             Some(crate::tools::registry::ToolResult::Err(content)) => ToolCallResult {
-                ui: Some(ui::completed(&request.name, &request.arguments, &content, false)),
+                ui: Some(completed_ui(
+                    &request.name,
+                    &request.arguments,
+                    &content,
+                    false,
+                    &request.cwd,
+                )),
                 content,
                 is_ok: false,
                 executed: true,
             },
-            None => ToolCallResult {
-                ui: Some(ui::completed(
-                    &request.name,
-                    &request.arguments,
-                    &format!("Outil inconnu : {}", request.name),
-                    false,
-                )),
-                content: format!("Outil inconnu : {}", request.name),
-                is_ok: false,
-                executed: false,
-            },
+            None => {
+                let content = format!("Outil inconnu : {}", request.name);
+                ToolCallResult {
+                    ui: Some(completed_ui(
+                        &request.name,
+                        &request.arguments,
+                        &content,
+                        false,
+                        &request.cwd,
+                    )),
+                    content,
+                    is_ok: false,
+                    executed: false,
+                }
+            }
         };
 
         unbind_session_cancellation(&request.session_id);
