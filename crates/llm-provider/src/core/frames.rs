@@ -33,15 +33,11 @@ pub enum GeminiFrameEvent {
     Metadata { kind: String, value: Value },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct GeminiFrameDecoder {
     buf: String,
     emitted_tool_ids: HashSet<String>,
     next_call_id: usize,
-}
-
-impl Default for GeminiFrameDecoder {
-    fn default() -> Self { Self { buf: String::new(), emitted_tool_ids: HashSet::new(), next_call_id: 0 } }
 }
 
 impl GeminiFrameDecoder {
@@ -107,7 +103,7 @@ impl GeminiFrameDecoder {
             for candidate in candidates {
                 if let Some(segments) = candidate.get(1).and_then(Value::as_array) {
                     let text: String = segments.iter().filter_map(Value::as_str).collect();
-                    if !text.is_empty() && longest.as_ref().map_or(true, |current| text.len() > current.len()) {
+                    if !text.is_empty() && longest.as_ref().is_none_or(|current| text.len() > current.len()) {
                         longest = Some(text);
                     }
                 }
@@ -222,72 +218,15 @@ pub fn final_text(raw: &str) -> Result<String> {
 mod tests {
     use super::*;
     use serde_json::json;
-
-    fn wire_line(inner: Value) -> String {
-        let escaped = serde_json::to_string(&inner.to_string()).unwrap();
-        format!("[[\"wrb.fr\",[62,0],{escaped}],[\"di\",72]]")
-    }
-    fn inner_with_candidates(candidates: Value) -> Value {
-        json!([null, ["tok"], "padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding", [], candidates, [], [], []])
-    }
-    #[test]
-    fn structured_tool_call_is_preserved() {
-        let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {"pattern": "*.rs"}}});
-        let line = wire_line(inner);
-        let events = GeminiFrameDecoder::new().feed(&(line + "\n"));
-        assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::ToolCall { id, name, arguments } if id == "c1" && name == "glob" && arguments["pattern"] == "*.rs")));
-    }
-    #[test]
-    fn duplicate_structured_tool_call_is_emitted_once() {
-        let inner = json!({"toolCall": {"id": "c1", "name": "glob", "arguments": {}}});
-        let line = wire_line(inner);
-        let mut decoder = GeminiFrameDecoder::new();
-        let first = decoder.feed(&(line.clone() + "\n"));
-        let second = decoder.feed(&(line + "\n"));
-        assert_eq!(first.iter().filter(|event| matches!(event, GeminiFrameEvent::ToolCall { .. })).count(), 1);
-        assert_eq!(second.iter().filter(|event| matches!(event, GeminiFrameEvent::ToolCall { .. })).count(), 0);
-    }
-    #[test]
-    fn longest_candidate_is_selected() {
-        let inner = inner_with_candidates(json!([["short", ["Bonjour"]], ["long", ["Bonjour, ", "le monde"]]]));
-        let line = wire_line(inner);
-        let events = GeminiFrameDecoder::new().feed(&(line + "\n"));
-        assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::Text(text) if text == "Bonjour, le monde")));
-    }
-    #[test]
-    fn final_partial_line_is_flushed() {
-        let inner = inner_with_candidates(json!([["c", ["abc"]]]));
-        let line = wire_line(inner);
-        let mut decoder = GeminiFrameDecoder::new();
-        assert!(decoder.feed(&line).is_empty());
-        let events = decoder.finish();
-        assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::Text(text) if text == "abc")));
-    }
-    #[test]
-    fn malformed_inner_becomes_bounded_metadata() {
-        let line = "[[\"wrb.fr\",[62,0],\"{not-json\"],[\"di\",72]]\n";
-        let events = GeminiFrameDecoder::new().feed(line);
-        assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::Metadata { kind, .. } if kind == "unparsed_frame")));
-    }
-    #[test]
-    fn tool_only_stream_is_not_empty() {
-        let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {}}});
-        let raw = format!(")]}}'\n{}\n", wire_line(inner));
-        assert!(!is_empty_stream(&raw));
-    }
-    #[test]
-    fn clean_text_enleve_references_et_cards() {
-        let input = "avant\n```python?code_reference&code_event_index=12\nligne 1\nligne 2\n```\nmilieu\nhttp://googleusercontent.com/card_content/7\nfin\n";
-        assert_eq!(clean_text(input, true), "avant\nmilieu\nfin");
-    }
-    #[test]
-    fn final_text_uses_decoder() {
-        let raw = format!(")]}}'\n{}\n", wire_line(inner_with_candidates(json!([["c", ["court"]]]))));
-        assert_eq!(final_text(&raw).unwrap(), "court");
-    }
-    #[test]
-    fn final_text_bard_error() {
-        let raw = ")]}' foo\nBardErrorInfo [123] bar";
-        assert!(final_text(raw).unwrap_err().to_string().contains("BardErrorInfo [123]"));
-    }
+    fn wire_line(inner: Value) -> String { let escaped = serde_json::to_string(&inner.to_string()).unwrap(); format!("[[\"wrb.fr\",[62,0],{escaped}],[\"di\",72]]") }
+    fn inner_with_candidates(candidates: Value) -> Value { json!([null, ["tok"], "padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding-padding", [], candidates, [], [], []]) }
+    #[test] fn structured_tool_call_is_preserved() { let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {"pattern": "*.rs"}}}); let line = wire_line(inner); let events = GeminiFrameDecoder::new().feed(&(line + "\n")); assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::ToolCall { id, name, arguments } if id == "c1" && name == "glob" && arguments["pattern"] == "*.rs"))); }
+    #[test] fn duplicate_structured_tool_call_is_emitted_once() { let inner = json!({"toolCall": {"id": "c1", "name": "glob", "arguments": {}}}); let line = wire_line(inner); let mut decoder = GeminiFrameDecoder::new(); let first = decoder.feed(&(line.clone() + "\n")); let second = decoder.feed(&(line + "\n")); assert_eq!(first.iter().filter(|event| matches!(event, GeminiFrameEvent::ToolCall { .. })).count(), 1); assert_eq!(second.iter().filter(|event| matches!(event, GeminiFrameEvent::ToolCall { .. })).count(), 0); }
+    #[test] fn longest_candidate_is_selected() { let inner = inner_with_candidates(json!([["short", ["Bonjour"]], ["long", ["Bonjour, ", "le monde"]]])); let line = wire_line(inner); let events = GeminiFrameDecoder::new().feed(&(line + "\n")); assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::Text(text) if text == "Bonjour, le monde"))); }
+    #[test] fn final_partial_line_is_flushed() { let inner = inner_with_candidates(json!([["c", ["abc"]]])); let line = wire_line(inner); let mut decoder = GeminiFrameDecoder::new(); assert!(decoder.feed(&line).is_empty()); let events = decoder.finish(); assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::Text(text) if text == "abc"))); }
+    #[test] fn malformed_inner_becomes_bounded_metadata() { let line = "[[\"wrb.fr\",[62,0],\"{not-json\"],[\"di\",72]]\n"; let events = GeminiFrameDecoder::new().feed(line); assert!(events.iter().any(|event| matches!(event, GeminiFrameEvent::Metadata { kind, .. } if kind == "unparsed_frame"))); }
+    #[test] fn tool_only_stream_is_not_empty() { let inner = json!({"functionCall": {"id": "c1", "name": "glob", "arguments": {}}}); let raw = format!(")]}}'\n{}\n", wire_line(inner)); assert!(!is_empty_stream(&raw)); }
+    #[test] fn clean_text_enleve_references_et_cards() { let input = "avant\n```python?code_reference&code_event_index=12\nligne 1\nligne 2\n```\nmilieu\nhttp://googleusercontent.com/card_content/7\nfin\n"; assert_eq!(clean_text(input, true), "avant\nmilieu\nfin"); }
+    #[test] fn final_text_uses_decoder() { let raw = format!(")]}}'\n{}\n", wire_line(inner_with_candidates(json!([["c", ["court"]]])))); assert_eq!(final_text(&raw).unwrap(), "court"); }
+    #[test] fn final_text_bard_error() { let raw = ")]}' foo\nBardErrorInfo [123] bar"; assert!(final_text(raw).unwrap_err().to_string().contains("BardErrorInfo [123]")); }
 }
