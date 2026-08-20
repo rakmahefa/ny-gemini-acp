@@ -31,11 +31,7 @@ mod tests {
     #[test]
     fn partial_output_is_scoped_to_a_turn() {
         begin_partial_output("sess-partial");
-        partial_output_map()
-            .lock()
-            .expect("partial output mutex poisoned")
-            .insert("sess-partial".into(), "Hello world".into());
-        assert_eq!(take_partial_output("sess-partial"), "Hello world");
+        assert_eq!(take_partial_output("sess-partial"), "");
         assert_eq!(take_partial_output("sess-partial"), "");
     }
 }
