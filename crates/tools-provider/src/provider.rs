@@ -62,16 +62,6 @@ fn ui_kind(name: &str) -> ToolUiKind {
     }
 }
 
-fn pending_ui(name: &str, arguments: &Value) -> ToolUiModel {
-    let info = ToolInfo::build(name, arguments, Path::new("."), None);
-    ToolUiModel::pending(
-        ui_kind(name),
-        info.title.clone(),
-        info.title,
-        bounded_raw_input(arguments),
-    )
-}
-
 fn completed_ui(
     name: &str,
     arguments: &Value,
@@ -86,7 +76,14 @@ fn completed_ui(
         "locations": rendered.locations,
     });
 
-    pending_ui(name, arguments).completed(is_ok, Some(output))
+    let info = ToolInfo::build(name, arguments, cwd, None);
+    ToolUiModel::pending(
+        ui_kind(name),
+        info.title.clone(),
+        info.title,
+        bounded_raw_input(arguments),
+    )
+    .completed(is_ok, Some(output))
 }
 
 fn pending_ui_with_rich_content(name: &str, arguments: &Value) -> ToolUiModel {
