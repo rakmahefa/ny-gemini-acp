@@ -38,8 +38,14 @@ pub struct ToolUiModel {
     pub status: ToolUiStatus,
     /// Small structured input facts used by a host to render the invocation.
     pub input: Value,
-    /// Optional structured output facts. Raw tool content remains separate.
+    /// Raw tool output, kept separate from the rich presentation surface.
     pub output: Option<Value>,
+    /// Rich tool presentation content serialized as host-neutral values.
+    /// The ACP adaptor projects these values into native `ToolCallContent` values.
+    pub content: Vec<Value>,
+    /// Rich source locations serialized as host-neutral values.
+    /// The ACP adaptor projects these values into native `ToolCallLocation` values.
+    pub locations: Vec<Value>,
     /// Whether verbose details should normally be collapsed by the host.
     pub expandable: bool,
 }
@@ -58,6 +64,8 @@ impl ToolUiModel {
             status: ToolUiStatus::Pending,
             input,
             output: None,
+            content: Vec::new(),
+            locations: Vec::new(),
             expandable: true,
         }
     }
@@ -80,6 +88,16 @@ impl ToolUiModel {
 
     pub fn running(mut self) -> Self {
         self.status = ToolUiStatus::Running;
+        self
+    }
+
+    pub fn with_content(mut self, content: Vec<Value>) -> Self {
+        self.content = content;
+        self
+    }
+
+    pub fn with_locations(mut self, locations: Vec<Value>) -> Self {
+        self.locations = locations;
         self
     }
 
@@ -122,16 +140,20 @@ mod tests {
     }
 
     #[test]
-    fn primary_surface_stays_separate_from_raw_output() {
+    fn rich_surface_is_separate_from_raw_output() {
         let ui = ToolUiModel::pending(
             ToolUiKind::FileEdit,
             "Edit file",
             "src/main.rs",
             serde_json::json!({"path": "src/main.rs", "replace_all": false}),
-        );
+        )
+        .with_content(vec![serde_json::json!({"type": "content"})])
+        .with_locations(vec![serde_json::json!({"path": "src/main.rs"})]);
         assert_eq!(ui.title, "Edit file");
         assert_eq!(ui.summary, "src/main.rs");
         assert!(ui.output.is_none());
+        assert_eq!(ui.content.len(), 1);
+        assert_eq!(ui.locations.len(), 1);
         assert!(ui.expandable);
     }
 
