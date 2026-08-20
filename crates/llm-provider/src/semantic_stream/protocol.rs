@@ -180,14 +180,14 @@ impl ProtocolDetector {
     }
 
     fn find_tool_marker(&self) -> Option<(usize, BlockKind)> {
-        [BlockKind::ToolCall, BlockKind::SingleQuoteToolCall, BlockKind::FunctionCall]
+        [BlockKind::Tool, BlockKind::SingleQuoteTool, BlockKind::Function]
             .into_iter()
             .filter_map(|kind| self.pending.find(kind.opening()).map(|index| (index, kind)))
             .min_by_key(|(index, _)| *index)
     }
 
     fn find_partial_tool_marker(&self) -> Option<usize> {
-        [BlockKind::ToolCall.opening(), BlockKind::SingleQuoteToolCall.opening(), BlockKind::FunctionCall.opening()]
+        [BlockKind::Tool.opening(), BlockKind::SingleQuoteTool.opening(), BlockKind::Function.opening()]
             .into_iter()
             .filter_map(|marker| partial_marker_suffix(&self.pending, marker))
             .min()
