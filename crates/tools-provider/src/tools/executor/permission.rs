@@ -7,7 +7,7 @@ use agent_client_protocol::schema::v1::{
 use serde_json::{json, Map, Value};
 
 use super::super::sandbox::{RiskLevel, ShellAnalysis};
-use super::super::tool_ux::{classify_risk, ToolInfo};
+use super::super::tool_ux::{classify_risk, bounded_raw_input, ToolInfo};
 use super::ToolExecutor;
 
 #[derive(Debug, Clone)]
@@ -18,6 +18,7 @@ pub struct PermissionRequest {
     pub detail: String,
     pub tool_name: String,
     pub warnings: Vec<String>,
+    pub arguments: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,8 +62,7 @@ impl PermissionRequest {
                 let command = args.get("command").and_then(Value::as_str).unwrap_or("");
                 let analysis = ShellAnalysis::analyze(command);
                 if analysis.has_dangerous_pipe_chain {
-                    warnings
-                        .push("Chaîne de commandes potentiellement dangereuse détectée.".into());
+                    warnings.push("Chaîne de commandes potentiellement dangereuse détectée.".into());
                 }
                 if analysis.has_env_injection {
                     warnings.push("Injection de variables d'environnement détectée.".into());
@@ -103,6 +103,7 @@ impl PermissionRequest {
             detail,
             tool_name: tool_name.to_owned(),
             warnings,
+            arguments: args.clone(),
         }
     }
 }
@@ -121,6 +122,15 @@ impl<'a> ToolExecutor<'a> {
         request: &PermissionRequest,
         call_id: &ToolCallId,
     ) -> PermissionResult {
+        // The terminal resource does not exist yet at permission time. For shell_exec,
+        // it is created only after the user grants permission by the ACP terminal request.
+        // Therefore the permission prompt must never advertise a Terminal content block.
+        let info = ToolInfo::build(
+            &request.tool_name,
+            &request.arguments,
+            self.cwd,
+            None,
+        );
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(match request.kind {
                 PermissionKind::Read => ToolKind::Read,
@@ -129,6 +139,9 @@ impl<'a> ToolExecutor<'a> {
                 PermissionKind::Network => ToolKind::Fetch,
             })
             .status(ToolCallStatus::Pending)
+            .content(info.content)
+            .locations(info.locations)
+            .raw_input(bounded_raw_input(&request.arguments))
             .meta(permission_meta(request));
         let options = vec![
             PermissionOption::new(
@@ -176,7 +189,10 @@ impl<'a> ToolExecutor<'a> {
 
 fn permission_meta(request: &PermissionRequest) -> Map<String, Value> {
     let mut meta = Map::new();
-    meta.insert("claudeCode".into(), json!({ "toolName": request.tool_name, "permission": { "kind": request.kind.label(), "risk": request.risk.label(), "warnings": request.warnings } }));
+    meta.insert(
+        "claudeCode".into(),
+        json!({ "toolName": request.tool_name, "permission": { "kind": request.kind.label(), "risk": request.risk.label(), "warnings": request.warnings } }),
+    );
     meta
 }
 

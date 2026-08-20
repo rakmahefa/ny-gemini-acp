@@ -347,11 +347,11 @@ impl<'a> ToolExecutor<'a> {
                 Ok(o) => o,
                 Err(error) => {
                     tracing::debug!(session = %self.session_id, error = %error, "terminal ACP indisponible avant exécution, fallback shell local");
-                    self.execute_registry(tool_name, arguments).await
+                    self.execute_registry(&call_id, tool_name, arguments).await
                 }
             }
         } else {
-            self.execute_registry(tool_name, arguments).await
+            self.execute_registry(&call_id, tool_name, arguments).await
         };
         self.finish_terminal(
             TerminalFinish {
@@ -374,8 +374,14 @@ impl<'a> ToolExecutor<'a> {
         )
     }
 
-    async fn execute_registry(&self, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
+    async fn execute_registry(
+        &self,
+        call_id: &ToolCallId,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> ExecutionOutcome {
         let request = ToolCallRequest {
+            call_id: call_id.to_string(),
             session_id: self.session_id.0.to_string(),
             name: tool_name.to_owned(),
             arguments: arguments.clone(),

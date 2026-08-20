@@ -1,8 +1,8 @@
-//! ACP notifications : messages, reasoning, tool UI and usage.
+//! ACP notifications: messages, reasoning, tool UI and usage.
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
-    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
-    UsageUpdate,
+    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
+    ToolCallUpdate, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
@@ -16,7 +16,6 @@ pub fn usage_update(prompt: &str, assistant: &str) -> UsageUpdate {
     UsageUpdate::new(used, CONTEXT_TOKENS)
 }
 
-/// Emits a non-fatal ACP error chunk from provider-facing turn orchestration.
 pub fn emit_error_chunk(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -26,16 +25,13 @@ pub fn emit_error_chunk(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
-                "\n\n[error] {error}"
-            ))))
-            .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(format!("\n\n[error] {error}"))))
+                .message_id(message_id.clone()),
         ),
     ))
     .ok();
 }
 
-/// ACP notification sink for already-normalized assistant text.
 pub fn notify_text(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -49,13 +45,11 @@ pub fn notify_text(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
-                .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text))).message_id(message_id.clone()),
         ),
     ))
 }
 
-/// ACP presentation of already-normalized model reasoning.
 pub fn notify_reasoning(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
@@ -68,8 +62,7 @@ pub fn notify_reasoning(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentThoughtChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
-                .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text))).message_id(message_id.clone()),
         ),
     ))
 }
@@ -77,9 +70,7 @@ pub fn notify_reasoning(
 fn tool_kind(kind: ToolUiKind) -> ToolKind {
     match kind {
         ToolUiKind::FileRead | ToolUiKind::DirectoryList => ToolKind::Read,
-        ToolUiKind::FileWrite
-        | ToolUiKind::FileEdit
-        | ToolUiKind::ReplaceInFile => ToolKind::Edit,
+        ToolUiKind::FileWrite | ToolUiKind::FileEdit | ToolUiKind::ReplaceInFile => ToolKind::Edit,
         ToolUiKind::Search | ToolUiKind::Glob | ToolUiKind::SearchAndRead => ToolKind::Search,
         ToolUiKind::Shell => ToolKind::Execute,
         ToolUiKind::AskUserQuestion | ToolUiKind::Generic => ToolKind::Other,
@@ -111,40 +102,53 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
     .unwrap_or_default()
 }
 
-fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
-    let content = ui
-        .output
+fn rich_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
+    ui.content.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect()
+}
+
+fn rich_locations(ui: &ToolUiModel) -> Vec<ToolCallLocation> {
+    ui.locations.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect()
+}
+
+fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
+    ui.output
         .as_ref()
         .and_then(|value| value.get("text"))
         .and_then(serde_json::Value::as_str)
         .filter(|text| !text.is_empty())
         .map(|text| vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))])
-        .unwrap_or_default();
+        .unwrap_or_default()
+}
+
+fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
+    let content = {
+        let rich = rich_content(ui);
+        if rich.is_empty() { fallback_text_content(ui) } else { rich }
+    };
+    let locations = rich_locations(ui);
 
     ToolCall::new(ToolCallId::from(tool_call_id.to_owned()), ui.title.clone())
         .kind(tool_kind(ui.kind))
         .status(tool_status(ui.status))
         .content(content)
+        .locations(locations)
         .raw_input(ui.input.clone())
         .raw_output(ui.output.clone())
         .meta(tool_ui_meta(ui))
 }
 
-/// Projects the semantic tool request into ACP's native tool-call lifecycle.
 pub fn notify_tool_call(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     tool_call_id: &str,
     ui: &ToolUiModel,
 ) -> Result<(), AcpError> {
-    let tool_call = tool_call_from_ui(tool_call_id, ui);
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
-        SessionUpdate::ToolCall(tool_call),
+        SessionUpdate::ToolCall(tool_call_from_ui(tool_call_id, ui)),
     ))
 }
 
-/// Projects a semantic tool lifecycle update into ACP's native ToolCallUpdate.
 pub fn notify_tool_call_update(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,

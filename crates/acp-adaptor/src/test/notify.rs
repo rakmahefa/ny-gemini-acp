@@ -44,3 +44,28 @@ fn tool_call_projection_keeps_structured_input_and_output() {
     assert_eq!(call.raw_input, Some(serde_json::json!({"path":"src/main.rs","offset":10,"limit":20})));
     assert_eq!(call.raw_output, Some(serde_json::json!({"text":"fn main() {}"})));
 }
+
+#[test]
+fn tool_call_projection_preserves_rich_content_and_locations() {
+    let ui = ToolUiModel::pending(
+        ToolUiKind::FileEdit,
+        "Edit file",
+        "test.txt",
+        serde_json::json!({"path":"test.txt"}),
+    )
+    .with_content(vec![
+        serde_json::json!({
+            "type": "diff",
+            "path": "test.txt",
+            "oldText": "before",
+            "newText": "after"
+        }),
+    ])
+    .with_locations(vec![serde_json::json!({"path":"/tmp/test.txt","line":2})]);
+
+    let call = tool_call_from_ui("turn_1/tool_1", &ui);
+    assert_eq!(call.content.len(), 1);
+    assert_eq!(call.locations.len(), 1);
+    assert!(format!("{:?}", call.content[0]).contains("Diff"));
+    assert_eq!(call.locations[0].path, std::path::PathBuf::from("/tmp/test.txt"));
+}
