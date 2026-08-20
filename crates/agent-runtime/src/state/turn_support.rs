@@ -16,6 +16,7 @@ pub fn begin_partial_output(session_id: &str) {
         .insert(session_id.to_owned(), String::new());
 }
 
+#[cfg(test)]
 pub fn record_partial_output(session_id: &str, text: &str) {
     if text.is_empty() {
         return;
@@ -47,5 +48,12 @@ mod tests {
         record_partial_output("sess-partial", "world");
         assert_eq!(take_partial_output("sess-partial"), "Hello world");
         assert_eq!(take_partial_output("sess-partial"), "");
+    }
+
+    #[test]
+    fn partial_output_can_be_reset_before_tool_execution() {
+        begin_partial_output("sess-tool");
+        record_partial_output("sess-tool", "before tool");
+        assert_eq!(take_partial_output("sess-tool"), "before tool");
     }
 }
