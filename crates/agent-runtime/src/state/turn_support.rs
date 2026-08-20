@@ -16,6 +16,18 @@ pub fn begin_partial_output(session_id: &str) {
         .insert(session_id.to_owned(), String::new());
 }
 
+pub fn record_partial_output(session_id: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    partial_output_map()
+        .lock()
+        .expect("partial output mutex poisoned")
+        .entry(session_id.to_owned())
+        .or_default()
+        .push_str(text);
+}
+
 pub fn take_partial_output(session_id: &str) -> String {
     partial_output_map()
         .lock()
@@ -31,7 +43,9 @@ mod tests {
     #[test]
     fn partial_output_is_scoped_to_a_turn() {
         begin_partial_output("sess-partial");
-        assert_eq!(take_partial_output("sess-partial"), "");
+        record_partial_output("sess-partial", "Hello ");
+        record_partial_output("sess-partial", "world");
+        assert_eq!(take_partial_output("sess-partial"), "Hello world");
         assert_eq!(take_partial_output("sess-partial"), "");
     }
 }
