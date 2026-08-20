@@ -39,6 +39,31 @@ fn detects_tool_call_incrementally() {
 }
 
 #[test]
+fn exact_multi_chunk_tool_call_never_becomes_assistant_text() {
+    let events = collect(&[
+        "Je recherche le terme `modifié` dans le fichier `test_tool.txt`.\n\n",
+        "```tool_call\n{\"name\":\"search\",\"id\":\"test_5_search\",\"arguments\":{\"path\":\"test_tool.txt\",\"pattern\":\"modifié\"}}\n```\n\n",
+        "La recherche avec `search` a bien fonctionné.\n",
+    ]);
+
+    assert_eq!(events, vec![
+        ModelEvent::TextDelta("Je recherche le terme `modifié` dans le fichier `test_tool.txt`.\n\n".into()),
+        ModelEvent::ToolCall {
+            id: "test_5_search".into(),
+            name: "search".into(),
+            arguments: json!({"path": "test_tool.txt", "pattern": "modifié"}),
+        },
+        ModelEvent::TextDelta("La recherche avec `search` a bien fonctionné.\n".into()),
+    ]);
+
+    assert!(events.iter().all(|event| match event {
+        ModelEvent::TextDelta(text) => !text.contains("```tool_call") && !text.contains("test_5_search"),
+        ModelEvent::ReasoningDelta(text) => !text.contains("```tool_call") && !text.contains("test_5_search"),
+        _ => true,
+    }));
+}
+
+#[test]
 fn detects_inline_tool_call_incrementally() {
     assert_eq!(collect(&[
         "avant\n[tool_call shell_exec id=gemini_call_0] {\"command\":\"pwd\"}",

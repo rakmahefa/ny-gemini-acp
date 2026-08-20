@@ -52,7 +52,7 @@ impl PermissionRequest {
                     if resolved.exists() {
                         warnings.push(format!(
                             "Le fichier '{}' existe déjà et sera modifié.",
-                            info.title
+                            path
                         ));
                     }
                 }

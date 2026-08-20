@@ -13,7 +13,7 @@ use crate::core::frames::GeminiFrameEvent;
 
 use self::protocol::ProtocolDetector;
 use self::reasoning::ReasoningDetector;
-use self::types::ProtocolEvent;
+use self::types::{ProtocolEvent, FOLLOW_UP_PREFIX, FUNCTION_CALL_FENCE, TOOL_CALL_FENCE, TOOL_CALL_INLINE, TOOL_CALL_SINGLE_QUOTE_FENCE};
 
 /// Normalizes Gemini frame-level events into provider-neutral `ModelEvent`s.
 ///
@@ -79,9 +79,42 @@ impl GeminiSemanticStream {
 
     fn project_protocol_event(&mut self, event: ProtocolEvent) -> Vec<ModelEvent> {
         match event {
-            ProtocolEvent::Text(text) => self.reasoning.feed(text),
+            ProtocolEvent::Text(text) => self.project_protocol_text(text),
             ProtocolEvent::ToolCall(call) => self.project_tool_call(call.id, call.name, call.arguments),
         }
+    }
+
+    /// A protocol detector should never return a tool-call envelope as assistant text.
+    ///
+    /// This second, stateless pass is intentionally defensive: it protects the typed
+    /// `ModelEvent` boundary if an upstream chunk boundary or detector state ever lets a
+    /// known tool marker survive the streaming parser. The runtime must not receive a
+    /// hybrid `TextDelta("```tool_call ...")` event.
+    fn project_protocol_text(&mut self, text: String) -> Vec<ModelEvent> {
+        if !contains_protocol_marker(&text) {
+            return self.reasoning.feed(text);
+        }
+
+        let mut detector = ProtocolDetector::default();
+        let mut protocol_events = detector.feed(&text);
+        protocol_events.extend(detector.finish());
+
+        let mut output = Vec::new();
+        for event in protocol_events {
+            match event {
+                ProtocolEvent::ToolCall(call) => {
+                    output.extend(self.project_tool_call(call.id, call.name, call.arguments));
+                }
+                ProtocolEvent::Text(residual) => {
+                    if contains_protocol_marker(&residual) {
+                        tracing::warn!("dropping residual tool protocol that escaped semantic parsing");
+                    } else if !residual.is_empty() {
+                        output.extend(self.reasoning.feed(residual));
+                    }
+                }
+            }
+        }
+        output
     }
 
     fn project_tool_call(
@@ -120,4 +153,16 @@ impl GeminiSemanticStream {
             total_tokens: get(&["totalTokenCount", "total_tokens"]),
         }]
     }
+}
+
+fn contains_protocol_marker(text: &str) -> bool {
+    [
+        TOOL_CALL_FENCE,
+        TOOL_CALL_SINGLE_QUOTE_FENCE,
+        FUNCTION_CALL_FENCE,
+        TOOL_CALL_INLINE,
+        FOLLOW_UP_PREFIX,
+    ]
+    .into_iter()
+    .any(|marker| text.contains(marker))
 }
