@@ -86,21 +86,14 @@ fn completed_ui(
     .completed(is_ok, Some(output))
 }
 
-fn pending_ui_with_rich_content(name: &str, arguments: &Value) -> ToolUiModel {
+fn pending_ui(name: &str, arguments: &Value) -> ToolUiModel {
     let info = ToolInfo::build(name, arguments, Path::new("."), None);
-    let output = json!({
-        "content": info.content,
-        "locations": info.locations,
-    });
-
-    let mut ui = ToolUiModel::pending(
+    ToolUiModel::pending(
         ui_kind(name),
         info.title.clone(),
         info.title,
         bounded_raw_input(arguments),
-    );
-    ui.output = Some(output);
-    ui
+    )
 }
 
 #[async_trait::async_trait]
@@ -165,7 +158,7 @@ impl ToolProvider for DefaultToolProvider {
     }
 
     fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
-        Some(pending_ui_with_rich_content(name, arguments))
+        Some(pending_ui(name, arguments))
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
