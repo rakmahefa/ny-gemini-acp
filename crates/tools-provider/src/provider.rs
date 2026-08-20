@@ -13,15 +13,21 @@ use crate::tools::mcp::{McpCatalog, McpServerConfig as ProviderMcpServerConfig};
 use crate::tools::registry::ToolRegistry;
 use crate::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 
+struct SessionToolBinding {
+    registry: Arc<ToolRegistry>,
+    cwd: PathBuf,
+}
+
 struct ProviderState {
     fallback: Arc<ToolRegistry>,
-    sessions: RwLock<std::collections::HashMap<String, Arc<ToolRegistry>>>,
+    sessions: RwLock<std::collections::HashMap<String, SessionToolBinding>>,
 }
 
 #[derive(Clone)]
 pub struct DefaultToolProvider {
     state: Arc<ProviderState>,
     registry: Arc<ToolRegistry>,
+    cwd: Option<PathBuf>,
 }
 
 impl DefaultToolProvider {
@@ -33,6 +39,7 @@ impl DefaultToolProvider {
                 sessions: RwLock::new(std::collections::HashMap::new()),
             }),
             registry: fallback,
+            cwd: None,
         }
     }
 
@@ -58,8 +65,29 @@ fn ui_kind(name: &str) -> ToolUiKind {
         "shell_exec" => ToolUiKind::Shell,
         "replace_in_file" => ToolUiKind::ReplaceInFile,
         "AskUserQuestion" => ToolUiKind::AskUserQuestion,
+        "FollowUp" => ToolUiKind::Generic,
         _ => ToolUiKind::Generic,
     }
+}
+
+fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
+    values.iter().filter_map(|value| serde_json::to_value(value).ok()).collect()
+}
+
+fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
+    ToolInfo::build(name, arguments, cwd, None)
+}
+
+fn pending_ui(name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
+    let info = presentation_info(name, arguments, cwd);
+    ToolUiModel::pending(
+        ui_kind(name),
+        info.title.clone(),
+        info.title,
+        bounded_raw_input(arguments),
+    )
+    .with_content(rich_values(&info.content))
+    .with_locations(rich_values(&info.locations))
 }
 
 fn completed_ui(
@@ -69,58 +97,79 @@ fn completed_ui(
     is_ok: bool,
     cwd: &Path,
 ) -> ToolUiModel {
+    let info = presentation_info(name, arguments, cwd);
     let rendered = result_update(name, arguments, content, is_ok, cwd, None);
-    let output = json!({
-        "text": content,
-        "content": rendered.content,
-        "locations": rendered.locations,
-    });
 
-    let info = ToolInfo::build(name, arguments, cwd, None);
+    // Keep the rich, non-text invocation affordances produced by ToolInfo
+    // (Diff/Terminal/etc.) and append the result card produced by ResultUpdate.
+    let mut rich_content = info
+        .content
+        .iter()
+        .filter(|item| {
+            serde_json::to_value(item)
+                .ok()
+                .and_then(|value| value.get("type").and_then(Value::as_str).map(|kind| kind != "content"))
+                .unwrap_or(false)
+        })
+        .filter_map(|item| serde_json::to_value(item).ok())
+        .collect::<Vec<_>>();
+    rich_content.extend(rich_values(&rendered.content));
+
+    let locations = rendered
+        .locations
+        .iter()
+        .filter(|location| {
+            location
+                .path
+                .metadata()
+                .map(|_| true)
+                .unwrap_or(false)
+        })
+        .filter_map(|location| serde_json::to_value(location).ok())
+        .collect::<Vec<_>>();
+
     ToolUiModel::pending(
         ui_kind(name),
         info.title.clone(),
         info.title,
         bounded_raw_input(arguments),
     )
-    .completed(is_ok, Some(output))
-}
-
-fn pending_ui(name: &str, arguments: &Value) -> ToolUiModel {
-    let info = ToolInfo::build(name, arguments, Path::new("."), None);
-    ToolUiModel::pending(
-        ui_kind(name),
-        info.title.clone(),
-        info.title,
-        bounded_raw_input(arguments),
-    )
+    .completed(is_ok, Some(json!({ "text": content })))
+    .with_content(rich_content)
+    .with_locations(locations)
 }
 
 #[async_trait::async_trait]
 impl ToolProvider for DefaultToolProvider {
     async fn for_session(&self, session_id: &str) -> Arc<dyn ToolProvider> {
-        let registry = self
-            .state
-            .sessions
-            .read()
-            .await
-            .get(session_id)
-            .cloned()
-            .unwrap_or_else(|| Arc::clone(&self.state.fallback));
+        if let Some(binding) = self.state.sessions.read().await.get(session_id) {
+            return Arc::new(Self {
+                state: Arc::clone(&self.state),
+                registry: Arc::clone(&binding.registry),
+                cwd: Some(binding.cwd.clone()),
+            });
+        }
         Arc::new(Self {
             state: Arc::clone(&self.state),
-            registry,
+            registry: Arc::clone(&self.state.fallback),
+            cwd: None,
         })
     }
 
     async fn configure_session(
         &self,
         session_id: &str,
-        _cwd: PathBuf,
+        cwd: PathBuf,
         servers: Vec<ToolServerConfig>,
     ) -> Result<(), String> {
         if servers.is_empty() {
-            self.clear_session(session_id).await;
+            self.state.sessions.write().await.insert(
+                session_id.to_owned(),
+                SessionToolBinding {
+                    registry: Arc::clone(&self.state.fallback),
+                    cwd,
+                },
+            );
             return Ok(());
         }
 
@@ -133,11 +182,13 @@ impl ToolProvider for DefaultToolProvider {
             .map_err(|error| error.to_string())?;
         let mut registry = ToolRegistry::builtin();
         registry.register_mcp(Arc::new(catalog));
-        self.state
-            .sessions
-            .write()
-            .await
-            .insert(session_id.to_owned(), Arc::new(registry));
+        self.state.sessions.write().await.insert(
+            session_id.to_owned(),
+            SessionToolBinding {
+                registry: Arc::new(registry),
+                cwd,
+            },
+        );
         Ok(())
     }
 
@@ -158,7 +209,8 @@ impl ToolProvider for DefaultToolProvider {
     }
 
     fn ui_model(&self, name: &str, arguments: &Value) -> Option<ToolUiModel> {
-        Some(pending_ui(name, arguments))
+        let cwd = self.cwd.as_deref().unwrap_or_else(|| Path::new("."));
+        Some(pending_ui(name, arguments, cwd))
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
