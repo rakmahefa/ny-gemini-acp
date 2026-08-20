@@ -18,6 +18,7 @@ pub struct PermissionRequest {
     pub detail: String,
     pub tool_name: String,
     pub warnings: Vec<String>,
+    pub arguments: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,12 +32,8 @@ pub enum PermissionKind {
 
 impl PermissionRequest {
     pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
-        let info = ToolInfo::build(
-            tool_name,
-            args,
-            cwd,
-            (tool_name == "shell_exec").then(|| "permission-preview").as_deref(),
-        );
+        let terminal_id = (tool_name == "shell_exec").then(|| "permission-preview");
+        let info = ToolInfo::build(tool_name, args, cwd, terminal_id);
         let kind = match info.kind {
             ToolKind::Read | ToolKind::Search => PermissionKind::Read,
             ToolKind::Edit => PermissionKind::Write,
@@ -108,6 +105,7 @@ impl PermissionRequest {
             detail,
             tool_name: tool_name.to_owned(),
             warnings,
+            arguments: args.clone(),
         }
     }
 }
@@ -130,7 +128,7 @@ impl<'a> ToolExecutor<'a> {
             .then(|| format!("terminal-{call_id}"));
         let info = ToolInfo::build(
             &request.tool_name,
-            &serde_json::Value::Object(serde_json::Map::new()),
+            &request.arguments,
             self.cwd,
             terminal_id.as_deref(),
         );
@@ -144,7 +142,7 @@ impl<'a> ToolExecutor<'a> {
             .status(ToolCallStatus::Pending)
             .content(info.content)
             .locations(info.locations)
-            .raw_input(bounded_raw_input(&serde_json::json!({"tool": request.tool_name})))
+            .raw_input(bounded_raw_input(&request.arguments))
             .meta(permission_meta(request));
         let options = vec![
             PermissionOption::new(
