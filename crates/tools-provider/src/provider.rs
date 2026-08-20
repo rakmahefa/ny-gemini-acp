@@ -102,15 +102,14 @@ fn completed_ui_from_info(
     let rendered = result_update(name, arguments, content, is_ok, cwd, terminal.as_deref());
 
     // Contract visuel: l'Input appartient uniquement au ToolCall initial.
-    // Sur le résultat final, conserver les affordances riches persistantes
-    // (Diff/Terminal/etc.) puis la carte Output/Content de ResultUpdate.
+    // Le Diff reste persistant au résultat; Terminal est réémis uniquement par ResultUpdate.
     let mut rich_content = info
         .content
         .iter()
         .filter_map(|item| {
             let value = serde_json::to_value(item).ok()?;
             let kind = value.get("type").and_then(Value::as_str)?;
-            (kind != "content").then_some(value)
+            (kind != "content" && kind != "terminal").then_some(value)
         })
         .collect::<Vec<_>>();
     rich_content.extend(rich_values(&rendered.content));
