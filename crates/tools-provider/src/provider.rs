@@ -70,8 +70,9 @@ fn ui_kind(name: &str) -> ToolUiKind {
     }
 }
 
-fn terminal_id(call_id: &str) -> Option<String> {
-    if call_id.trim().is_empty() { None } else { Some(format!("terminal-{call_id}")) }
+fn terminal_id(name: &str, call_id: &str) -> Option<String> {
+    (name == "shell_exec" && !call_id.trim().is_empty())
+        .then(|| format!("terminal-{call_id}"))
 }
 
 fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
@@ -79,7 +80,8 @@ fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
 }
 
 fn presentation_info(call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
-    ToolInfo::build(name, arguments, cwd, terminal_id(call_id).as_deref())
+    let terminal = terminal_id(name, call_id);
+    ToolInfo::build(name, arguments, cwd, terminal.as_deref())
 }
 
 fn pending_ui(call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
@@ -98,7 +100,7 @@ fn completed_ui_from_info(
     cwd: &Path,
     info: &ToolInfo,
 ) -> ToolUiModel {
-    let terminal = terminal_id(call_id);
+    let terminal = terminal_id(name, call_id);
     let rendered = result_update(name, arguments, content, is_ok, cwd, terminal.as_deref());
 
     // Contract visuel: l'Input appartient uniquement au ToolCall initial.
