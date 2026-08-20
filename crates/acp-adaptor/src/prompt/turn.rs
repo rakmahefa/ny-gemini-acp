@@ -8,7 +8,8 @@ use super::notify::notify_usage;
 use super::title::derive_title;
 use permission::AcpToolPermissionHandler;
 use agent_client_protocol::schema::v1::{PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
-use agent_client_protocol::{Error as AcpError, Responder};
+use agent_client_protocol::Responder;
+use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
 use agent_runtime::{AgentLoop, AgentLoopConfig};
@@ -30,9 +31,9 @@ fn map_agent_error(error: &agent_runtime::AgentLoopError) -> StopReason {
 }
 
 pub async fn run_turn(
-    mut ctx: TurnContext<'_>,
+    ctx: TurnContext<'_>,
     req: PromptRequest,
-    responder: agent_client_protocol::Responder<PromptResponse>,
+    responder: Responder<PromptResponse>,
 ) -> Result<(), AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
