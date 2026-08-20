@@ -1,4 +1,4 @@
-//! ACP notifications : messages, reasoning, tool UI and usage.
+//! ACP notifications: messages, reasoning, tool UI and usage.
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
     TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
@@ -25,10 +25,8 @@ pub fn emit_error_chunk(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
-                "\n\n[error] {error}"
-            ))))
-            .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(format!("\n\n[error] {error}"))))
+                .message_id(message_id.clone()),
         ),
     ))
     .ok();
@@ -47,8 +45,7 @@ pub fn notify_text(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
-                .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text))).message_id(message_id.clone()),
         ),
     ))
 }
@@ -65,8 +62,7 @@ pub fn notify_reasoning(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentThoughtChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
-                .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text))).message_id(message_id.clone()),
         ),
     ))
 }
@@ -74,9 +70,7 @@ pub fn notify_reasoning(
 fn tool_kind(kind: ToolUiKind) -> ToolKind {
     match kind {
         ToolUiKind::FileRead | ToolUiKind::DirectoryList => ToolKind::Read,
-        ToolUiKind::FileWrite
-        | ToolUiKind::FileEdit
-        | ToolUiKind::ReplaceInFile => ToolKind::Edit,
+        ToolUiKind::FileWrite | ToolUiKind::FileEdit | ToolUiKind::ReplaceInFile => ToolKind::Edit,
         ToolUiKind::Search | ToolUiKind::Glob | ToolUiKind::SearchAndRead => ToolKind::Search,
         ToolUiKind::Shell => ToolKind::Execute,
         ToolUiKind::AskUserQuestion | ToolUiKind::Generic => ToolKind::Other,
@@ -108,14 +102,12 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
     .unwrap_or_default()
 }
 
-fn rich_content(ui: &ToolUiModel) -> Option<Vec<ToolCallContent>> {
-    let value = ui.output.as_ref()?.get("content")?.clone();
-    serde_json::from_value(value).ok()
+fn rich_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
+    ui.content.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect()
 }
 
-fn rich_locations(ui: &ToolUiModel) -> Option<Vec<ToolCallLocation>> {
-    let value = ui.output.as_ref()?.get("locations")?.clone();
-    serde_json::from_value(value).ok()
+fn rich_locations(ui: &ToolUiModel) -> Vec<ToolCallLocation> {
+    ui.locations.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect()
 }
 
 fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
@@ -129,8 +121,11 @@ fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
 }
 
 fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
-    let content = rich_content(ui).unwrap_or_else(|| fallback_text_content(ui));
-    let locations = rich_locations(ui).unwrap_or_default();
+    let content = {
+        let rich = rich_content(ui);
+        if rich.is_empty() { fallback_text_content(ui) } else { rich }
+    };
+    let locations = rich_locations(ui);
 
     ToolCall::new(ToolCallId::from(tool_call_id.to_owned()), ui.title.clone())
         .kind(tool_kind(ui.kind))
@@ -148,10 +143,9 @@ pub fn notify_tool_call(
     tool_call_id: &str,
     ui: &ToolUiModel,
 ) -> Result<(), AcpError> {
-    let tool_call = tool_call_from_ui(tool_call_id, ui);
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
-        SessionUpdate::ToolCall(tool_call),
+        SessionUpdate::ToolCall(tool_call_from_ui(tool_call_id, ui)),
     ))
 }
 
