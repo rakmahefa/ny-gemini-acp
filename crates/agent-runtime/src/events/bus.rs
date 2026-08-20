@@ -32,7 +32,8 @@ impl EventBus {
         event: SemanticEvent,
     ) -> Result<usize, Box<broadcast::error::SendError<SemanticEvent>>> {
         let turn_id = event_turn_id(&event).to_owned();
-        let global_result = self.sender.send(event.clone()).map_err(Box::new);
+        let error_event = event.clone();
+        let mut delivered = self.sender.send(event.clone()).unwrap_or(0);
 
         let turn_sender = self
             .turn_senders
@@ -41,14 +42,21 @@ impl EventBus {
             .and_then(|senders| senders.get(&turn_id).cloned());
 
         if let Some(sender) = turn_sender {
-            if sender.send(event).is_err() {
-                if let Ok(mut senders) = self.turn_senders.lock() {
-                    senders.remove(&turn_id);
+            match sender.send(event) {
+                Ok(receivers) => delivered = delivered.saturating_add(receivers),
+                Err(_) => {
+                    if let Ok(mut senders) = self.turn_senders.lock() {
+                        senders.remove(&turn_id);
+                    }
                 }
             }
         }
 
-        global_result
+        if delivered == 0 {
+            Err(Box::new(broadcast::error::SendError(error_event)))
+        } else {
+            Ok(delivered)
+        }
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {
@@ -114,8 +122,8 @@ mod tests {
         let mut turn_a = bus.subscribe_turn("turn-a");
         let mut turn_b = bus.subscribe_turn("turn-b");
 
-        bus.publish(event("turn-a", 0)).ok();
-        bus.publish(event("turn-b", 0)).ok();
+        bus.publish(event("turn-a", 0)).expect("turn-a has a receiver");
+        bus.publish(event("turn-b", 0)).expect("turn-b has a receiver");
 
         let a = turn_a.recv().await.unwrap();
         let b = turn_b.recv().await.unwrap();
@@ -130,10 +138,22 @@ mod tests {
         let _turn_b = bus.subscribe_turn("turn-b");
 
         bus.close_turn("turn-a");
-        bus.publish(event("turn-a", 0)).ok();
+        bus.publish(event("turn-a", 0)).err();
         bus.close_turn("turn-b");
         let mut turn_b = bus.subscribe_turn("turn-b");
-        bus.publish(event("turn-b", 1)).ok();
+        bus.publish(event("turn-b", 1)).expect("turn-b has a new receiver");
         assert_eq!(event_turn_id(&turn_b.recv().await.unwrap()), "turn-b");
+    }
+
+    #[tokio::test]
+    async fn global_and_turn_subscribers_can_receive_the_same_event() {
+        let bus = EventBus::new();
+        let mut global = bus.subscribe();
+        let mut turn = bus.subscribe_turn("turn");
+
+        bus.publish(event("turn", 0)).unwrap();
+
+        assert_eq!(event_turn_id(&global.recv().await.unwrap()), "turn");
+        assert_eq!(event_turn_id(&turn.recv().await.unwrap()), "turn");
     }
 }
