@@ -29,8 +29,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
-thiserror = { workspace = true }
-regex = { workspace = true }
 async-trait = { workspace = true }
 
 [features]

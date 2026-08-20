@@ -42,7 +42,7 @@ impl ProtocolDetector {
                 ProtocolMode::IgnoreToolResult { closing } => self.drain_tool_result(closing, final_flush),
                 ProtocolMode::IgnoreInlineToolResult => self.drain_inline_tool_result(final_flush),
                 ProtocolMode::ToolBlock { .. } => self.drain_tool_block(&mut events, final_flush),
-                ProtocolMode::InlineToolCall { .. } => self.drain_inline_tool_call(&mut events, final_flush),
+                ProtocolMode::InlineToolCall => self.drain_inline_tool_call(&mut events, final_flush),
             };
             if !progressed { break; }
         }
@@ -100,7 +100,7 @@ impl ProtocolDetector {
             }
             if !self.pending.contains('\n') && !final_flush { return false; }
             self.pending.drain(..TOOL_CALL_INLINE.len());
-            self.mode = ProtocolMode::InlineToolCall { body: String::new() };
+            self.mode = ProtocolMode::InlineToolCall;
             self.at_stream_start = false;
             return true;
         }
@@ -180,14 +180,14 @@ impl ProtocolDetector {
     }
 
     fn find_tool_marker(&self) -> Option<(usize, BlockKind)> {
-        [BlockKind::ToolCall, BlockKind::SingleQuoteToolCall, BlockKind::FunctionCall]
+        [BlockKind::Tool, BlockKind::SingleQuoteTool, BlockKind::Function]
             .into_iter()
             .filter_map(|kind| self.pending.find(kind.opening()).map(|index| (index, kind)))
             .min_by_key(|(index, _)| *index)
     }
 
     fn find_partial_tool_marker(&self) -> Option<usize> {
-        [BlockKind::ToolCall.opening(), BlockKind::SingleQuoteToolCall.opening(), BlockKind::FunctionCall.opening()]
+        [BlockKind::Tool.opening(), BlockKind::SingleQuoteTool.opening(), BlockKind::Function.opening()]
             .into_iter()
             .filter_map(|marker| partial_marker_suffix(&self.pending, marker))
             .min()
@@ -292,12 +292,8 @@ impl ProtocolDetector {
 enum ResultMarker { Legacy, Inline }
 
 fn strip_protocol_separator(pending: &mut String) {
-    while pending.starts_with("\r\n") {
-        pending.drain(..2);
-    }
-    while pending.starts_with('\n') || pending.starts_with('\r') {
-        pending.drain(..1);
-    }
+    while pending.starts_with("\r\n") { pending.drain(..2); }
+    while pending.starts_with('\n') || pending.starts_with('\r') { pending.drain(..1); }
 }
 
 fn partial_marker_suffix(input: &str, marker: &str) -> Option<usize> {

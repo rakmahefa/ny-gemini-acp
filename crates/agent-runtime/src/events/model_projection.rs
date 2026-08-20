@@ -127,11 +127,9 @@ pub(crate) async fn consume_model_stream(
     if thinking_active && !emitter.thinking_completed() {
         return Err(ModelProjectionError::SemanticEventRejected);
     }
-    thinking_active = false;
     if assistant_active && !emitter.assistant_completed() {
         return Err(ModelProjectionError::SemanticEventRejected);
     }
-    assistant_active = false;
 
     Ok(ModelRound {
         text,

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::events::{consume_model_stream, ModelProjectionError, ModelRound, PendingToolCall, TurnEventEmitter};
 use crate::state::{Role, Session};
 use crate::{
-    Cancellation, GenerationOptions, LlmError, LlmProvider, ModelEvent, ModelRequest,
+    Cancellation, GenerationOptions, LlmError, LlmProvider, ModelRequest,
     ToolCallRequest, ToolCallResult, ToolPermissionDecision, ToolPermissionHandler,
     ToolPermissionRequest, ToolProvider,
 };
@@ -131,7 +131,7 @@ impl AgentLoop {
                 return Ok(AgentLoopOutcome { output: round_result.text, rounds: round + 1, tool_calls: total_tool_calls });
             }
 
-            total_tool_calls = total_tool_calls.checked_add(executable.len()).ok_or_else(|| AgentLoopError::ToolCallLimit { actual: usize::MAX, limit: usize::MAX })?;
+            total_tool_calls = total_tool_calls.checked_add(executable.len()).ok_or(AgentLoopError::ToolCallLimit { actual: usize::MAX, limit: usize::MAX })?;
             ensure_not_cancelled(&cancellation, emitter)?;
             let history = format_tool_calls(&round_result.text, &executable);
             if !history.is_empty() { session.messages.push((Role::Assistant, history)); }
@@ -270,6 +270,7 @@ fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ModelEvent;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use tokio::sync::mpsc;

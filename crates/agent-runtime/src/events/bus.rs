@@ -24,8 +24,8 @@ impl EventBus {
     pub fn publish(
         &self,
         event: SemanticEvent,
-    ) -> Result<usize, broadcast::error::SendError<SemanticEvent>> {
-        self.sender.send(event)
+    ) -> Result<usize, Box<broadcast::error::SendError<SemanticEvent>>> {
+        self.sender.send(event).map_err(Box::new)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {

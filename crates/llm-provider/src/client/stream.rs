@@ -18,6 +18,13 @@ use super::config::{ENDPOINT, TOKEN_TTL, StreamItem, StreamResult};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
 
+struct AttemptState<'a> {
+    decoder: &'a mut GeminiFrameDecoder,
+    emitted: &'a mut String,
+    emitted_tools: &'a mut HashSet<String>,
+    tx: &'a mpsc::Sender<StreamResult>,
+}
+
 impl Client {
     pub(crate) async fn run_turn(
         &self,
@@ -32,10 +39,13 @@ impl Client {
         let mut decoder = GeminiFrameDecoder::new();
 
         for attempt in 1..=attempts {
-            match self
-                .attempt_http(&prompt, &refs, resolved, &mut decoder, &mut emitted, &mut emitted_tools, &tx)
-                .await
-            {
+            let mut state = AttemptState {
+                decoder: &mut decoder,
+                emitted: &mut emitted,
+                emitted_tools: &mut emitted_tools,
+                tx: &tx,
+            };
+            match self.attempt_http(&prompt, &refs, resolved, &mut state).await {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     let es = e.to_string();
@@ -69,10 +79,7 @@ impl Client {
         prompt: &str,
         refs: &[String],
         resolved: &models::Resolved,
-        decoder: &mut GeminiFrameDecoder,
-        emitted: &mut String,
-        emitted_tools: &mut HashSet<String>,
-        tx: &mpsc::Sender<StreamResult>,
+        state: &mut AttemptState<'_>,
     ) -> anyhow::Result<Option<()>> {
         let (url, headers, body) = self.build_request(prompt, refs, resolved).await?;
         let response = self.inner.http.post(&url).headers(headers).body(body).send().await.context("envoi requête Gemini")?;
@@ -83,25 +90,25 @@ impl Client {
 
         loop {
             tokio::select! {
-                _ = tx.closed() => return Ok(None),
+                _ = state.tx.closed() => return Ok(None),
                 chunk = bytes_stream.next() => {
                     let Some(chunk) = chunk else {
-                        for frame in decoder.finish() {
-                            emit_frame(frame, emitted, emitted_tools, tx).await?;
+                        for frame in state.decoder.finish() {
+                            emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
                         }
                         if let Some(reason) = frames::detect_safety_block(&raw_accumulator) {
-                            let _ = tx.send(Err(reason)).await;
+                            let _ = state.tx.send(Err(reason)).await;
                             return Ok(Some(()));
                         }
-                        if emitted.is_empty() && emitted_tools.is_empty() && frames::is_empty_stream(&raw_accumulator) {
-                            let _ = tx.send(Err("Gemini n'a produit aucune réponse exploitable.".to_string())).await;
+                        if state.emitted.is_empty() && state.emitted_tools.is_empty() && frames::is_empty_stream(&raw_accumulator) {
+                            let _ = state.tx.send(Err("Gemini n'a produit aucune réponse exploitable.".to_string())).await;
                             return Ok(Some(()));
                         }
                         return Ok(Some(()));
                     };
                     let bytes = chunk.context("lecture flux Gemini")?;
                     let text = String::from_utf8_lossy(&bytes);
-                    trace!("chunk {} octets, queue ligne {}", text.len(), decoder.pending().len());
+                    trace!("chunk {} octets, queue ligne {}", text.len(), state.decoder.pending().len());
                     if raw_accumulator.len() < MAX_RAW_ACCUMULATOR {
                         raw_accumulator.push_str(&text);
                         if raw_accumulator.len() > MAX_RAW_ACCUMULATOR {
@@ -109,17 +116,17 @@ impl Client {
                         }
                     }
 
-                    let combined = format!("{}{}", decoder.pending(), text);
+                    let combined = format!("{}{}", state.decoder.pending(), text);
                     if combined.contains("BardErrorInfo") {
                         let code = frames::bard_error(&combined).unwrap_or(0);
                         bail!("Gemini upstream rejected request: BardErrorInfo [{code}]");
                     }
                     if let Some(reason) = frames::detect_safety_block(&combined) {
-                        let _ = tx.send(Err(reason)).await;
+                        let _ = state.tx.send(Err(reason)).await;
                         return Ok(Some(()));
                     }
-                    for frame in decoder.feed(&text) {
-                        emit_frame(frame, emitted, emitted_tools, tx).await?;
+                    for frame in state.decoder.feed(&text) {
+                        emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
                     }
                 }
             }

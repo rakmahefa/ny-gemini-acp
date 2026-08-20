@@ -2,7 +2,7 @@ use crate::{handlers, prompt};
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use agent_runtime::events::TurnEventEmitter;
-use agent_runtime::{AppState, RuntimeError, ToolProvider, TurnManager};
+use agent_runtime::{AppState, RuntimeError, TurnManager};
 use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
@@ -12,7 +12,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_events = state.events.clone();
     let turn_manager = TurnManager::new();
 
-    Agent::builder(Agent::default())
+    Agent::builder(Agent)
         .name("gemini-acp")
         .on_receive_request(
             {
@@ -70,18 +70,17 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
 
                             interactive::scope(interactive_context, async move {
                                 let mut semantic = TurnEventEmitter::new(events, sid.clone(), turn_id);
-                                let result = prompt::run_turn(
+                                let turn_context = prompt::TurnContext {
                                     store,
                                     tools,
                                     llm,
-                                    req,
-                                    responder,
-                                    turn_cx,
-                                    &mut semantic,
+                                    cx: turn_cx,
+                                    semantic: &mut semantic,
                                     cancellation,
-                                )
-                                .await
-                                .map_err(|e| RuntimeError::Task(e.to_string()));
+                                };
+                                let result = prompt::run_turn(turn_context, req, responder)
+                                    .await
+                                    .map_err(|e| RuntimeError::Task(e.to_string()));
 
                                 if result.is_err() && !semantic.is_terminal() {
                                     let _ = semantic.turn_failed();

@@ -46,21 +46,20 @@ pub async fn project(
                     SemanticEvent::ThinkingDelta { delta, .. } => {
                         notify_reasoning(cx, session_id, message_id, delta)?;
                     }
-                    SemanticEvent::ToolCallRequested { context, ui, .. } => {
-                        if let Some(ui) = ui {
-                            notify_tool_call(cx, session_id, &context.tool_call_id, &ui)?;
-                        }
-                    }
-                    SemanticEvent::ToolExecutionStarted { context, ui } => {
-                        if let Some(ui) = ui {
-                            notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui)?;
-                        }
-                    }
-                    SemanticEvent::ToolResultReceived { context, ui, .. } => {
-                        if let Some(ui) = ui {
-                            notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui)?;
-                        }
-                    }
+                    SemanticEvent::ToolCallRequested {
+                        context,
+                        ui: Some(ui),
+                        ..
+                    } => notify_tool_call(cx, session_id, &context.tool_call_id, &ui)?,
+                    SemanticEvent::ToolExecutionStarted {
+                        context,
+                        ui: Some(ui),
+                    } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui)?,
+                    SemanticEvent::ToolResultReceived {
+                        context,
+                        ui: Some(ui),
+                        ..
+                    } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui)?,
                     SemanticEvent::TurnCancelled { .. }
                     | SemanticEvent::TurnFailed { .. }
                     | SemanticEvent::TurnCompleted { .. } => break,

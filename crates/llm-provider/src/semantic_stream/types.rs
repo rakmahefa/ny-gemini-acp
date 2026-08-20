@@ -24,23 +24,23 @@ pub(super) enum ReasoningPhase {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum BlockKind {
-    ToolCall,
-    FunctionCall,
-    SingleQuoteToolCall,
+    Tool,
+    Function,
+    SingleQuoteTool,
 }
 
 impl BlockKind {
     pub(super) fn opening(self) -> &'static str {
         match self {
-            Self::ToolCall => TOOL_CALL_FENCE,
-            Self::FunctionCall => FUNCTION_CALL_FENCE,
-            Self::SingleQuoteToolCall => TOOL_CALL_SINGLE_QUOTE_FENCE,
+            Self::Tool => TOOL_CALL_FENCE,
+            Self::Function => FUNCTION_CALL_FENCE,
+            Self::SingleQuoteTool => TOOL_CALL_SINGLE_QUOTE_FENCE,
         }
     }
     pub(super) fn closing(self) -> &'static str {
         match self {
-            Self::SingleQuoteToolCall => "'''",
-            Self::ToolCall | Self::FunctionCall => "```",
+            Self::SingleQuoteTool => "'''",
+            Self::Tool | Self::Function => "```",
         }
     }
 }
@@ -51,7 +51,7 @@ pub(super) enum ProtocolMode {
     IgnoreToolResult { closing: Option<&'static str> },
     IgnoreInlineToolResult,
     ToolBlock { kind: BlockKind, body: String, oversized: bool },
-    InlineToolCall { body: String },
+    InlineToolCall,
 }
 
 #[derive(Debug)]

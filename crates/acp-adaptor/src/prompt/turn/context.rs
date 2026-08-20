@@ -3,58 +3,9 @@ use agent_client_protocol::schema::v1::{
     ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Client, ConnectionTo};
-use agent_runtime::state::Role;
 use agent_runtime::LlmProvider;
 use tools_provider::tools::executor::safe_session_update;
-pub(crate) const CONTEXT_WINDOW_CHARS: usize = 1_000_000;
-pub(crate) const COMPACTION_THRESHOLD_CHARS: usize = (CONTEXT_WINDOW_CHARS as f64 * 0.9) as usize;
-pub(crate) const EMERGENCY_COMPACTION_CHARS: usize = (CONTEXT_WINDOW_CHARS as f64 * 0.7) as usize;
-const PRESERVE_TURNS: usize = 10;
-pub(crate) fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
-    if messages.len() <= 1 {
-        return;
-    }
-    let mut turns = Vec::new();
-    let mut current = Vec::new();
-    for message in messages.iter() {
-        if message.0 == Role::User && !current.is_empty() {
-            turns.push(std::mem::take(&mut current));
-        }
-        current.push(message.clone());
-    }
-    if !current.is_empty() {
-        turns.push(current);
-    }
-    if turns.len() <= PRESERVE_TURNS {
-        return;
-    }
-    let current_chars: usize = messages.iter().map(|(_, text)| text.len()).sum();
-    if current_chars <= target_chars {
-        return;
-    }
-    let tail_end = turns.len().saturating_sub(PRESERVE_TURNS);
-    let mut candidates: Vec<(usize, usize)> = (0..tail_end)
-        .map(|i| (i, turns[i].iter().map(|(_, t)| t.len()).sum::<usize>()))
-        .collect();
-    candidates.sort_by_key(|item| std::cmp::Reverse(item.1));
-    let mut to_evict = std::collections::HashSet::new();
-    let mut remaining = current_chars;
-    for (i, chars) in candidates {
-        if remaining <= target_chars {
-            break;
-        }
-        to_evict.insert(i);
-        remaining -= chars;
-    }
-    let mut compacted = Vec::new();
-    for (i, turn) in turns.iter().enumerate() {
-        if i < tail_end && to_evict.contains(&i) {
-            continue;
-        }
-        compacted.extend(turn.iter().cloned());
-    }
-    *messages = compacted;
-}
+
 pub(crate) async fn upload_images(
     llm: &dyn LlmProvider,
     cx: &ConnectionTo<Client>,
@@ -88,7 +39,7 @@ pub(crate) async fn upload_images(
                             total
                         )),
                     )),
-                )];
+                ];
                 safe_session_update(
                     cx,
                     session_id,

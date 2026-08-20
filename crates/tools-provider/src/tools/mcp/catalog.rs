@@ -313,7 +313,13 @@ impl McpCatalog {
         let server_name = config.name.clone();
         let mut last_error = None;
 
-        for attempt in 0..DISCOVERY_ATTEMPTS {
+        for (attempt, delay_ms) in DISCOVERY_RETRY_DELAYS_MS
+            .iter()
+            .copied()
+            .chain(std::iter::once(0))
+            .enumerate()
+            .take(DISCOVERY_ATTEMPTS)
+        {
             match McpServerClient::connect(config.clone()).await {
                 Ok(mut client) => match client.list_tools().await {
                     Ok(descriptors) => return Ok((client, descriptors)),
@@ -341,7 +347,7 @@ impl McpCatalog {
             }
 
             if attempt + 1 < DISCOVERY_ATTEMPTS {
-                tokio::time::sleep(Duration::from_millis(DISCOVERY_RETRY_DELAYS_MS[attempt])).await;
+                tokio::time::sleep(Duration::from_millis(delay_ms)).await;
             }
         }
 

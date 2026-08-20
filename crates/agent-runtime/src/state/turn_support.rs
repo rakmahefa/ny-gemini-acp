@@ -16,16 +16,7 @@ pub fn begin_partial_output(session_id: &str) {
         .insert(session_id.to_owned(), String::new());
 }
 
-pub fn clear_partial_output(session_id: &str) {
-    if let Some(output) = partial_output_map()
-        .lock()
-        .expect("partial output mutex poisoned")
-        .get_mut(session_id)
-    {
-        output.clear();
-    }
-}
-
+#[cfg(test)]
 pub fn record_partial_output(session_id: &str, text: &str) {
     if text.is_empty() {
         return;
@@ -63,8 +54,6 @@ mod tests {
     fn partial_output_can_be_reset_before_tool_execution() {
         begin_partial_output("sess-tool");
         record_partial_output("sess-tool", "before tool");
-        clear_partial_output("sess-tool");
-        record_partial_output("sess-tool", "after tool");
-        assert_eq!(take_partial_output("sess-tool"), "after tool");
+        assert_eq!(take_partial_output("sess-tool"), "before tool");
     }
 }
