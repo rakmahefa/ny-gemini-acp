@@ -1,143 +1,33 @@
-use std::path::{Path, PathBuf};
-
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
-    ToolCall as AcpToolCall, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+    ToolCall as AcpToolCall, ToolCallStatus, ToolCallUpdate,
 };
 use serde_json::{json, Map, Value};
 
-use super::super::sandbox::{RiskLevel, ShellAnalysis};
-use super::super::tool_ux::{bounded_raw_input, classify_risk, ToolInfo};
-use super::ToolExecutor;
-
-#[derive(Debug, Clone)]
-pub struct PermissionRequest {
-    pub kind: PermissionKind,
-    pub risk: RiskLevel,
-    pub summary: String,
-    pub detail: String,
-    pub tool_name: String,
-    pub warnings: Vec<String>,
-    pub arguments: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionKind {
-    Read,
-    Write,
-    Execute,
-    #[allow(dead_code)]
-    Network,
-}
-
-impl PermissionRequest {
-    pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
-        let terminal_id = (tool_name == "shell_exec").then_some("permission-preview");
-        let info = ToolInfo::build(tool_name, args, cwd, terminal_id);
-        let kind = match info.kind {
-            ToolKind::Read | ToolKind::Search => PermissionKind::Read,
-            ToolKind::Edit => PermissionKind::Write,
-            ToolKind::Execute => PermissionKind::Execute,
-            _ => PermissionKind::Execute,
-        };
-        let risk = classify_risk(tool_name, args);
-        let mut warnings = Vec::new();
-
-        match tool_name {
-            "file_write" | "file_edit" | "replace_in_file" => {
-                if let Some(path) = args.get("path").and_then(Value::as_str) {
-                    let resolved = if Path::new(path).is_absolute() {
-                        PathBuf::from(path)
-                    } else {
-                        cwd.join(path)
-                    };
-                    if resolved.exists() {
-                        warnings.push(format!(
-                            "Le fichier '{}' existe déjà et sera modifié.",
-                            path
-                        ));
-                    }
-                }
-            }
-            "shell_exec" => {
-                let command = args.get("command").and_then(Value::as_str).unwrap_or("");
-                let analysis = ShellAnalysis::analyze(command);
-                if analysis.has_dangerous_pipe_chain {
-                    warnings
-                        .push("Chaîne de commandes potentiellement dangereuse détectée.".into());
-                }
-                if analysis.has_env_injection {
-                    warnings.push("Injection de variables d'environnement détectée.".into());
-                }
-                if analysis.risk >= RiskLevel::High {
-                    warnings.push(format!(
-                        "Niveau de risque {} : {}",
-                        analysis.risk.emoji(),
-                        analysis.risk.description()
-                    ));
-                }
-            }
-            _ => {}
-        }
-        if risk >= RiskLevel::High {
-            warnings.push("Cette opération peut avoir des effets irréversibles.".into());
-        }
-
-        let detail = if warnings.is_empty() {
-            format!("{}\n{} {}", info.title, risk.emoji(), risk.label())
-        } else {
-            format!(
-                "{}\n{} {}\n\nAvertissements :\n{}",
-                info.title,
-                risk.emoji(),
-                risk.label(),
-                warnings
-                    .iter()
-                    .map(|w| format!("  - {w}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            )
-        };
-        Self {
-            kind,
-            risk,
-            summary: info.title,
-            detail,
-            tool_name: tool_name.to_owned(),
-            warnings,
-            arguments: args.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PermissionResult {
-    Allow,
-    Reject,
-    Cancelled,
-    TransportError(String),
-}
+use super::super::tool_ux::bounded_raw_input;
+use super::{PermissionKind, PermissionRequest, PermissionResult, ToolExecutor};
 
 impl<'a> ToolExecutor<'a> {
     pub async fn request_permission(
         &self,
         request: &PermissionRequest,
-        call_id: &ToolCallId,
+        call_id: &agent_client_protocol::schema::v1::ToolCallId,
     ) -> PermissionResult {
-        let terminal_id = (request.tool_name == "shell_exec")
-            .then(|| format!("terminal-{call_id}"));
-        let info = ToolInfo::build(
+        // The terminal resource does not exist yet at permission time. For shell_exec,
+        // it is created only after the user grants permission by the ACP terminal request.
+        // Therefore the permission prompt must never advertise a Terminal content block.
+        let info = super::super::tool_ux::ToolInfo::build(
             &request.tool_name,
             &request.arguments,
             self.cwd,
-            terminal_id.as_deref(),
+            None,
         );
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(match request.kind {
-                PermissionKind::Read => ToolKind::Read,
-                PermissionKind::Write => ToolKind::Edit,
-                PermissionKind::Execute => ToolKind::Execute,
-                PermissionKind::Network => ToolKind::Fetch,
+                PermissionKind::Read => agent_client_protocol::schema::v1::ToolKind::Read,
+                PermissionKind::Write => agent_client_protocol::schema::v1::ToolKind::Edit,
+                PermissionKind::Execute => agent_client_protocol::schema::v1::ToolKind::Execute,
+                PermissionKind::Network => agent_client_protocol::schema::v1::ToolKind::Fetch,
             })
             .status(ToolCallStatus::Pending)
             .content(info.content)
