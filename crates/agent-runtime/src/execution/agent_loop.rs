@@ -270,6 +270,7 @@ fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ModelEvent;
     use std::collections::VecDeque;
     use std::sync::Mutex;
     use tokio::sync::mpsc;
