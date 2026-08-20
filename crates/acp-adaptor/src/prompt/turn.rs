@@ -7,7 +7,7 @@ use super::content::blocks_to_parts;
 use super::notify::notify_usage;
 use permission::AcpToolPermissionHandler;
 use super::title::derive_title;
-use agent_client_protocol::schema::v1::{MessageId, PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
+use agent_client_protocol::schema::v1::{PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, Store, TurnError};
