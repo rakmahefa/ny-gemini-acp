@@ -1,8 +1,8 @@
 //! ACP notifications : messages, reasoning, tool UI and usage.
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
-    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
-    UsageUpdate,
+    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
+    ToolCallUpdate, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
@@ -113,6 +113,11 @@ fn rich_content(ui: &ToolUiModel) -> Option<Vec<ToolCallContent>> {
     serde_json::from_value(value).ok()
 }
 
+fn rich_locations(ui: &ToolUiModel) -> Option<Vec<ToolCallLocation>> {
+    let value = ui.output.as_ref()?.get("locations")?.clone();
+    serde_json::from_value(value).ok()
+}
+
 fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
     ui.output
         .as_ref()
@@ -125,11 +130,13 @@ fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
 
 fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
     let content = rich_content(ui).unwrap_or_else(|| fallback_text_content(ui));
+    let locations = rich_locations(ui).unwrap_or_default();
 
     ToolCall::new(ToolCallId::from(tool_call_id.to_owned()), ui.title.clone())
         .kind(tool_kind(ui.kind))
         .status(tool_status(ui.status))
         .content(content)
+        .locations(locations)
         .raw_input(ui.input.clone())
         .raw_output(ui.output.clone())
         .meta(tool_ui_meta(ui))
