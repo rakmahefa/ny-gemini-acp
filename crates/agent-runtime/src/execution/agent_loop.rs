@@ -113,10 +113,10 @@ impl AgentLoop {
                 let _ = sink.turn_failed();
                 return Err(AgentLoopError::ToolCallLimit { actual: round_result.tool_calls.len(), limit: self.config.max_tool_calls_per_round });
             }
-            validate_tool_calls(&round_result.tool_calls, &mut seen_tool_ids)?;
+            let tool_calls = canonicalize_tool_calls(round_result.tool_calls, round, &mut seen_tool_ids)?;
 
             let mut executable = Vec::new();
-            for call in round_result.tool_calls {
+            for call in tool_calls {
                 if let Some(handler) = &self.action_handler {
                     if handler.supports(&call.name) {
                         ensure_not_cancelled(&cancellation, sink)?;
@@ -194,14 +194,32 @@ fn validate_session(session: &Session) -> Result<(), AgentLoopError> {
     if session.model.trim().is_empty() { return Err(AgentLoopError::InvalidSession("model must not be empty".into())); }
     Ok(())
 }
-fn validate_tool_calls(calls: &[PendingToolCall], seen: &mut HashSet<String>) -> Result<(), AgentLoopError> {
-    for call in calls {
-        if call.id.trim().is_empty() { return Err(AgentLoopError::InvalidToolCall("tool call id must not be empty".into())); }
+
+fn canonicalize_tool_calls(mut calls: Vec<PendingToolCall>, round: usize, seen: &mut HashSet<String>) -> Result<Vec<PendingToolCall>, AgentLoopError> {
+    let mut round_seen = HashSet::new();
+    for call in &mut calls {
+        let upstream_id = call.id.trim().to_owned();
+        if upstream_id.is_empty() { return Err(AgentLoopError::InvalidToolCall("tool call id must not be empty".into())); }
         if call.name.trim().is_empty() { return Err(AgentLoopError::InvalidToolCall("tool name must not be empty".into())); }
-        if !seen.insert(call.id.trim().to_owned()) { return Err(AgentLoopError::InvalidToolCall(format!("duplicate tool call id: {}", call.id))); }
+        if !round_seen.insert(upstream_id.clone()) {
+            return Err(AgentLoopError::InvalidToolCall(format!("duplicate tool call id in round {round}: {upstream_id}")));
+        }
+
+        let mut semantic_id = upstream_id.clone();
+        if seen.contains(&semantic_id) {
+            semantic_id = format!("round-{round}-{upstream_id}");
+            let mut suffix = 1usize;
+            while seen.contains(&semantic_id) {
+                semantic_id = format!("round-{round}-{suffix}-{upstream_id}");
+                suffix = suffix.saturating_add(1);
+            }
+        }
+        seen.insert(semantic_id.clone());
+        call.id = semantic_id;
     }
-    Ok(())
+    Ok(calls)
 }
+
 fn ensure_not_cancelled(cancellation: &Cancellation, sink: &mut dyn TurnEventSink) -> Result<(), AgentLoopError> {
     if cancellation.is_cancelled() { let _ = sink.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
     Ok(())
@@ -291,6 +309,35 @@ mod tests {
         let raw = serde_json::to_string(&session.messages).unwrap();
         let restored: crate::state::History = serde_json::from_str(&raw).unwrap();
         assert!(restored.entries().iter().any(|entry| matches!(entry, crate::state::HistoryEntry::ToolCall { id, name, .. } if id == "call-42" && name == "search")));
+    }
+    #[test]
+    fn provider_tool_ids_can_repeat_across_rounds() {
+        let mut seen = HashSet::new();
+        let first = canonicalize_tool_calls(
+            vec![PendingToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: serde_json::json!({}) }],
+            0,
+            &mut seen,
+        ).unwrap();
+        let second = canonicalize_tool_calls(
+            vec![PendingToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: serde_json::json!({}) }],
+            1,
+            &mut seen,
+        ).unwrap();
+        assert_eq!(first[0].id, "gemini_call_0");
+        assert_eq!(second[0].id, "round-1-gemini_call_0");
+    }
+    #[test]
+    fn duplicate_provider_tool_ids_in_one_round_are_rejected() {
+        let mut seen = HashSet::new();
+        let error = canonicalize_tool_calls(
+            vec![
+                PendingToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: serde_json::json!({}) },
+                PendingToolCall { id: "gemini_call_0".into(), name: "search".into(), arguments: serde_json::json!({}) },
+            ],
+            0,
+            &mut seen,
+        ).unwrap_err();
+        assert!(matches!(error, AgentLoopError::InvalidToolCall(message) if message.contains("duplicate tool call id in round")));
     }
     #[test]
     fn rejects_zero_limits() {
