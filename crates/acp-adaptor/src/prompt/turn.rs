@@ -29,15 +29,12 @@ fn map_agent_error(error: &agent_runtime::AgentLoopError) -> StopReason {
     }
 }
 
-pub async fn run_turn(
-    ctx: TurnContext<'_>,
-    req: PromptRequest,
-) -> Result<PromptResponse, AcpError> {
+pub async fn run_turn(ctx: TurnContext<'_>, req: PromptRequest) -> Result<PromptResponse, AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
     let span = tracing::info_span!("turn", session=%session_id, chars_input=tracing::field::Empty, chars_output=tracing::field::Empty, tool_rounds=tracing::field::Empty, outcome=tracing::field::Empty);
     let _enter = span.enter();
-    let (session, _store_cancel, generation) = match ctx.store.begin_turn(sid).await {
+    let (session, generation) = match ctx.store.begin_turn(sid).await {
         Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
             fail_before_execution(ctx.semantic);
