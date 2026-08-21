@@ -168,8 +168,11 @@ impl TurnIntegrity {
     pub(super) fn close_tool_for_terminal(&mut self, id: &str, reason: ToolTerminalReason) -> Result<(), IntegrityError> {
         self.ensure_active("close_tool_for_terminal")?;
         match self.tools.get_mut(id) {
-            Some(state) if !matches!(state, ToolPhase::Terminal(_)) => { *state = ToolPhase::Terminal(reason); Ok(()) }
             Some(ToolPhase::Terminal(_)) => Err(IntegrityError::new(format!("tool {id} is already terminal"))),
+            Some(state) => {
+                *state = ToolPhase::Terminal(reason);
+                Ok(())
+            }
             None => Err(IntegrityError::new(format!("close_tool_for_terminal references unknown tool {id}"))),
         }
     }
