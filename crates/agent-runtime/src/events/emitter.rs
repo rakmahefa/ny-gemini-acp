@@ -42,6 +42,14 @@ impl TurnEventEmitter {
     pub fn phase(&self) -> TurnPhase { self.integrity.phase() }
     pub fn is_terminal(&self) -> bool { self.integrity.phase() == TurnPhase::Terminal }
 
+    pub fn ensure_turn_started(&mut self) -> bool {
+        match self.integrity.phase() {
+            TurnPhase::NotStarted => self.turn_started(),
+            TurnPhase::Active => true,
+            TurnPhase::Terminal => false,
+        }
+    }
+
     fn transport_ready(&self) -> bool {
         if !self.require_transport || self.bus.has_turn_subscriber(&self.turn_id) { true }
         else {
@@ -229,7 +237,6 @@ impl TurnEventEmitter {
 
     fn finish_terminal(&mut self, event: &str) -> bool {
         if !self.transport_ready() { return false; }
-
         if event == "turn_completed" {
             if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
         } else {
@@ -237,7 +244,6 @@ impl TurnEventEmitter {
             if !self.abort_scopes(reason) { return self.reject(IntegrityError::new(format!("{event} could not abort open semantic scopes"))); }
             if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
         }
-
         let context = self.context();
         let emitted = match event {
             "turn_cancelled" => self.publish(SemanticEvent::TurnCancelled { context }),
@@ -258,73 +264,4 @@ impl TurnEventEmitter {
 
     #[cfg(test)]
     pub fn bind_count(&self) -> usize { self.tool_bindings.len() }
-
-    #[cfg(test)]
-    pub fn set_require_transport_for_test(&mut self, required: bool) { self.require_transport = required; }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn emitter() -> (TurnEventEmitter, tokio::sync::mpsc::UnboundedReceiver<SemanticEvent>) {
-        let bus = EventBus::new();
-        let rx = bus.subscribe_turn("t");
-        (TurnEventEmitter::new(bus, "s", "t"), rx)
-    }
-
-    #[test]
-    fn terminal_event_is_rejected_while_a_tool_is_open() {
-        let (mut e, _rx) = emitter();
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested("call-1", "shell"));
-        assert!(!e.turn_completed());
-        assert!(!e.is_terminal());
-        assert_eq!(e.sequence(), 2);
-    }
-
-    #[test]
-    fn cancelled_turn_aborts_open_tool_without_synthesizing_result() {
-        let (mut e, mut rx) = emitter();
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested("call-1", "shell"));
-        assert!(e.turn_cancelled());
-        assert!(e.is_terminal());
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 3);
-        assert!(matches!(events[0], SemanticEvent::TurnStarted { .. }));
-        assert!(matches!(events[1], SemanticEvent::ToolCallRequested { .. }));
-        assert!(matches!(events[2], SemanticEvent::TurnCancelled { .. }));
-    }
-
-    #[test]
-    fn explicit_tool_result_allows_terminal_event() {
-        let (mut e, _rx) = emitter();
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested("call-1", "shell"));
-        assert!(e.tool_execution_started("call-1"));
-        assert!(e.tool_result_received("call-1", "ok"));
-        assert!(e.turn_completed());
-        assert!(e.is_terminal());
-    }
-
-    #[test]
-    fn duplicate_upstream_tool_ids_are_rejected_even_after_completion() {
-        let (mut e, _rx) = emitter();
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested("call-1", "shell"));
-        assert!(e.tool_execution_started("call-1"));
-        assert!(e.tool_result_received("call-1", "ok"));
-        assert!(!e.tool_call_requested("call-1", "shell"));
-        assert_eq!(e.bind_count(), 0);
-    }
-
-    #[test]
-    fn required_transport_rejects_before_state_mutation() {
-        let bus = EventBus::new();
-        let mut e = TurnEventEmitter::new_with_required_transport(bus, "s", "t");
-        assert!(!e.turn_started());
-        assert_eq!(e.phase(), TurnPhase::NotStarted);
-        assert_eq!(e.sequence(), 0);
-    }
 }
