@@ -1,6 +1,6 @@
 use tokio::sync::mpsc;
 
-use crate::events::TurnEventEmitter;
+use crate::events::TurnEventSink;
 use crate::{LlmError, ModelEvent};
 
 #[derive(Debug, thiserror::Error)]
@@ -32,12 +32,12 @@ pub(crate) struct ModelRound {
 /// Projects provider-neutral model events into runtime semantic assistant/thinking
 /// lifecycle events while accumulating the model round result for orchestration.
 ///
-/// `AgentLoop` deliberately owns turn/tool orchestration; this component owns the
-/// assistant/thinking scope transitions induced by `ModelEvent`.
-pub(crate) async fn consume_model_stream(
+/// The projection depends only on the narrow `TurnEventSink` contract, not on the
+/// concrete event transport implementation.
+pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
     mut stream: mpsc::Receiver<Result<ModelEvent, LlmError>>,
     cancellation: &crate::Cancellation,
-    emitter: &mut TurnEventEmitter,
+    sink: &mut S,
 ) -> Result<ModelRound, ModelProjectionError> {
     let mut cancel_rx = cancellation.subscribe();
     let mut text = String::new();
@@ -52,7 +52,7 @@ pub(crate) async fn consume_model_stream(
             item = stream.recv() => item,
             changed = cancel_rx.changed() => {
                 if changed.is_ok() && *cancel_rx.borrow() {
-                    close_active_scopes(emitter, &mut thinking_active, &mut assistant_active);
+                    close_active_scopes(sink, &mut thinking_active, &mut assistant_active);
                     return Err(ModelProjectionError::Cancelled);
                 }
                 continue;
@@ -66,7 +66,7 @@ pub(crate) async fn consume_model_stream(
         let event = match item {
             Ok(event) => event,
             Err(error) => {
-                close_active_scopes(emitter, &mut thinking_active, &mut assistant_active);
+                close_active_scopes(sink, &mut thinking_active, &mut assistant_active);
                 return Err(ModelProjectionError::Llm(error));
             }
         };
@@ -75,45 +75,45 @@ pub(crate) async fn consume_model_stream(
         match event {
             ModelEvent::ReasoningDelta(delta) => {
                 if text_started {
-                    close_active_scopes(emitter, &mut thinking_active, &mut assistant_active);
+                    close_active_scopes(sink, &mut thinking_active, &mut assistant_active);
                     return Err(ModelProjectionError::InvalidSequence(
                         "reasoning resumed after assistant text started".into(),
                     ));
                 }
                 if !assistant_active {
-                    if !emitter.assistant_started() {
-                        return Err(rejected(emitter, &mut thinking_active, &mut assistant_active));
+                    if !sink.assistant_started() {
+                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
                     }
                     assistant_active = true;
                 }
                 if !thinking_active {
-                    if !emitter.thinking_started() {
-                        return Err(rejected(emitter, &mut thinking_active, &mut assistant_active));
+                    if !sink.thinking_started() {
+                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
                     }
                     thinking_active = true;
                 }
-                if !emitter.thinking_delta(delta) {
-                    return Err(rejected(emitter, &mut thinking_active, &mut assistant_active));
+                if !sink.thinking_delta(delta) {
+                    return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
                 }
             }
             ModelEvent::TextDelta(delta) => {
                 if !assistant_active {
-                    if !emitter.assistant_started() {
-                        return Err(rejected(emitter, &mut thinking_active, &mut assistant_active));
+                    if !sink.assistant_started() {
+                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
                     }
                     assistant_active = true;
                 }
                 if thinking_active {
-                    if !emitter.thinking_completed() {
-                        return Err(rejected(emitter, &mut thinking_active, &mut assistant_active));
+                    if !sink.thinking_completed() {
+                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
                     }
                     thinking_active = false;
                 }
                 if !delta.is_empty() {
                     text_started = true;
                 }
-                if !emitter.assistant_delta(delta.clone()) {
-                    return Err(rejected(emitter, &mut thinking_active, &mut assistant_active));
+                if !sink.assistant_delta(delta.clone()) {
+                    return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
                 }
                 text.push_str(&delta);
             }
@@ -124,10 +124,10 @@ pub(crate) async fn consume_model_stream(
         }
     }
 
-    if thinking_active && !emitter.thinking_completed() {
+    if thinking_active && !sink.thinking_completed() {
         return Err(ModelProjectionError::SemanticEventRejected);
     }
-    if assistant_active && !emitter.assistant_completed() {
+    if assistant_active && !sink.assistant_completed() {
         return Err(ModelProjectionError::SemanticEventRejected);
     }
 
@@ -138,26 +138,26 @@ pub(crate) async fn consume_model_stream(
     })
 }
 
-fn rejected(
-    emitter: &mut TurnEventEmitter,
+fn rejected<S: TurnEventSink + ?Sized>(
+    sink: &mut S,
     thinking_active: &mut bool,
     assistant_active: &mut bool,
 ) -> ModelProjectionError {
-    close_active_scopes(emitter, thinking_active, assistant_active);
+    close_active_scopes(sink, thinking_active, assistant_active);
     ModelProjectionError::SemanticEventRejected
 }
 
-fn close_active_scopes(
-    emitter: &mut TurnEventEmitter,
+fn close_active_scopes<S: TurnEventSink + ?Sized>(
+    sink: &mut S,
     thinking_active: &mut bool,
     assistant_active: &mut bool,
 ) {
     if *thinking_active {
-        let _ = emitter.thinking_completed();
+        let _ = sink.thinking_completed();
         *thinking_active = false;
     }
     if *assistant_active {
-        let _ = emitter.assistant_completed();
+        let _ = sink.assistant_completed();
         *assistant_active = false;
     }
 }
@@ -165,7 +165,7 @@ fn close_active_scopes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::EventBus;
+    use crate::events::{EventBus, TurnEventEmitter};
     use crate::Cancellation;
 
     fn emitter() -> TurnEventEmitter {

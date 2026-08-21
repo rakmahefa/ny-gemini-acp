@@ -11,7 +11,7 @@ pub mod state;
 pub mod time;
 pub mod tool_ui;
 
-pub use events::{EventBus, EventContext, EventStream, SemanticEvent, ToolEventContext, TurnEventEmitter};
+pub use events::{EventBus, EventContext, EventStream, SemanticEvent, ToolEventContext, TurnEventEmitter, TurnEventSink, TurnTermination};
 pub use execution::{
     AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome,
     AgentThread, AgentThreadHandle, AgentTurn, AgentTurnHandle, Cancellation, RuntimeError,

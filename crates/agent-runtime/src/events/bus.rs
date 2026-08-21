@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use tokio::sync::broadcast;
+
+use tokio::sync::{broadcast, mpsc};
 
 use super::SemanticEvent;
 
@@ -9,7 +10,7 @@ const DEFAULT_CAPACITY: usize = 256;
 #[derive(Clone)]
 pub struct EventBus {
     sender: broadcast::Sender<SemanticEvent>,
-    turn_senders: Arc<Mutex<HashMap<String, broadcast::Sender<SemanticEvent>>>>,
+    turn_senders: Arc<Mutex<HashMap<String, mpsc::UnboundedSender<SemanticEvent>>>>,
 }
 
 impl Default for EventBus {
@@ -27,6 +28,11 @@ impl EventBus {
         }
     }
 
+    /// Publishes globally for observers and losslessly to the dedicated turn stream.
+    ///
+    /// The global broadcast remains a best-effort diagnostic fan-out. The per-turn
+    /// channel is the protocol transport and is deliberately unbounded: ACP must never
+    /// observe a synthetic sequence gap because a bounded queue discarded events.
     pub fn publish(
         &self,
         event: SemanticEvent,
@@ -42,13 +48,10 @@ impl EventBus {
             .and_then(|senders| senders.get(&turn_id).cloned());
 
         if let Some(sender) = turn_sender {
-            match sender.send(event) {
-                Ok(receivers) => delivered = delivered.saturating_add(receivers),
-                Err(_) => {
-                    if let Ok(mut senders) = self.turn_senders.lock() {
-                        senders.remove(&turn_id);
-                    }
-                }
+            if sender.send(event).is_ok() {
+                delivered = delivered.saturating_add(1);
+            } else if let Ok(mut senders) = self.turn_senders.lock() {
+                senders.remove(&turn_id);
             }
         }
 
@@ -63,20 +66,15 @@ impl EventBus {
         self.sender.subscribe()
     }
 
-    /// Subscribe to one turn only.
-    ///
-    /// Each turn has an independent bounded buffer so unrelated concurrent turns
-    /// cannot make this receiver lag behind. Transport integrity is then enforced
-    /// by the consumer through the per-turn sequence numbers.
-    pub fn subscribe_turn(&self, turn_id: &str) -> broadcast::Receiver<SemanticEvent> {
+    /// Subscribe to one turn only using a lossless point-to-point queue.
+    pub fn subscribe_turn(&self, turn_id: &str) -> mpsc::UnboundedReceiver<SemanticEvent> {
+        let (sender, receiver) = mpsc::unbounded_channel();
         let mut senders = self
             .turn_senders
             .lock()
             .expect("event bus turn sender registry poisoned");
-        let sender = senders
-            .entry(turn_id.to_owned())
-            .or_insert_with(|| broadcast::channel(DEFAULT_CAPACITY).0);
-        sender.subscribe()
+        senders.insert(turn_id.to_owned(), sender);
+        receiver
     }
 
     pub fn close_turn(&self, turn_id: &str) {
@@ -132,13 +130,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn turn_transport_does_not_lag_under_a_burst() {
+        let bus = EventBus::new();
+        let mut receiver = bus.subscribe_turn("burst");
+        for sequence in 0..10_000u64 {
+            bus.publish(event("burst", sequence)).expect("turn receiver is alive");
+        }
+
+        for sequence in 0..10_000u64 {
+            let received = receiver.recv().await.expect("event must not be dropped");
+            assert_eq!(event_turn_id(&received), "burst");
+            assert_eq!(sequence, match received { SemanticEvent::TurnStarted { context } => context.sequence, _ => unreachable!() });
+        }
+    }
+
+    #[tokio::test]
     async fn closing_a_turn_removes_only_its_dedicated_sender() {
         let bus = EventBus::new();
         let _turn_a = bus.subscribe_turn("turn-a");
         let _turn_b = bus.subscribe_turn("turn-b");
 
         bus.close_turn("turn-a");
-        bus.publish(event("turn-a", 0)).err();
+        assert!(bus.publish(event("turn-a", 0)).is_err());
+
         bus.close_turn("turn-b");
         let mut turn_b = bus.subscribe_turn("turn-b");
         bus.publish(event("turn-b", 1)).expect("turn-b has a new receiver");
