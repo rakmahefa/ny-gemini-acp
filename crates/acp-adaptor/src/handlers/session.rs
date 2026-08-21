@@ -85,20 +85,25 @@ fn is_rejected_or_cancelled_tool_result(text: &str) -> bool {
         || lower.contains("échec de la demande de permission acp")
 }
 
+struct ReplayTool<'a> {
+    id: &'a str,
+    name: &'a str,
+    arguments: &'a serde_json::Value,
+    result_text: Option<&'a str>,
+    result_ok: Option<bool>,
+    cwd: &'a std::path::Path,
+}
+
 fn replay_tool_result(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
-    tool_call_id: &str,
-    tool_name: &str,
-    args: &serde_json::Value,
-    result_text: Option<&str>,
-    result_ok: Option<bool>,
-    cwd: &std::path::Path,
+    replay: ReplayTool<'_>,
 ) -> Result<(), AcpError> {
-    let call_id = ToolCallId::from(tool_call_id.to_owned());
-    let info = ToolInfo::build(tool_name, args, cwd, None);
-    let is_ok = result_ok.unwrap_or_else(|| {
-        result_text
+    let call_id = ToolCallId::from(replay.id.to_owned());
+    let info = ToolInfo::build(replay.name, replay.arguments, replay.cwd, None);
+    let is_ok = replay.result_ok.unwrap_or_else(|| {
+        replay
+            .result_text
             .map(|text| !is_rejected_or_cancelled_tool_result(text))
             .unwrap_or(false)
     });
@@ -108,19 +113,19 @@ fn replay_tool_result(
         SessionUpdate::ToolCall(
             ToolCall::new(call_id.clone(), info.title.clone())
                 .kind(info.kind)
-                .status(if result_text.is_some() {
+                .status(if replay.result_text.is_some() {
                     if is_ok { ToolCallStatus::Completed } else { ToolCallStatus::Failed }
                 } else {
                     ToolCallStatus::InProgress
                 })
                 .content(info.content.clone())
                 .locations(info.locations.clone())
-                .raw_input(bounded_raw_input(args)),
+                .raw_input(bounded_raw_input(replay.arguments)),
         ),
     ))?;
 
-    if let Some(result_text) = result_text {
-        let rendered = result_update(tool_name, args, result_text, is_ok, cwd, None);
+    if let Some(result_text) = replay.result_text {
+        let rendered = result_update(replay.name, replay.arguments, result_text, is_ok, replay.cwd, None);
         cx.send_notification(SessionNotification::new(
             session_id.clone(),
             SessionUpdate::ToolCallUpdate(
@@ -245,12 +250,14 @@ pub async fn handle_load(
                 replay_tool_result(
                     cx,
                     &req.session_id,
-                    id,
-                    name,
-                    arguments,
-                    result_text,
-                    result_ok,
-                    &session.cwd,
+                    ReplayTool {
+                        id,
+                        name,
+                        arguments,
+                        result_text,
+                        result_ok,
+                        cwd: &session.cwd,
+                    },
                 )?;
             }
             HistoryEntry::ToolResult { .. } => {}
