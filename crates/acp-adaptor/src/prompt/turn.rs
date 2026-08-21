@@ -8,7 +8,7 @@ use super::notify::notify_usage;
 use super::title::derive_title;
 use permission::AcpToolPermissionHandler;
 use agent_client_protocol::schema::v1::{PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
-use agent_client_protocol::{Error as AcpError, Responder};
+use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
 use agent_runtime::{AgentLoop, AgentLoopConfig};
@@ -32,8 +32,7 @@ fn map_agent_error(error: &agent_runtime::AgentLoopError) -> StopReason {
 pub async fn run_turn(
     ctx: TurnContext<'_>,
     req: PromptRequest,
-    responder: Responder<PromptResponse>,
-) -> Result<(), AcpError> {
+) -> Result<PromptResponse, AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
     let span = tracing::info_span!("turn", session=%session_id, chars_input=tracing::field::Empty, chars_output=tracing::field::Empty, tool_rounds=tracing::field::Empty, outcome=tracing::field::Empty);
@@ -42,11 +41,11 @@ pub async fn run_turn(
         Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
             fail_before_execution(ctx.semantic);
-            return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string()})));
+            return Err(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string()})));
         }
         Err(TurnError::AlreadyRunning) => {
             fail_before_execution(ctx.semantic);
-            return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string(), "error": "a turn is already running; send session/cancel first"})));
+            return Err(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string(), "error": "a turn is already running; send session/cancel first"})));
         }
     };
 
@@ -68,7 +67,7 @@ pub async fn run_turn(
         Err(()) => {
             fail_before_execution(ctx.semantic);
             guard.finish().await;
-            return responder.respond(PromptResponse::new(StopReason::Refusal));
+            return Ok(PromptResponse::new(StopReason::Refusal));
         }
     };
 
@@ -111,7 +110,7 @@ pub async fn run_turn(
                 tracing::warn!(session=%session_id, "notify_usage a échoué: {error}");
             }
             guard.finish().await;
-            responder.respond(PromptResponse::new(StopReason::EndTurn))
+            Ok(PromptResponse::new(StopReason::EndTurn))
         }
         Err(error) => {
             let reason = map_agent_error(&error);
@@ -120,7 +119,7 @@ pub async fn run_turn(
                 else { ctx.semantic.turn_failed(); }
             }
             guard.finish().await;
-            responder.respond(PromptResponse::new(reason))
+            Ok(PromptResponse::new(reason))
         }
     }
 }

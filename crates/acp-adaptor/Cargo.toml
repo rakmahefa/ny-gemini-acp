@@ -30,6 +30,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true }
 async-trait = { workspace = true }
+thiserror = { workspace = true }
 
 [features]
 default = ["unstable_session_fork"]
