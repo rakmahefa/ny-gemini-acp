@@ -4,6 +4,7 @@ mod emitter;
 mod event;
 mod integrity;
 mod model_projection;
+mod sink;
 mod stream;
 mod tool_sink;
 
@@ -11,6 +12,7 @@ pub use bus::EventBus;
 pub use context::{EventContext, ToolEventContext};
 pub use emitter::TurnEventEmitter;
 pub use event::SemanticEvent;
+pub use sink::TurnEventSink;
 pub use stream::EventStream;
 
 pub(crate) use model_projection::{
