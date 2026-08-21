@@ -63,7 +63,16 @@ impl Store {
         let mut entries = match tokio::fs::read_dir(&self.dir).await { Ok(v) => v, Err(_) => return out };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            if path.extension().and_then(|v| v.to_str()) != Some("json") { continue; }
+            let name = match path.file_name().and_then(|value| value.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+            if path.extension().and_then(|v| v.to_str()) != Some("json") {
+                continue;
+            }
+            if name.ends_with(".snap.json") {
+                continue;
+            }
             if let Ok(raw) = tokio::fs::read(&path).await {
                 if let Ok(session) = serde_json::from_slice::<Session>(&raw) {
                     if cwd.map(|c| session.cwd == c).unwrap_or(true) { out.push(session); }
@@ -90,5 +99,25 @@ async fn cleanup_orphan_tmp_files(dir: &Path) {
                 .map(|name| name.ends_with(".json.tmp") || name.ends_with(".tmp"))
                 .unwrap_or(false);
         if is_tmp { let _ = tokio::fs::remove_file(path).await; }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn list_excludes_snapshots_from_sessions() {
+        let dir = std::env::temp_dir().join(format!("acp-persistence-test-{}", uuid::Uuid::new_v4().simple()));
+        let store = Store::open(&dir).await.unwrap();
+        let session = store.create("/tmp".into(), vec![], "test-model").await.unwrap();
+        let snapshot = store.snapshot_path(&session.id, 1);
+        tokio::fs::write(&snapshot, serde_json::to_vec_pretty(&session).unwrap()).await.unwrap();
+
+        let listed = store.list(None).await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, session.id);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

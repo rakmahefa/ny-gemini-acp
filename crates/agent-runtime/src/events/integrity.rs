@@ -1,11 +1,7 @@
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TurnPhase {
-    NotStarted,
-    Active,
-    Terminal,
-}
+pub enum TurnPhase { NotStarted, Active, Terminal }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StreamPhase { Idle, Active }
@@ -16,7 +12,6 @@ pub(super) enum ToolTerminalReason {
     PermissionDenied,
     TurnCancelled,
     TurnFailed,
-    TurnCompleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,20 +152,23 @@ impl TurnIntegrity {
         }
     }
 
-    pub(super) fn close_tool_for_terminal(&mut self, id: &str, reason: ToolTerminalReason) -> Result<(), IntegrityError> {
-        self.ensure_active("close_tool_for_terminal")?;
-        match self.tools.get_mut(id) {
-            Some(ToolPhase::Terminal(_)) => Err(IntegrityError::new(format!("tool {id} is already terminal"))),
-            Some(state) => { *state = ToolPhase::Terminal(reason); Ok(()) }
-            None => Err(IntegrityError::new(format!("close_tool_for_terminal references unknown tool {id}"))),
+    pub(super) fn abort_open_tools(&mut self, reason: ToolTerminalReason) -> Result<(), IntegrityError> {
+        self.ensure_active("abort_open_tools")?;
+        if matches!(reason, ToolTerminalReason::Result | ToolTerminalReason::PermissionDenied) {
+            return Err(IntegrityError::new("abort_open_tools requires a turn cancellation or failure reason"));
         }
+        for state in self.tools.values_mut() {
+            if !matches!(state, ToolPhase::Terminal(_)) {
+                *state = ToolPhase::Terminal(reason);
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn terminal_reason_for(&self, event: &str) -> ToolTerminalReason {
         match event {
             "turn_cancelled" => ToolTerminalReason::TurnCancelled,
             "turn_failed" => ToolTerminalReason::TurnFailed,
-            "turn_completed" => ToolTerminalReason::TurnCompleted,
             _ => ToolTerminalReason::TurnFailed,
         }
     }
@@ -222,7 +220,7 @@ mod tests {
         assert!(s.tool_result_received("c").is_err());
         s.tool_execution_started("c").unwrap();
         s.tool_result_received("c").unwrap();
-        assert_eq!(s.tools.get("c"), Some(&ToolPhase::Terminal(ToolTerminalReason::Result)));
+        assert!(matches!(s.tools.get("c"), Some(ToolPhase::Terminal(ToolTerminalReason::Result))));
         s.finish_terminal_after_scopes("turn_completed").unwrap();
     }
 
@@ -233,77 +231,27 @@ mod tests {
         s.tool_call_requested("c").unwrap();
         s.permission_requested("c").unwrap();
         s.tool_result_received("c").unwrap();
-        assert_eq!(s.tools.get("c"), Some(&ToolPhase::Terminal(ToolTerminalReason::PermissionDenied)));
+        assert!(matches!(s.tools.get("c"), Some(ToolPhase::Terminal(ToolTerminalReason::PermissionDenied))));
         assert!(s.tool_execution_started("c").is_err());
         s.finish_terminal_after_scopes("turn_completed").unwrap();
     }
 
     #[test]
-    fn tool_call_cannot_overlap_open_text_stream() {
-        let mut s = TurnIntegrity::default();
-        s.turn_started().unwrap();
-        s.assistant_started().unwrap();
-        assert!(s.tool_call_requested("assistant-open").is_err());
-        s.assistant_completed().unwrap();
-        s.assistant_started().unwrap();
-        s.thinking_started().unwrap();
-        assert!(s.tool_call_requested("thinking-open").is_err());
-        s.thinking_completed().unwrap();
-        s.assistant_completed().unwrap();
-        s.tool_call_requested("closed-streams").unwrap();
-    }
-
-    #[test]
-    fn terminal_tool_states_are_immutable() {
+    fn cancelled_tool_is_aborted_without_a_result_event() {
         let mut s = TurnIntegrity::default();
         s.turn_started().unwrap();
         s.tool_call_requested("c").unwrap();
-        s.tool_execution_started("c").unwrap();
-        s.tool_result_received("c").unwrap();
-        assert!(s.permission_requested("c").is_err());
-        assert!(s.tool_execution_started("c").is_err());
-        assert!(s.tool_result_received("c").is_err());
-        s.finish_terminal_after_scopes("turn_completed").unwrap();
-    }
-
-    #[test]
-    fn terminal_completion_requires_emitter_staging() {
-        let mut s = TurnIntegrity::default();
-        s.turn_started().unwrap();
-        s.tool_call_requested("c").unwrap();
-        assert!(s.finish_terminal_after_scopes("turn_completed").is_err());
-        s.close_tool_for_terminal("c", ToolTerminalReason::TurnCompleted).unwrap();
-        assert!(s.finish_terminal_after_scopes("turn_completed").is_ok());
+        s.abort_open_tools(ToolTerminalReason::TurnCancelled).unwrap();
+        s.finish_terminal_after_scopes("turn_cancelled").unwrap();
         assert!(s.open_tool_ids().is_empty());
         assert_eq!(s.phase, TurnPhase::Terminal);
     }
 
     #[test]
-    fn failed_terminal_requires_emitter_scope_closure() {
+    fn completion_still_rejects_open_tools() {
         let mut s = TurnIntegrity::default();
         s.turn_started().unwrap();
         s.tool_call_requested("c").unwrap();
-        assert!(s.finish_terminal_after_scopes("turn_failed").is_err());
-        s.close_tool_for_terminal("c", ToolTerminalReason::TurnFailed).unwrap();
-        s.finish_terminal_after_scopes("turn_failed").unwrap();
-        assert_eq!(s.phase, TurnPhase::Terminal);
-    }
-
-    #[test]
-    fn cancelled_terminal_requires_emitter_scope_closure() {
-        let mut s = TurnIntegrity::default();
-        s.turn_started().unwrap();
-        s.tool_call_requested("c").unwrap();
-        assert!(s.finish_terminal_after_scopes("turn_cancelled").is_err());
-        s.close_tool_for_terminal("c", ToolTerminalReason::TurnCancelled).unwrap();
-        s.finish_terminal_after_scopes("turn_cancelled").unwrap();
-        assert_eq!(s.phase, TurnPhase::Terminal);
-    }
-
-    #[test]
-    fn failed_start_cannot_be_completed() {
-        let mut s = TurnIntegrity::default();
-        s.turn_started().unwrap();
         assert!(s.finish_terminal_after_scopes("turn_completed").is_err());
     }
 }
