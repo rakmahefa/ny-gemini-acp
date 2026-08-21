@@ -34,6 +34,10 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
     cancellation: &crate::Cancellation,
     sink: &mut S,
 ) -> Result<ModelRound, ModelProjectionError> {
+    if !sink.ensure_turn_started() {
+        return Err(ModelProjectionError::SemanticEventRejected);
+    }
+
     let mut cancel_rx = cancellation.subscribe();
     let mut text = String::new();
     let mut tool_calls = Vec::new();
@@ -67,45 +71,29 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
         match event {
             ModelEvent::ReasoningDelta(delta) => {
                 if text_started {
-                    return Err(ModelProjectionError::InvalidSequence(
-                        "reasoning resumed after assistant text started".into(),
-                    ));
+                    return Err(ModelProjectionError::InvalidSequence("reasoning resumed after assistant text started".into()));
                 }
                 if !assistant_active {
-                    if !sink.assistant_started() {
-                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
-                    }
+                    if !sink.assistant_started() { return Err(rejected(sink, &mut thinking_active, &mut assistant_active)); }
                     assistant_active = true;
                 }
                 if !thinking_active {
-                    if !sink.thinking_started() {
-                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
-                    }
+                    if !sink.thinking_started() { return Err(rejected(sink, &mut thinking_active, &mut assistant_active)); }
                     thinking_active = true;
                 }
-                if !sink.thinking_delta(delta) {
-                    return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
-                }
+                if !sink.thinking_delta(delta) { return Err(rejected(sink, &mut thinking_active, &mut assistant_active)); }
             }
             ModelEvent::TextDelta(delta) => {
                 if !assistant_active {
-                    if !sink.assistant_started() {
-                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
-                    }
+                    if !sink.assistant_started() { return Err(rejected(sink, &mut thinking_active, &mut assistant_active)); }
                     assistant_active = true;
                 }
                 if thinking_active {
-                    if !sink.thinking_completed() {
-                        return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
-                    }
+                    if !sink.thinking_completed() { return Err(rejected(sink, &mut thinking_active, &mut assistant_active)); }
                     thinking_active = false;
                 }
-                if !delta.is_empty() {
-                    text_started = true;
-                }
-                if !sink.assistant_delta(delta.clone()) {
-                    return Err(rejected(sink, &mut thinking_active, &mut assistant_active));
-                }
+                if !delta.is_empty() { text_started = true; }
+                if !sink.assistant_delta(delta.clone()) { return Err(rejected(sink, &mut thinking_active, &mut assistant_active)); }
                 text.push_str(&delta);
             }
             ModelEvent::ToolCall { id, name, arguments } => {
@@ -115,43 +103,25 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
         }
     }
 
-    if thinking_active && !sink.thinking_completed() {
-        return Err(ModelProjectionError::SemanticEventRejected);
-    }
-    if assistant_active && !sink.assistant_completed() {
-        return Err(ModelProjectionError::SemanticEventRejected);
-    }
+    if thinking_active && !sink.thinking_completed() { return Err(ModelProjectionError::SemanticEventRejected); }
+    if assistant_active && !sink.assistant_completed() { return Err(ModelProjectionError::SemanticEventRejected); }
 
     Ok(ModelRound { text, tool_calls, event_count })
 }
 
-fn rejected<S: TurnEventSink + ?Sized>(
-    sink: &mut S,
-    thinking_active: &mut bool,
-    assistant_active: &mut bool,
-) -> ModelProjectionError {
+fn rejected<S: TurnEventSink + ?Sized>(sink: &mut S, thinking_active: &mut bool, assistant_active: &mut bool) -> ModelProjectionError {
     close_active_scopes_best_effort(sink, thinking_active, assistant_active);
     ModelProjectionError::SemanticEventRejected
 }
 
-fn close_active_scopes_best_effort<S: TurnEventSink + ?Sized>(
-    sink: &mut S,
-    thinking_active: &mut bool,
-    assistant_active: &mut bool,
-) {
+fn close_active_scopes_best_effort<S: TurnEventSink + ?Sized>(sink: &mut S, thinking_active: &mut bool, assistant_active: &mut bool) {
     if *thinking_active {
-        if sink.thinking_completed() {
-            *thinking_active = false;
-        } else {
-            tracing::warn!("failed to close thinking scope while unwinding model projection");
-        }
+        if sink.thinking_completed() { *thinking_active = false; }
+        else { tracing::warn!("failed to close thinking scope while unwinding model projection"); }
     }
     if *assistant_active {
-        if sink.assistant_completed() {
-            *assistant_active = false;
-        } else {
-            tracing::warn!("failed to close assistant scope while unwinding model projection");
-        }
+        if sink.assistant_completed() { *assistant_active = false; }
+        else { tracing::warn!("failed to close assistant scope while unwinding model projection"); }
     }
 }
 
@@ -168,13 +138,8 @@ mod tests {
 
     fn emitter() -> TestEmitter {
         let bus = EventBus::new();
-        let mut emitter = TurnEventEmitter::new(
-            bus.clone(),
-            "sess_0123456789abcdef0123456789abcdef",
-            "turn_test",
-        );
         let receiver = bus.subscribe_turn("turn_test");
-        assert!(emitter.turn_started());
+        let emitter = TurnEventEmitter::new(bus, "sess_0123456789abcdef0123456789abcdef", "turn_test");
         TestEmitter { emitter, _receiver: receiver }
     }
 
