@@ -4,7 +4,7 @@ fn emitter() -> (TurnEventEmitter, tokio::sync::mpsc::UnboundedReceiver<Semantic
     let bus = EventBus::new();
     let rx = bus.subscribe_turn("turn-adversarial");
     (
-        TurnEventEmitter::new(bus, "session", "turn-adversarial"),
+        TurnEventEmitter::new_with_required_transport(bus, "session", "turn-adversarial"),
         rx,
     )
 }
@@ -70,7 +70,7 @@ fn distinct_tool_ids_can_complete_out_of_order() {
 #[test]
 fn missing_transport_rejects_before_sequence_allocation() {
     let bus = EventBus::new();
-    let mut emitter = TurnEventEmitter::new(bus, "session", "turn-adversarial");
+    let mut emitter = TurnEventEmitter::new_with_required_transport(bus, "session", "turn-adversarial");
     assert!(!emitter.turn_started());
     assert_eq!(emitter.sequence(), 0);
     assert!(!emitter.is_terminal());
