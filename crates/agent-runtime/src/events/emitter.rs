@@ -1,11 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
 use crate::ToolUiModel;
 
-/// Owns and validates the semantic sequence for one turn.
-/// Invalid transitions never reach the event bus and do not consume a sequence number.
 #[derive(Clone)]
 pub struct TurnEventEmitter {
     bus: EventBus,
@@ -14,6 +12,7 @@ pub struct TurnEventEmitter {
     next_sequence: u64,
     integrity: TurnIntegrity,
     tool_bindings: HashMap<String, String>,
+    seen_tool_ids: HashSet<String>,
 }
 
 impl TurnEventEmitter {
@@ -25,6 +24,7 @@ impl TurnEventEmitter {
             next_sequence: 0,
             integrity: TurnIntegrity::default(),
             tool_bindings: HashMap::new(),
+            seen_tool_ids: HashSet::new(),
         }
     }
 
@@ -67,14 +67,19 @@ impl TurnEventEmitter {
     }
 
     fn bind_tool_identity(&mut self, upstream_id: &str) -> Result<String, IntegrityError> {
-        if self.tool_bindings.contains_key(upstream_id) {
+        if !self.seen_tool_ids.insert(upstream_id.to_owned()) {
             return Err(IntegrityError::new(format!(
-                "tool_call_id {upstream_id} is already active or was already used in this turn"
+                "tool_call_id {upstream_id} was already used in this turn"
             )));
         }
         let semantic_id = upstream_id.to_owned();
         self.tool_bindings.insert(upstream_id.to_owned(), semantic_id.clone());
         Ok(semantic_id)
+    }
+
+    fn rollback_tool_binding(&mut self, upstream_id: &str) {
+        self.tool_bindings.remove(upstream_id);
+        self.seen_tool_ids.remove(upstream_id);
     }
 
     fn resolve_tool_identity(&self, upstream_id: &str) -> Option<&str> {
@@ -147,11 +152,12 @@ impl TurnEventEmitter {
             Err(error) => return self.reject(error),
         };
         if let Err(e) = self.integrity.tool_call_requested(&semantic_id) {
-            self.release_tool_identity(&upstream_id);
+            self.rollback_tool_binding(&upstream_id);
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolCallRequested { context, name: name.into(), ui })
+        if self.publish(SemanticEvent::ToolCallRequested { context, name: name.into(), ui }) { true }
+        else { self.rollback_tool_binding(&upstream_id); false }
     }
 
     pub fn permission_requested(&mut self, upstream_id: impl Into<String>) -> bool {
@@ -207,7 +213,10 @@ impl TurnEventEmitter {
             "turn_completed" => self.publish(SemanticEvent::TurnCompleted { context }),
             _ => return self.reject(IntegrityError::new(format!("unknown terminal event {event}"))),
         };
-        if emitted { self.tool_bindings.clear(); }
+        if emitted {
+            self.tool_bindings.clear();
+            self.seen_tool_ids.clear();
+        }
         emitted
     }
 
@@ -263,7 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_upstream_tool_ids_are_rejected() {
+    fn duplicate_upstream_tool_ids_are_rejected_even_after_completion() {
         let (mut e, _rx) = emitter();
         assert!(e.turn_started());
         assert!(e.tool_call_requested("call-1", "shell"));
