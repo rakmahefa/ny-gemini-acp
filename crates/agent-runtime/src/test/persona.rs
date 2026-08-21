@@ -53,7 +53,7 @@ fn system_prompt_coding_forbids_fake_execution_claims() {
 fn system_prompt_coding_requires_real_mutation_tools() {
     let s = test_session();
     let p = system_prompt(&s, Some(Persona::Coding));
-    assert!(p.contains("file_write, file_edit, replace_in_file ou shell_exec"));
+    assert!(p.contains("Pour toute modification réelle, utilise file_write, file_edit ou replace_in_file ; pour une commande réelle, utilise shell_exec."));
     assert!(p.contains("Le workspace est la source de vérité"));
     assert!(p.contains("Avant la réponse finale, vérifie que les changements demandés ont effectivement été réalisés"));
 }
@@ -73,8 +73,8 @@ fn system_prompt_coding_forbids_protocol_markers_in_prose() {
 fn system_prompt_coding_has_markdown() {
     let s = test_session();
     let p = system_prompt(&s, Some(Persona::Coding));
-    assert!(p.contains("Markdown"));
-    assert!(p.contains("code exécutable"));
+    assert!(p.contains("Réponds en Markdown"));
+    assert!(p.contains("Markdown, executable code"));
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn system_prompt_has_constraints() {
     let s = test_session();
     let p = system_prompt(&s, None);
     assert!(p.contains("Ne jamais inventer de fichiers"));
-    assert!(p.contains("file_read, file_write, shell_exec, search"));
+    assert!(p.contains("Utilise les outils (file_read, file_write, file_edit, replace_in_file, shell_exec, search, glob, list_directory)"));
 }
 
 #[test]
