@@ -5,7 +5,7 @@ use crate::ToolUiModel;
 ///
 /// The runtime can now test and compose orchestration against this contract without
 /// depending on the concrete event transport implementation.
-pub trait TurnEventSink {
+pub trait TurnEventSink: Send {
     fn turn_started(&mut self) -> bool;
     fn assistant_started(&mut self) -> bool;
     fn assistant_delta(&mut self, delta: String) -> bool;
