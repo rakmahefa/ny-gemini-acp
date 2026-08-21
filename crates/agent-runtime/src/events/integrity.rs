@@ -14,11 +14,12 @@ enum StreamPhase {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ToolTerminalReason {
+pub(super) enum ToolTerminalReason {
     Result,
     PermissionDenied,
     TurnCancelled,
     TurnFailed,
+    TurnCompleted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,6 +67,23 @@ impl Default for TurnIntegrity {
 impl TurnIntegrity {
     pub(super) fn phase(&self) -> TurnPhase {
         self.phase
+    }
+
+    pub(super) fn assistant_active(&self) -> bool {
+        self.assistant == StreamPhase::Active
+    }
+
+    pub(super) fn thinking_active(&self) -> bool {
+        self.thinking == StreamPhase::Active
+    }
+
+    pub(super) fn open_tool_ids(&self) -> Vec<String> {
+        self.tools
+            .iter()
+            .filter_map(|(id, state)| {
+                (!matches!(state, ToolPhase::Terminal(_))).then_some(id.clone())
+            })
+            .collect()
     }
 
     pub(super) fn turn_started(&mut self) -> Result<(), IntegrityError> {
@@ -236,6 +254,26 @@ impl TurnIntegrity {
         }
     }
 
+    pub(super) fn close_tool_for_terminal(
+        &mut self,
+        id: &str,
+        reason: ToolTerminalReason,
+    ) -> Result<(), IntegrityError> {
+        self.ensure_active("close_tool_for_terminal")?;
+        match self.tools.get_mut(id) {
+            Some(state) if !matches!(state, ToolPhase::Terminal(_)) => {
+                *state = ToolPhase::Terminal(reason);
+                Ok(())
+            }
+            Some(ToolPhase::Terminal(_)) => Err(IntegrityError::new(format!(
+                "tool {id} is already terminal"
+            ))),
+            None => Err(IntegrityError::new(format!(
+                "close_tool_for_terminal references unknown tool {id}"
+            ))),
+        }
+    }
+
     pub(super) fn turn_cancelled(&mut self) -> Result<(), IntegrityError> {
         self.finish_terminal("turn_cancelled", ToolTerminalReason::TurnCancelled)
     }
@@ -251,22 +289,7 @@ impl TurnIntegrity {
                 "turn_completed requires at least one assistant or tool lifecycle event",
             ));
         }
-        if self.assistant == StreamPhase::Active || self.thinking == StreamPhase::Active {
-            return Err(IntegrityError::new(
-                "turn_completed cannot close an active text stream",
-            ));
-        }
-        if self
-            .tools
-            .values()
-            .any(|state| !matches!(state, ToolPhase::Terminal(_)))
-        {
-            return Err(IntegrityError::new(
-                "turn_completed cannot close a turn with a non-terminal tool call",
-            ));
-        }
-        self.phase = TurnPhase::Terminal;
-        Ok(())
+        self.finish_terminal("turn_completed", ToolTerminalReason::TurnCompleted)
     }
 
     fn finish_terminal(
@@ -353,7 +376,6 @@ mod tests {
     fn tool_call_cannot_overlap_open_text_stream() {
         let mut s = TurnIntegrity::default();
         s.turn_started().unwrap();
-
         s.assistant_started().unwrap();
         assert!(s.tool_call_requested("assistant-open").is_err());
         s.assistant_completed().unwrap();
@@ -378,6 +400,28 @@ mod tests {
         assert!(s.tool_execution_started("c").is_err());
         assert!(s.tool_result_received("c").is_err());
         s.turn_completed().unwrap();
+    }
+
+    #[test]
+    fn terminal_closure_marks_requested_tool_terminal() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.tool_call_requested("c").unwrap();
+        let open = s.open_tool_ids();
+        assert_eq!(open, vec!["c"]);
+        s.close_tool_for_terminal("c", ToolTerminalReason::TurnCancelled).unwrap();
+        assert!(s.open_tool_ids().is_empty());
+        assert!(s.turn_cancelled().is_ok());
+    }
+
+    #[test]
+    fn terminal_completion_closes_open_scopes() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.tool_call_requested("c").unwrap();
+        s.turn_completed().unwrap();
+        assert!(s.open_tool_ids().is_empty());
+        assert_eq!(s.phase, TurnPhase::Terminal);
     }
 
     #[test]
