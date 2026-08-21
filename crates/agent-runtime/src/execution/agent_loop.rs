@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::events::{consume_model_stream, ModelProjectionError, ModelRound, PendingToolCall, TurnEventEmitter};
+use crate::events::{consume_model_stream, ModelProjectionError, ModelRound, PendingToolCall, TurnEventSink};
 use crate::state::{Role, Session};
 use crate::{
     Cancellation, GenerationOptions, LlmError, LlmProvider, ModelRequest,
@@ -71,18 +71,25 @@ impl AgentLoop {
     pub fn with_permission_handler(mut self, handler: Arc<dyn ToolPermissionHandler>) -> Self { self.permission_handler = Some(handler); self }
     pub fn config(&self) -> AgentLoopConfig { self.config }
 
-    pub async fn run<F>(&self, session: &mut Session, references: &[String], cancellation: Cancellation, emitter: &mut TurnEventEmitter, build_prompt: F) -> Result<AgentLoopOutcome, AgentLoopError>
+    pub async fn run<F>(
+        &self,
+        session: &mut Session,
+        references: &[String],
+        cancellation: Cancellation,
+        sink: &mut dyn TurnEventSink,
+        build_prompt: F,
+    ) -> Result<AgentLoopOutcome, AgentLoopError>
     where F: Fn(&Session, &dyn ToolProvider) -> String {
         validate_session(session)?;
-        if cancellation.is_cancelled() { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
-        if !emitter.turn_started() { return Err(AgentLoopError::SemanticEventRejected); }
+        if cancellation.is_cancelled() { let _ = sink.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
+        if !sink.turn_started() { return Err(AgentLoopError::SemanticEventRejected); }
         let tools = self.tools.for_session(&session.id).await;
         let mut seen_tool_ids = HashSet::new();
         let mut total_tool_calls = 0usize;
         let mut overflow_retry = false;
 
         'rounds: for round in 0..self.config.max_rounds {
-            ensure_not_cancelled(&cancellation, emitter)?;
+            ensure_not_cancelled(&cancellation, sink)?;
             compact_messages(&mut session.messages, COMPACTION_THRESHOLD_CHARS);
             let request = ModelRequest { prompt: build_prompt(session, &*tools), model: session.model.clone(), generation: GenerationOptions { reasoning_budget: session.think }, references: references.to_vec() };
             let stream = match self.llm.stream(request).await {
@@ -93,16 +100,16 @@ impl AgentLoop {
                         overflow_retry = true;
                         continue 'rounds;
                     }
-                    let _ = emitter.turn_failed();
+                    let _ = sink.turn_failed();
                     return Err(AgentLoopError::Llm(error));
                 }
             };
             overflow_retry = false;
 
-            let round_result = consume_stream(stream, &cancellation, emitter).await?;
-            if round_result.event_count == 0 { let _ = emitter.turn_failed(); return Err(AgentLoopError::EmptyStream); }
+            let round_result = consume_stream(stream, &cancellation, sink).await?;
+            if round_result.event_count == 0 { let _ = sink.turn_failed(); return Err(AgentLoopError::EmptyStream); }
             if round_result.tool_calls.len() > self.config.max_tool_calls_per_round {
-                let _ = emitter.turn_failed();
+                let _ = sink.turn_failed();
                 return Err(AgentLoopError::ToolCallLimit { actual: round_result.tool_calls.len(), limit: self.config.max_tool_calls_per_round });
             }
             validate_tool_calls(&round_result.tool_calls, &mut seen_tool_ids)?;
@@ -111,12 +118,17 @@ impl AgentLoop {
             for call in round_result.tool_calls {
                 if let Some(handler) = &self.action_handler {
                     if handler.supports(&call.name) {
-                        ensure_not_cancelled(&cancellation, emitter)?;
+                        ensure_not_cancelled(&cancellation, sink)?;
                         match handler.handle(&session.id, &call.id, &call.name, call.arguments, cancellation.clone()).await {
-                            Ok(Some(user_text)) => { if !user_text.trim().is_empty() { session.messages.push((Role::User, user_text)); } continue 'rounds; }
+                            Ok(Some(user_text)) => {
+                                if !user_text.trim().is_empty() {
+                                    session.messages.push_user(user_text);
+                                }
+                                continue 'rounds;
+                            }
                             Ok(None) => continue,
-                            Err(_error) if cancellation.is_cancelled() => { let _ = emitter.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
-                            Err(error) => { let _ = emitter.turn_failed(); return Err(AgentLoopError::Action(error)); }
+                            Err(_error) if cancellation.is_cancelled() => { let _ = sink.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
+                            Err(error) => { let _ = sink.turn_failed(); return Err(AgentLoopError::Action(error)); }
                         }
                     }
                 }
@@ -124,23 +136,28 @@ impl AgentLoop {
             }
 
             if executable.is_empty() {
-                if round_result.text.trim().is_empty() { let _ = emitter.turn_failed(); return Err(AgentLoopError::NoProgress); }
-                ensure_not_cancelled(&cancellation, emitter)?;
-                session.messages.push((Role::Assistant, round_result.text.clone()));
-                if !emitter.turn_completed() { let _ = emitter.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
+                if round_result.text.trim().is_empty() { let _ = sink.turn_failed(); return Err(AgentLoopError::NoProgress); }
+                ensure_not_cancelled(&cancellation, sink)?;
+                session.messages.push_assistant(round_result.text.clone());
+                if !sink.turn_completed() { let _ = sink.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                 return Ok(AgentLoopOutcome { output: round_result.text, rounds: round + 1, tool_calls: total_tool_calls });
             }
 
             total_tool_calls = total_tool_calls.checked_add(executable.len()).ok_or(AgentLoopError::ToolCallLimit { actual: usize::MAX, limit: usize::MAX })?;
-            ensure_not_cancelled(&cancellation, emitter)?;
-            let history = format_tool_calls(&round_result.text, &executable);
-            if !history.is_empty() { session.messages.push((Role::Assistant, history)); }
+            ensure_not_cancelled(&cancellation, sink)?;
+
+            if !round_result.text.trim().is_empty() {
+                session.messages.push_assistant(round_result.text.clone());
+            }
+            for call in &executable {
+                session.messages.push_tool_call(call.id.clone(), call.name.clone(), call.arguments.clone());
+            }
 
             for call in executable {
-                ensure_not_cancelled(&cancellation, emitter)?;
+                ensure_not_cancelled(&cancellation, sink)?;
                 let ui = tools.ui_model(&call.id, &call.name, &call.arguments);
-                if !emitter.tool_call_requested_with_ui(call.id.clone(), call.name.clone(), ui.clone()) {
-                    let _ = emitter.turn_failed();
+                if !sink.tool_call_requested(call.id.clone(), call.name.clone(), ui.clone()) {
+                    let _ = sink.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
 
@@ -155,8 +172,8 @@ impl AgentLoop {
 
                 if let Some(permission_handler) = &self.permission_handler {
                     if permission_handler.needs_permission(session, &permission_request) {
-                        if !emitter.permission_requested(call.id.clone()) {
-                            let _ = emitter.turn_failed();
+                        if !sink.permission_requested(call.id.clone()) {
+                            let _ = sink.turn_failed();
                             return Err(AgentLoopError::SemanticEventRejected);
                         }
                         match permission_handler.request_permission(session, &permission_request, cancellation.clone()).await {
@@ -164,16 +181,16 @@ impl AgentLoop {
                             ToolPermissionDecision::Reject(message) => {
                                 let mut result = ToolCallResult::error(message.clone());
                                 result.ui = ui.map(|model| model.completed(false, Some(serde_json::json!({"text": message}))));
-                                ensure_not_cancelled(&cancellation, emitter)?;
-                                if !emitter.tool_result_received_with_ui(call.id.clone(), result.content.clone(), result.ui.clone()) {
-                                    let _ = emitter.turn_failed();
+                                ensure_not_cancelled(&cancellation, sink)?;
+                                if !sink.tool_result_received(call.id.clone(), result.content.clone(), result.ui.clone()) {
+                                    let _ = sink.turn_failed();
                                     return Err(AgentLoopError::SemanticEventRejected);
                                 }
-                                session.messages.push((Role::Tool, canonical_tool_result(&call.name, &result)));
+                                session.messages.push_tool_result(call.id.clone(), call.name.clone(), result.content.clone(), result.is_ok);
                                 continue;
                             }
                             ToolPermissionDecision::Cancelled => {
-                                let _ = emitter.turn_cancelled();
+                                let _ = sink.turn_cancelled();
                                 return Err(AgentLoopError::Cancelled);
                             }
                         }
@@ -181,8 +198,8 @@ impl AgentLoop {
                 }
 
                 let running_ui = ui.clone().map(|model| model.running());
-                if !emitter.tool_execution_started_with_ui(call.id.clone(), running_ui) {
-                    let _ = emitter.turn_failed();
+                if !sink.tool_execution_started(call.id.clone(), running_ui) {
+                    let _ = sink.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
                 let result = if session.tools_enabled && tools.has_tools() {
@@ -200,15 +217,15 @@ impl AgentLoop {
                     result.ui = ui.map(|model| model.completed(false, Some(serde_json::json!({"text": result.content.clone()}))));
                     result
                 };
-                ensure_not_cancelled(&cancellation, emitter)?;
-                if !emitter.tool_result_received_with_ui(call.id.clone(), result.content.clone(), result.ui.clone()) {
-                    let _ = emitter.turn_failed();
+                ensure_not_cancelled(&cancellation, sink)?;
+                if !sink.tool_result_received(call.id.clone(), result.content.clone(), result.ui.clone()) {
+                    let _ = sink.turn_failed();
                     return Err(AgentLoopError::SemanticEventRejected);
                 }
-                session.messages.push((Role::Tool, canonical_tool_result(&call.name, &result)));
+                session.messages.push_tool_result(call.id.clone(), call.name.clone(), result.content.clone(), result.is_ok);
             }
         }
-        let _ = emitter.turn_failed();
+        let _ = sink.turn_failed();
         Err(AgentLoopError::MaxRounds(self.config.max_rounds))
     }
 }
@@ -227,9 +244,9 @@ fn validate_tool_calls(calls: &[PendingToolCall], seen: &mut HashSet<String>) ->
     Ok(())
 }
 
-fn ensure_not_cancelled(cancellation: &Cancellation, emitter: &mut TurnEventEmitter) -> Result<(), AgentLoopError> {
+fn ensure_not_cancelled(cancellation: &Cancellation, sink: &mut dyn TurnEventSink) -> Result<(), AgentLoopError> {
     if cancellation.is_cancelled() {
-        let _ = emitter.turn_cancelled();
+        let _ = sink.turn_cancelled();
         return Err(AgentLoopError::Cancelled);
     }
     Ok(())
@@ -282,41 +299,27 @@ fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
 async fn consume_stream(
     stream: crate::LlmStream,
     cancellation: &Cancellation,
-    emitter: &mut TurnEventEmitter,
+    sink: &mut dyn TurnEventSink,
 ) -> Result<ModelRound, AgentLoopError> {
-    match consume_model_stream(stream, cancellation, emitter).await {
+    match consume_model_stream(stream, cancellation, sink).await {
         Ok(round) => Ok(round),
         Err(ModelProjectionError::Cancelled) => {
-            let _ = emitter.turn_cancelled();
+            let _ = sink.turn_cancelled();
             Err(AgentLoopError::Cancelled)
         }
         Err(ModelProjectionError::Llm(error)) => {
-            let _ = emitter.turn_failed();
+            let _ = sink.turn_failed();
             Err(AgentLoopError::Llm(error))
         }
         Err(ModelProjectionError::InvalidSequence(message)) => {
-            let _ = emitter.turn_failed();
+            let _ = sink.turn_failed();
             Err(AgentLoopError::InvalidToolCall(message))
         }
         Err(ModelProjectionError::SemanticEventRejected) => {
-            let _ = emitter.turn_failed();
+            let _ = sink.turn_failed();
             Err(AgentLoopError::SemanticEventRejected)
         }
     }
-}
-
-fn format_tool_calls(text: &str, calls: &[PendingToolCall]) -> String {
-    let mut result = text.trim().to_owned();
-    for call in calls {
-        if !result.is_empty() { result.push('\n'); }
-        result.push_str(&format!("[tool_call {} id={}] {}", call.name, call.id, call.arguments));
-    }
-    result
-}
-
-fn canonical_tool_result(name: &str, result: &ToolCallResult) -> String {
-    let status = if result.is_ok { "ok" } else { "error" };
-    format!("[tool_result {name} status={status}] {}", result.content)
 }
 
 #[cfg(test)]
@@ -358,8 +361,8 @@ mod tests {
         )
     }
 
-    fn emitter() -> TurnEventEmitter {
-        TurnEventEmitter::new(
+    fn emitter() -> crate::TurnEventEmitter {
+        crate::TurnEventEmitter::new(
             crate::EventBus::new(),
             "sess_0123456789abcdef0123456789abcdef",
             "turn_test",
@@ -379,6 +382,32 @@ mod tests {
             .unwrap();
         assert_eq!(outcome.output, "hello");
         assert_eq!(outcome.rounds, 1);
+    }
+
+    #[tokio::test]
+    async fn canonical_tool_ids_survive_history_roundtrip() {
+        let llm = Arc::new(FakeLlm::default());
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
+            id: "call-42".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"q": "rust"}),
+        })]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("done".into()))]);
+
+        let tool = Arc::new(crate::NullToolProvider);
+        let agent = AgentLoop::new(llm, tool, AgentLoopConfig::default()).unwrap();
+        let mut session = session();
+        let mut emitter = emitter();
+        let _ = agent
+            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into())
+            .await;
+
+        let raw = serde_json::to_string(&session.messages).unwrap();
+        let restored: crate::state::History = serde_json::from_str(&raw).unwrap();
+        assert!(restored.entries().iter().any(|entry| matches!(
+            entry,
+            crate::state::HistoryEntry::ToolCall { id, name, .. } if id == "call-42" && name == "search"
+        )));
     }
 
     #[test]
