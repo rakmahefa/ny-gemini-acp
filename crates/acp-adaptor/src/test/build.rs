@@ -42,8 +42,8 @@ fn prompt_contient_systeme_et_tour_courant() {
 fn assistant_history_ne_reinjecte_pas_le_marqueur_de_transport() {
     let s = session(&[("a", "réponse historique")]);
     let p = build_prompt(&s, None);
-    assert!(!p.contains("[Assistant]:"));
-    assert!(p.contains("<assistant_message>"));
+    assert!(!p.contains("<assistant_message>\n[Assistant]:"));
+    assert!(p.contains("<assistant_message>\nréponse historique\n</assistant_message>"));
 }
 
 #[test]
