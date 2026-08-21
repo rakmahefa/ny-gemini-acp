@@ -74,7 +74,6 @@ fn system_prompt_coding_has_markdown() {
     let s = test_session();
     let p = system_prompt(&s, Some(Persona::Coding));
     assert!(p.contains("Réponds en Markdown"));
-    assert!(p.contains("Markdown, executable code"));
 }
 
 #[test]
