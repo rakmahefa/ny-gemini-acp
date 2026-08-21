@@ -2,7 +2,7 @@ use crate::{handlers, prompt};
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use agent_runtime::events::TurnEventEmitter;
-use agent_runtime::{AppState, RuntimeError, TurnManager};
+use agent_runtime::{AppState, RuntimeError};
 use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
@@ -10,7 +10,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_tools = state.tools.clone();
     let h_llm = state.llm.clone();
     let h_events = state.events.clone();
-    let turn_manager = TurnManager::new();
+    let turn_manager = state.turns.clone();
 
     Agent::builder(Agent)
         .name("gemini-acp")
@@ -187,8 +187,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
         .on_receive_notification(
             {
                 let state = state.clone();
-                let turn_manager = turn_manager.clone();
-                async move |notif: CancelNotification, _cx| handlers::cancel::handle(notif, &state, &turn_manager).await
+                async move |notif: CancelNotification, _cx| handlers::cancel::handle(notif, &state).await
             },
             agent_client_protocol::on_receive_notification!(),
         )
