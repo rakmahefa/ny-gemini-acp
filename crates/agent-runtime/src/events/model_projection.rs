@@ -168,11 +168,14 @@ mod tests {
 
     fn emitter() -> TestEmitter {
         let bus = EventBus::new();
+        let mut emitter = TurnEventEmitter::new(
+            bus.clone(),
+            "sess_0123456789abcdef0123456789abcdef",
+            "turn_test",
+        );
         let receiver = bus.subscribe_turn("turn_test");
-        TestEmitter {
-            emitter: TurnEventEmitter::new(bus, "sess_0123456789abcdef0123456789abcdef", "turn_test"),
-            _receiver: receiver,
-        }
+        assert!(emitter.turn_started());
+        TestEmitter { emitter, _receiver: receiver }
     }
 
     #[tokio::test]
