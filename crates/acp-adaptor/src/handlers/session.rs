@@ -11,7 +11,7 @@ use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
 use crate::config::config_options::build_config_options;
 use crate::config::mcp::normalize_servers;
-use agent_runtime::state::{HistoryEntry, Role, SessionMode as AcpSessionMode};
+use agent_runtime::state::{HistoryEntry, SessionMode as AcpSessionMode};
 use agent_runtime::AppState;
 use tools_provider::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 
@@ -124,10 +124,13 @@ fn replay_tool_result(
         cx.send_notification(SessionNotification::new(
             session_id.clone(),
             SessionUpdate::ToolCallUpdate(
-                ToolCallUpdate::new(call_id, ToolCallUpdateFields::new()
-                    .status(rendered.status)
-                    .content(rendered.content)
-                    .locations(rendered.locations)),
+                ToolCallUpdate::new(
+                    call_id,
+                    ToolCallUpdateFields::new()
+                        .status(rendered.status)
+                        .content(rendered.content)
+                        .locations(rendered.locations),
+                ),
             ),
         ))?;
     }
