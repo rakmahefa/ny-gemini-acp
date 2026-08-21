@@ -330,7 +330,7 @@ mod tests {
         let ids: Vec<_> = events.iter().filter_map(|event| match event {
             SemanticEvent::ToolCallRequested { context, .. }
             | SemanticEvent::PermissionRequested { context }
-            | SemanticEvent::ToolExecutionStarted { context }
+            | SemanticEvent::ToolExecutionStarted { context, .. }
             | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
             _ => None,
         }).collect();
