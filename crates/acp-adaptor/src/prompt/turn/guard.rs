@@ -20,12 +20,20 @@ impl TurnGuard {
     }
 
     pub(crate) async fn finish(mut self) {
-        if let Some(session) = self.session.take() {
-            if let Err(error) = self.store.end_turn(&self.session_id, session, self.generation).await {
-                tracing::warn!(session=%self.session_id, "end_turn a échoué dans TurnGuard: {error}");
+        let Some(session) = self.session.take() else {
+            self.finished = true;
+            return;
+        };
+
+        match self.store.end_turn(&self.session_id, session.clone(), self.generation).await {
+            Ok(()) => {
+                self.finished = true;
+            }
+            Err(error) => {
+                tracing::warn!(session=%self.session_id, "end_turn a échoué; le Drop conservera une finalisation best-effort: {error}");
+                self.session = Some(session);
             }
         }
-        self.finished = true;
     }
 }
 
@@ -35,14 +43,12 @@ impl Drop for TurnGuard {
         let sid = self.session_id.clone();
         let store = self.store.clone();
         let generation = self.generation;
-        if let Some(session) = self.session.take() {
-            tokio::spawn(async move {
-                if let Err(error) = store.end_turn(&sid, session, generation).await {
-                    tracing::warn!(session=%sid, "TurnGuard::drop: persistence finalization failed safely: {error}");
-                }
-            });
-        } else {
-            tracing::warn!(session=%self.session_id, "TurnGuard dropped after session ownership was already consumed");
-        }
+        let Some(session) = self.session.take() else { return; };
+
+        tokio::spawn(async move {
+            if let Err(error) = store.end_turn(&sid, session, generation).await {
+                tracing::error!(session=%sid, "TurnGuard::drop: finalisation de persistance échouée: {error}");
+            }
+        });
     }
 }
