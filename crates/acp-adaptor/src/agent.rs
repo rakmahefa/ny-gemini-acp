@@ -73,7 +73,11 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
 
                             interactive::scope(interactive_context, async move {
                                 let emitter_events = events.clone();
-                                let mut semantic = TurnEventEmitter::new(emitter_events, sid.clone(), turn_id.clone());
+                                let mut semantic = TurnEventEmitter::new_with_required_transport(
+                                    emitter_events,
+                                    sid.clone(),
+                                    turn_id.clone(),
+                                );
                                 let turn_context = prompt::TurnContext {
                                     store,
                                     tools,
@@ -82,8 +86,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     semantic: &mut semantic,
                                     cancellation,
                                 };
-                                let turn_result = prompt::run_turn(turn_context, req)
-                                    .await;
+                                let turn_result = prompt::run_turn(turn_context, req).await;
 
                                 if turn_result.is_err() && !semantic.is_terminal() {
                                     let _ = semantic.turn_failed();
