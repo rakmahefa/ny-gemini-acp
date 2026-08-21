@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
@@ -14,7 +14,7 @@ pub struct TurnEventEmitter {
     next_sequence: u64,
     next_tool_invocation: u64,
     integrity: TurnIntegrity,
-    tool_bindings: HashMap<String, VecDeque<String>>,
+    tool_bindings: HashMap<String, String>,
 }
 
 impl TurnEventEmitter {
@@ -34,6 +34,14 @@ impl TurnEventEmitter {
     pub fn phase(&self) -> TurnPhase { self.integrity.phase() }
     pub fn is_terminal(&self) -> bool { self.integrity.phase() == TurnPhase::Terminal }
 
+    fn transport_ready(&self) -> bool {
+        if self.bus.has_turn_subscriber(&self.turn_id) { true }
+        else {
+            self.reject(IntegrityError::new(format!("no ACP transport subscriber for turn {}", self.turn_id)));
+            false
+        }
+    }
+
     fn context(&mut self) -> EventContext {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
@@ -49,9 +57,14 @@ impl TurnEventEmitter {
         false
     }
 
-    fn publish(&self, event: SemanticEvent) {
-        if let Err(error) = self.bus.publish(event) {
-            tracing::debug!(?error, "semantic event has no active subscribers");
+    fn publish(&self, event: SemanticEvent) -> bool {
+        self.bus.publish_global(event.clone());
+        match self.bus.publish_turn(event) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::error!(session=%self.session_id, turn=%self.turn_id, error=%error, "mandatory ACP semantic transport failed");
+                false
+            }
         }
     }
 
@@ -61,75 +74,72 @@ impl TurnEventEmitter {
         format!("{}/tool_{}", self.turn_id, index)
     }
 
-    fn bind_tool_identity(&mut self, upstream_id: &str) -> String {
-        let semantic_id = if self.tool_bindings.contains_key(upstream_id) {
-            self.allocate_tool_identity()
-        } else {
-            upstream_id.to_owned()
-        };
-        self.tool_bindings.entry(upstream_id.to_owned()).or_default().push_back(semantic_id.clone());
-        semantic_id
+    fn bind_tool_identity(&mut self, upstream_id: &str) -> Result<String, IntegrityError> {
+        if self.tool_bindings.contains_key(upstream_id) {
+            return Err(IntegrityError::new(format!(
+                "tool_call_id {upstream_id} is already active or was already used in this turn"
+            )));
+        }
+        let semantic_id = upstream_id.to_owned();
+        self.tool_bindings.insert(upstream_id.to_owned(), semantic_id.clone());
+        Ok(semantic_id)
     }
 
     fn resolve_tool_identity(&self, upstream_id: &str) -> Option<&str> {
-        self.tool_bindings.get(upstream_id).and_then(VecDeque::front).map(String::as_str)
+        self.tool_bindings.get(upstream_id).map(String::as_str)
     }
 
     fn release_tool_identity(&mut self, upstream_id: &str) {
-        let remove_binding = if let Some(queue) = self.tool_bindings.get_mut(upstream_id) {
-            queue.pop_front();
-            queue.is_empty()
-        } else { false };
-        if remove_binding { self.tool_bindings.remove(upstream_id); }
+        self.tool_bindings.remove(upstream_id);
     }
 
     pub fn turn_started(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.turn_started() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::TurnStarted { context });
-        true
+        self.publish(SemanticEvent::TurnStarted { context })
     }
 
     pub fn assistant_started(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.assistant_started() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::AssistantStarted { context });
-        true
+        self.publish(SemanticEvent::AssistantStarted { context })
     }
 
     pub fn assistant_delta(&mut self, delta: impl Into<String>) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.assistant_delta() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::AssistantDelta { context, delta: delta.into() });
-        true
+        self.publish(SemanticEvent::AssistantDelta { context, delta: delta.into() })
     }
 
     pub fn assistant_completed(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.assistant_completed() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::AssistantCompleted { context });
-        true
+        self.publish(SemanticEvent::AssistantCompleted { context })
     }
 
     pub fn thinking_started(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.thinking_started() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::ThinkingStarted { context });
-        true
+        self.publish(SemanticEvent::ThinkingStarted { context })
     }
 
     pub fn thinking_delta(&mut self, delta: impl Into<String>) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.thinking_delta() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::ThinkingDelta { context, delta: delta.into() });
-        true
+        self.publish(SemanticEvent::ThinkingDelta { context, delta: delta.into() })
     }
 
     pub fn thinking_completed(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
         if let Err(e) = self.integrity.thinking_completed() { return self.reject(e); }
         let context = self.context();
-        self.publish(SemanticEvent::ThinkingCompleted { context });
-        true
+        self.publish(SemanticEvent::ThinkingCompleted { context })
     }
 
     pub fn tool_call_requested(&mut self, upstream_id: impl Into<String>, name: impl Into<String>) -> bool {
@@ -137,27 +147,30 @@ impl TurnEventEmitter {
     }
 
     pub fn tool_call_requested_with_ui(&mut self, upstream_id: impl Into<String>, name: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
         if upstream_id.is_empty() { return self.reject(IntegrityError::new("tool call identity must be non-empty")); }
-        let semantic_id = self.bind_tool_identity(&upstream_id);
+        let semantic_id = match self.bind_tool_identity(&upstream_id) {
+            Ok(id) => id,
+            Err(error) => return self.reject(error),
+        };
         if let Err(e) = self.integrity.tool_call_requested(&semantic_id) {
             self.release_tool_identity(&upstream_id);
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolCallRequested { context, name: name.into(), ui });
-        true
+        self.publish(SemanticEvent::ToolCallRequested { context, name: name.into(), ui })
     }
 
     pub fn permission_requested(&mut self, upstream_id: impl Into<String>) -> bool {
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
         let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
             return self.reject(IntegrityError::new(format!("permission_requested references unknown upstream tool {upstream_id}")));
         };
         if let Err(e) = self.integrity.permission_requested(&semantic_id) { return self.reject(e); }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::PermissionRequested { context });
-        true
+        self.publish(SemanticEvent::PermissionRequested { context })
     }
 
     pub fn tool_execution_started(&mut self, upstream_id: impl Into<String>) -> bool {
@@ -165,14 +178,14 @@ impl TurnEventEmitter {
     }
 
     pub fn tool_execution_started_with_ui(&mut self, upstream_id: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
         let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
             return self.reject(IntegrityError::new(format!("tool_execution_started references unknown upstream tool {upstream_id}")));
         };
         if let Err(e) = self.integrity.tool_execution_started(&semantic_id) { return self.reject(e); }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolExecutionStarted { context, ui });
-        true
+        self.publish(SemanticEvent::ToolExecutionStarted { context, ui })
     }
 
     pub fn tool_result_received(&mut self, upstream_id: impl Into<String>, result: impl Into<String>) -> bool {
@@ -180,45 +193,53 @@ impl TurnEventEmitter {
     }
 
     pub fn tool_result_received_with_ui(&mut self, upstream_id: impl Into<String>, result: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
         let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
             return self.reject(IntegrityError::new(format!("tool_result_received references unknown upstream tool {upstream_id}")));
         };
         if let Err(e) = self.integrity.tool_result_received(&semantic_id) { return self.reject(e); }
         let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolResultReceived { context, result: result.into(), ui });
-        self.release_tool_identity(&upstream_id);
-        true
+        let emitted = self.publish(SemanticEvent::ToolResultReceived { context, result: result.into(), ui });
+        if emitted { self.release_tool_identity(&upstream_id); }
+        emitted
     }
 
     fn finish_terminal(&mut self, event: &str) -> bool {
-        if let Err(error) = self.integrity.finish_terminal_after_scopes(event) {
-            return self.reject(error);
-        }
+        if !self.transport_ready() { return false; }
+        if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
         let context = self.context();
-        match event {
+        let emitted = match event {
             "turn_cancelled" => self.publish(SemanticEvent::TurnCancelled { context }),
             "turn_failed" => self.publish(SemanticEvent::TurnFailed { context }),
             "turn_completed" => self.publish(SemanticEvent::TurnCompleted { context }),
             _ => return self.reject(IntegrityError::new(format!("unknown terminal event {event}"))),
-        }
-        self.tool_bindings.clear();
-        true
+        };
+        if emitted { self.tool_bindings.clear(); }
+        emitted
     }
 
     pub fn turn_cancelled(&mut self) -> bool { self.finish_terminal("turn_cancelled") }
     pub fn turn_failed(&mut self) -> bool { self.finish_terminal("turn_failed") }
     pub fn turn_completed(&mut self) -> bool { self.finish_terminal("turn_completed") }
+
+    #[cfg(test)]
+    pub fn bind_count(&self) -> usize { self.tool_bindings.len() }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn emitter() -> (TurnEventEmitter, tokio::sync::mpsc::UnboundedReceiver<SemanticEvent>) {
+        let bus = EventBus::new();
+        let rx = bus.subscribe_turn("t");
+        (TurnEventEmitter::new(bus, "s", "t"), rx)
+    }
+
     #[test]
     fn terminal_event_is_rejected_while_a_tool_is_open() {
-        let bus = EventBus::new();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        let (mut e, _rx) = emitter();
         assert!(e.turn_started());
         assert!(e.tool_call_requested("call-1", "shell"));
         assert!(!e.turn_completed());
@@ -228,9 +249,7 @@ mod tests {
 
     #[test]
     fn cancelled_turn_does_not_synthesize_tool_result() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        let (mut e, mut rx) = emitter();
         assert!(e.turn_started());
         assert!(e.tool_call_requested("call-1", "shell"));
         assert!(!e.turn_cancelled());
@@ -242,13 +261,32 @@ mod tests {
 
     #[test]
     fn explicit_tool_result_allows_terminal_event() {
-        let bus = EventBus::new();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        let (mut e, _rx) = emitter();
         assert!(e.turn_started());
         assert!(e.tool_call_requested("call-1", "shell"));
         assert!(e.tool_execution_started("call-1"));
         assert!(e.tool_result_received("call-1", "ok"));
         assert!(e.turn_completed());
         assert!(e.is_terminal());
+    }
+
+    #[test]
+    fn duplicate_upstream_tool_ids_are_rejected() {
+        let (mut e, _rx) = emitter();
+        assert!(e.turn_started());
+        assert!(e.tool_call_requested("call-1", "shell"));
+        assert!(e.tool_execution_started("call-1"));
+        assert!(e.tool_result_received("call-1", "ok"));
+        assert!(!e.tool_call_requested("call-1", "shell"));
+        assert_eq!(e.bind_count(), 0);
+    }
+
+    #[test]
+    fn a_missing_mandatory_transport_rejects_before_state_mutation() {
+        let bus = EventBus::new();
+        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        assert!(!e.turn_started());
+        assert_eq!(e.phase(), TurnPhase::NotStarted);
+        assert_eq!(e.sequence(), 0);
     }
 }
