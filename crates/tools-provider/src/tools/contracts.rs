@@ -1,7 +1,6 @@
 //! Runtime contracts consumed by tool execution.
 //! The semantic lifecycle sink is owned by `agent-runtime`; this crate only
 //! reuses it at the provider boundary.
-pub use agent_runtime::ToolEventSink;
 
 use std::sync::Arc;
 use tokio::sync::{watch, Notify};

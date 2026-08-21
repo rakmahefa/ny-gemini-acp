@@ -8,8 +8,8 @@ pub const MAX_PROMPT_CHARS: usize = 32_000;
 
 fn format_entry(entry: &HistoryEntry) -> String {
     match entry {
-        HistoryEntry::User { content } => format!("[User]: {content}\n\n"),
-        HistoryEntry::Assistant { content } => format!("[Assistant]: {content}\n\n"),
+        HistoryEntry::User { content } => format!("<user_message>\n{content}\n</user_message>\n\n"),
+        HistoryEntry::Assistant { content } => format!("<assistant_message>\n{content}\n</assistant_message>\n\n"),
         HistoryEntry::ToolCall { id, name, arguments } => {
             format!("{}\n\n", format_tool_call(id, name, arguments))
         }

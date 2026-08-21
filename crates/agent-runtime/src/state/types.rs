@@ -1,6 +1,6 @@
 //! Types du module state : rôles, modes de session, données persistées, erreurs.
 
-use crate::{time, Cancellation};
+use crate::time;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
@@ -141,10 +141,8 @@ pub enum TurnError {
     AlreadyRunning,
 }
 
-/// Runtime-owned session state plus the shared cancellation primitive.
+/// Runtime session cache. Turn concurrency and cancellation are owned by `TurnManager`.
 pub struct Live {
     pub session: Session,
-    pub cancel: Cancellation,
-    pub busy: bool,
     pub generation: u64,
 }

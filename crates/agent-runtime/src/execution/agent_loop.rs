@@ -50,6 +50,7 @@ pub enum AgentLoopError {
     #[error("agent loop exceeded the maximum of {0} model rounds")] MaxRounds(usize),
     #[error("model emitted too many tool calls in one round: {actual} > {limit}")] ToolCallLimit { actual: usize, limit: usize },
     #[error("invalid tool call: {0}")] InvalidToolCall(String),
+    #[error("invalid model event sequence: {0}")] InvalidModelSequence(String),
     #[error("semantic event emission was rejected")] SemanticEventRejected,
     #[error("agent action failed: {0}")] Action(String),
 }
@@ -112,18 +113,16 @@ impl AgentLoop {
                 let _ = sink.turn_failed();
                 return Err(AgentLoopError::ToolCallLimit { actual: round_result.tool_calls.len(), limit: self.config.max_tool_calls_per_round });
             }
-            validate_tool_calls(&round_result.tool_calls, &mut seen_tool_ids)?;
+            let tool_calls = canonicalize_tool_calls(round_result.tool_calls, round, &mut seen_tool_ids)?;
 
             let mut executable = Vec::new();
-            for call in round_result.tool_calls {
+            for call in tool_calls {
                 if let Some(handler) = &self.action_handler {
                     if handler.supports(&call.name) {
                         ensure_not_cancelled(&cancellation, sink)?;
                         match handler.handle(&session.id, &call.id, &call.name, call.arguments, cancellation.clone()).await {
                             Ok(Some(user_text)) => {
-                                if !user_text.trim().is_empty() {
-                                    session.messages.push_user(user_text);
-                                }
+                                if !user_text.trim().is_empty() { session.messages.push_user(user_text); }
                                 continue 'rounds;
                             }
                             Ok(None) => continue,
@@ -146,82 +145,42 @@ impl AgentLoop {
             total_tool_calls = total_tool_calls.checked_add(executable.len()).ok_or(AgentLoopError::ToolCallLimit { actual: usize::MAX, limit: usize::MAX })?;
             ensure_not_cancelled(&cancellation, sink)?;
 
-            if !round_result.text.trim().is_empty() {
-                session.messages.push_assistant(round_result.text.clone());
-            }
-            for call in &executable {
-                session.messages.push_tool_call(call.id.clone(), call.name.clone(), call.arguments.clone());
-            }
+            if !round_result.text.trim().is_empty() { session.messages.push_assistant(round_result.text.clone()); }
+            for call in &executable { session.messages.push_tool_call(call.id.clone(), call.name.clone(), call.arguments.clone()); }
 
             for call in executable {
                 ensure_not_cancelled(&cancellation, sink)?;
                 let ui = tools.ui_model(&call.id, &call.name, &call.arguments);
-                if !sink.tool_call_requested(call.id.clone(), call.name.clone(), ui.clone()) {
-                    let _ = sink.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
-
-                let permission_request = ToolPermissionRequest {
-                    session_id: session.id.clone(),
-                    call_id: call.id.clone(),
-                    name: call.name.clone(),
-                    arguments: call.arguments.clone(),
-                    cwd: session.cwd.clone(),
-                    additional_dirs: session.additional_directories.clone(),
-                };
-
+                if !sink.tool_call_requested(call.id.clone(), call.name.clone(), ui.clone()) { let _ = sink.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
+                let permission_request = ToolPermissionRequest { session_id: session.id.clone(), call_id: call.id.clone(), name: call.name.clone(), arguments: call.arguments.clone(), cwd: session.cwd.clone(), additional_dirs: session.additional_directories.clone() };
                 if let Some(permission_handler) = &self.permission_handler {
                     if permission_handler.needs_permission(session, &permission_request) {
-                        if !sink.permission_requested(call.id.clone()) {
-                            let _ = sink.turn_failed();
-                            return Err(AgentLoopError::SemanticEventRejected);
-                        }
+                        if !sink.permission_requested(call.id.clone()) { let _ = sink.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                         match permission_handler.request_permission(session, &permission_request, cancellation.clone()).await {
                             ToolPermissionDecision::Allow => {}
                             ToolPermissionDecision::Reject(message) => {
                                 let mut result = ToolCallResult::error(message.clone());
                                 result.ui = ui.map(|model| model.completed(false, Some(serde_json::json!({"text": message}))));
                                 ensure_not_cancelled(&cancellation, sink)?;
-                                if !sink.tool_result_received(call.id.clone(), result.content.clone(), result.ui.clone()) {
-                                    let _ = sink.turn_failed();
-                                    return Err(AgentLoopError::SemanticEventRejected);
-                                }
+                                if !sink.tool_result_received(call.id.clone(), result.content.clone(), result.ui.clone()) { let _ = sink.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                                 session.messages.push_tool_result(call.id.clone(), call.name.clone(), result.content.clone(), result.is_ok);
                                 continue;
                             }
-                            ToolPermissionDecision::Cancelled => {
-                                let _ = sink.turn_cancelled();
-                                return Err(AgentLoopError::Cancelled);
-                            }
+                            ToolPermissionDecision::Cancelled => { let _ = sink.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
                         }
                     }
                 }
-
                 let running_ui = ui.clone().map(|model| model.running());
-                if !sink.tool_execution_started(call.id.clone(), running_ui) {
-                    let _ = sink.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
+                if !sink.tool_execution_started(call.id.clone(), running_ui) { let _ = sink.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                 let result = if session.tools_enabled && tools.has_tools() {
-                    tools.call(ToolCallRequest {
-                        call_id: call.id.clone(),
-                        session_id: session.id.clone(),
-                        name: call.name.clone(),
-                        arguments: call.arguments.clone(),
-                        cwd: session.cwd.clone(),
-                        additional_dirs: session.additional_directories.clone(),
-                        cancellation: cancellation.subscribe(),
-                    }).await
+                    tools.call(ToolCallRequest { call_id: call.id.clone(), session_id: session.id.clone(), name: call.name.clone(), arguments: call.arguments.clone(), cwd: session.cwd.clone(), additional_dirs: session.additional_directories.clone(), cancellation: cancellation.subscribe() }).await
                 } else {
                     let mut result = ToolCallResult::error(format!("tool execution disabled for session: {}", call.name));
                     result.ui = ui.map(|model| model.completed(false, Some(serde_json::json!({"text": result.content.clone()}))));
                     result
                 };
                 ensure_not_cancelled(&cancellation, sink)?;
-                if !sink.tool_result_received(call.id.clone(), result.content.clone(), result.ui.clone()) {
-                    let _ = sink.turn_failed();
-                    return Err(AgentLoopError::SemanticEventRejected);
-                }
+                if !sink.tool_result_received(call.id.clone(), result.content.clone(), result.ui.clone()) { let _ = sink.turn_failed(); return Err(AgentLoopError::SemanticEventRejected); }
                 session.messages.push_tool_result(call.id.clone(), call.name.clone(), result.content.clone(), result.is_ok);
             }
         }
@@ -235,90 +194,69 @@ fn validate_session(session: &Session) -> Result<(), AgentLoopError> {
     if session.model.trim().is_empty() { return Err(AgentLoopError::InvalidSession("model must not be empty".into())); }
     Ok(())
 }
-fn validate_tool_calls(calls: &[PendingToolCall], seen: &mut HashSet<String>) -> Result<(), AgentLoopError> {
-    for call in calls {
-        if call.id.trim().is_empty() { return Err(AgentLoopError::InvalidToolCall("tool call id must not be empty".into())); }
+
+fn canonicalize_tool_calls(mut calls: Vec<PendingToolCall>, round: usize, seen: &mut HashSet<String>) -> Result<Vec<PendingToolCall>, AgentLoopError> {
+    let mut round_seen = HashSet::new();
+    for call in &mut calls {
+        let upstream_id = call.id.trim().to_owned();
+        if upstream_id.is_empty() { return Err(AgentLoopError::InvalidToolCall("tool call id must not be empty".into())); }
         if call.name.trim().is_empty() { return Err(AgentLoopError::InvalidToolCall("tool name must not be empty".into())); }
-        if !seen.insert(call.id.trim().to_owned()) { return Err(AgentLoopError::InvalidToolCall(format!("duplicate tool call id: {}", call.id))); }
+        if !round_seen.insert(upstream_id.clone()) {
+            return Err(AgentLoopError::InvalidToolCall(format!("duplicate tool call id in round {round}: {upstream_id}")));
+        }
+
+        let mut semantic_id = upstream_id.clone();
+        if seen.contains(&semantic_id) {
+            semantic_id = format!("round-{round}-{upstream_id}");
+            let mut suffix = 1usize;
+            while seen.contains(&semantic_id) {
+                semantic_id = format!("round-{round}-{suffix}-{upstream_id}");
+                suffix = suffix.saturating_add(1);
+            }
+        }
+        seen.insert(semantic_id.clone());
+        call.id = semantic_id;
     }
-    Ok(())
+    Ok(calls)
 }
 
 fn ensure_not_cancelled(cancellation: &Cancellation, sink: &mut dyn TurnEventSink) -> Result<(), AgentLoopError> {
-    if cancellation.is_cancelled() {
-        let _ = sink.turn_cancelled();
-        return Err(AgentLoopError::Cancelled);
-    }
+    if cancellation.is_cancelled() { let _ = sink.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
     Ok(())
 }
-
 fn is_context_error(error: &LlmError) -> bool {
     let text = error.to_string().to_ascii_lowercase();
     text.contains("context") || text.contains("too long") || text.contains("tokens")
 }
-
 fn compact_messages(messages: &mut Vec<(Role, String)>, target_chars: usize) {
     if messages.len() <= 1 { return; }
     let mut turns: Vec<Vec<(Role, String)>> = Vec::new();
     let mut current = Vec::new();
     for message in messages.iter() {
-        if message.0 == Role::User && !current.is_empty() {
-            turns.push(std::mem::take(&mut current));
-        }
+        if message.0 == Role::User && !current.is_empty() { turns.push(std::mem::take(&mut current)); }
         current.push(message.clone());
     }
     if !current.is_empty() { turns.push(current); }
     if turns.len() <= PRESERVE_TURNS { return; }
-
     let current_chars: usize = messages.iter().map(|(_, text)| text.len()).sum();
     if current_chars <= target_chars { return; }
-
     let tail_end = turns.len().saturating_sub(PRESERVE_TURNS);
-    let mut candidates: Vec<(usize, usize)> = (0..tail_end)
-        .map(|i| (i, turns[i].iter().map(|(_, t)| t.len()).sum()))
-        .collect();
+    let mut candidates: Vec<(usize, usize)> = (0..tail_end).map(|i| (i, turns[i].iter().map(|(_, t)| t.len()).sum())).collect();
     candidates.sort_by_key(|(_, chars)| std::cmp::Reverse(*chars));
-
     let mut remaining = current_chars;
     let mut evict = HashSet::new();
-    for (i, chars) in candidates {
-        if remaining <= target_chars { break; }
-        evict.insert(i);
-        remaining -= chars;
-    }
-
+    for (i, chars) in candidates { if remaining <= target_chars { break; } evict.insert(i); remaining -= chars; }
     let mut compacted = Vec::new();
-    for (i, turn) in turns.into_iter().enumerate() {
-        if i >= tail_end || !evict.contains(&i) {
-            compacted.extend(turn);
-        }
-    }
+    for (i, turn) in turns.into_iter().enumerate() { if i >= tail_end || !evict.contains(&i) { compacted.extend(turn); } }
     *messages = compacted;
 }
-
-async fn consume_stream(
-    stream: crate::LlmStream,
-    cancellation: &Cancellation,
-    sink: &mut dyn TurnEventSink,
-) -> Result<ModelRound, AgentLoopError> {
+async fn consume_stream(stream: crate::LlmStream, cancellation: &Cancellation, sink: &mut dyn TurnEventSink) -> Result<ModelRound, AgentLoopError> {
     match consume_model_stream(stream, cancellation, sink).await {
         Ok(round) => Ok(round),
-        Err(ModelProjectionError::Cancelled) => {
-            let _ = sink.turn_cancelled();
-            Err(AgentLoopError::Cancelled)
-        }
-        Err(ModelProjectionError::Llm(error)) => {
-            let _ = sink.turn_failed();
-            Err(AgentLoopError::Llm(error))
-        }
-        Err(ModelProjectionError::InvalidSequence(message)) => {
-            let _ = sink.turn_failed();
-            Err(AgentLoopError::InvalidToolCall(message))
-        }
-        Err(ModelProjectionError::SemanticEventRejected) => {
-            let _ = sink.turn_failed();
-            Err(AgentLoopError::SemanticEventRejected)
-        }
+        Err(ModelProjectionError::Cancelled) => { let _ = sink.turn_cancelled(); Err(AgentLoopError::Cancelled) }
+        Err(ModelProjectionError::Llm(error)) => { let _ = sink.turn_failed(); Err(AgentLoopError::Llm(error)) }
+        Err(ModelProjectionError::InvalidSequence(message)) => { let _ = sink.turn_failed(); Err(AgentLoopError::InvalidModelSequence(message)) }
+        Err(ModelProjectionError::SemanticEventRejected) => { let _ = sink.turn_failed(); Err(AgentLoopError::SemanticEventRejected) }
     }
 }
 
@@ -338,84 +276,71 @@ mod tests {
         async fn stream(&self, _: ModelRequest) -> Result<crate::LlmStream, LlmError> {
             let items = self.rounds.lock().unwrap().pop_front().unwrap_or_default();
             let (tx, rx) = mpsc::channel(items.len().max(1));
-            for item in items {
-                tx.send(item).await.map_err(|_| LlmError::Provider("fake channel closed".into()))?;
-            }
-            drop(tx);
-            Ok(rx)
+            for item in items { tx.send(item).await.map_err(|_| LlmError::Provider("fake channel closed".into()))?; }
+            drop(tx); Ok(rx)
         }
-        async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> {
-            Err(LlmError::Unavailable("not supported".into()))
-        }
-        fn model_info(&self, _: &str) -> crate::LlmModelInfo {
-            crate::LlmModelInfo { supports_reasoning: true }
-        }
+        async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> { Err(LlmError::Unavailable("not supported".into())) }
+        fn model_info(&self, _: &str) -> crate::LlmModelInfo { crate::LlmModelInfo { supports_reasoning: true } }
     }
 
     fn session() -> Session {
-        Session::new(
-            "sess_0123456789abcdef0123456789abcdef".into(),
-            std::env::temp_dir(),
-            vec![],
-            "fake-model",
-        )
+        Session::new("sess_0123456789abcdef0123456789abcdef".into(), std::env::temp_dir(), vec![], "fake-model")
     }
-
     fn emitter() -> crate::TurnEventEmitter {
-        crate::TurnEventEmitter::new(
-            crate::EventBus::new(),
-            "sess_0123456789abcdef0123456789abcdef",
-            "turn_test",
-        )
+        crate::TurnEventEmitter::new(crate::EventBus::new(), "sess_0123456789abcdef0123456789abcdef", "turn_test")
     }
-
     #[tokio::test]
     async fn completes_text_round() {
         let llm = Arc::new(FakeLlm::default());
         llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("hello".into()))]);
         let agent = AgentLoop::new(llm, Arc::new(crate::NullToolProvider), AgentLoopConfig::default()).unwrap();
-        let mut session = session();
-        let mut emitter = emitter();
-        let outcome = agent
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into())
-            .await
-            .unwrap();
-        assert_eq!(outcome.output, "hello");
-        assert_eq!(outcome.rounds, 1);
+        let mut session = session(); let mut emitter = emitter();
+        let outcome = agent.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into()).await.unwrap();
+        assert_eq!(outcome.output, "hello"); assert_eq!(outcome.rounds, 1);
     }
-
     #[tokio::test]
     async fn canonical_tool_ids_survive_history_roundtrip() {
         let llm = Arc::new(FakeLlm::default());
-        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall {
-            id: "call-42".into(),
-            name: "search".into(),
-            arguments: serde_json::json!({"q": "rust"}),
-        })]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall { id: "call-42".into(), name: "search".into(), arguments: serde_json::json!({"q": "rust"}) })]);
         llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("done".into()))]);
-
-        let tool = Arc::new(crate::NullToolProvider);
-        let agent = AgentLoop::new(llm, tool, AgentLoopConfig::default()).unwrap();
-        let mut session = session();
-        let mut emitter = emitter();
-        let _ = agent
-            .run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into())
-            .await;
-
+        let agent = AgentLoop::new(llm, Arc::new(crate::NullToolProvider), AgentLoopConfig::default()).unwrap();
+        let mut session = session(); let mut emitter = emitter();
+        let _ = agent.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into()).await;
         let raw = serde_json::to_string(&session.messages).unwrap();
         let restored: crate::state::History = serde_json::from_str(&raw).unwrap();
-        assert!(restored.entries().iter().any(|entry| matches!(
-            entry,
-            crate::state::HistoryEntry::ToolCall { id, name, .. } if id == "call-42" && name == "search"
-        )));
+        assert!(restored.entries().iter().any(|entry| matches!(entry, crate::state::HistoryEntry::ToolCall { id, name, .. } if id == "call-42" && name == "search")));
     }
-
+    #[test]
+    fn provider_tool_ids_can_repeat_across_rounds() {
+        let mut seen = HashSet::new();
+        let first = canonicalize_tool_calls(
+            vec![PendingToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: serde_json::json!({}) }],
+            0,
+            &mut seen,
+        ).unwrap();
+        let second = canonicalize_tool_calls(
+            vec![PendingToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: serde_json::json!({}) }],
+            1,
+            &mut seen,
+        ).unwrap();
+        assert_eq!(first[0].id, "gemini_call_0");
+        assert_eq!(second[0].id, "round-1-gemini_call_0");
+    }
+    #[test]
+    fn duplicate_provider_tool_ids_in_one_round_are_rejected() {
+        let mut seen = HashSet::new();
+        let error = canonicalize_tool_calls(
+            vec![
+                PendingToolCall { id: "gemini_call_0".into(), name: "shell_exec".into(), arguments: serde_json::json!({}) },
+                PendingToolCall { id: "gemini_call_0".into(), name: "search".into(), arguments: serde_json::json!({}) },
+            ],
+            0,
+            &mut seen,
+        ).unwrap_err();
+        assert!(matches!(error, AgentLoopError::InvalidToolCall(message) if message.contains("duplicate tool call id in round")));
+    }
     #[test]
     fn rejects_zero_limits() {
-        assert!(AgentLoop::new(
-            Arc::new(crate::NullLlmProvider),
-            Arc::new(crate::NullToolProvider),
-            AgentLoopConfig { max_rounds: 0, max_tool_calls_per_round: 1 },
-        ).is_err());
+        assert!(AgentLoop::new(Arc::new(crate::NullLlmProvider), Arc::new(crate::NullToolProvider), AgentLoopConfig { max_rounds: 0, max_tool_calls_per_round: 1 }).is_err());
     }
 }

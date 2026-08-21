@@ -113,13 +113,6 @@ impl ToolCallResult {
     }
 }
 
-pub trait ToolEventSink: Send {
-    fn tool_call_requested(&mut self, upstream_id: String, name: String) -> bool;
-    fn permission_requested(&mut self, upstream_id: String) -> bool;
-    fn tool_execution_started(&mut self, upstream_id: String) -> bool;
-    fn tool_result_received(&mut self, upstream_id: String, result: String) -> bool;
-}
-
 #[async_trait::async_trait]
 pub trait ToolProvider: Send + Sync {
     async fn for_session(&self, session_id: &str) -> Arc<dyn ToolProvider>;
@@ -145,7 +138,7 @@ impl ToolProvider for NullToolProvider {
     fn definitions(&self) -> Vec<Value> { Vec::new() }
     fn prompt_fragment(&self) -> Option<String> { None }
     fn has_tools(&self) -> bool { false }
-    fn ui_model(&self, _call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> { Some(ToolUiModel::generic(name, arguments.clone())) }
+    fn ui_model(&self, _call_id: &str, _name: &str, _arguments: &Value) -> Option<ToolUiModel> { None }
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult { ToolCallResult::error(format!("outil indisponible: {}", request.name)) }
 }
 

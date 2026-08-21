@@ -178,11 +178,6 @@ impl SessionManager {
         }
         Ok(deleted)
     }
-    pub async fn cancel(&self, id: &str) -> Result<()> {
-        Self::validate_id(id)?;
-        self.store.cancel(id).await;
-        Ok(())
-    }
 }
 #[cfg(test)]
 #[path = "test/session.rs"]

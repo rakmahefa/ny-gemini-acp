@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{SessionId, ToolCallId, ToolCallStatus};
 use agent_client_protocol::{Client, ConnectionTo};
-use agent_runtime::{ToolCallRequest, ToolEventSink, ToolProvider};
+use agent_runtime::{ToolCallRequest, ToolProvider, ToolUiModel, TurnEventSink};
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
@@ -100,10 +100,9 @@ impl<'a> ToolExecutor<'a> {
         call_id: ToolCallId,
         tool_name: &str,
         arguments: &Value,
-        semantic: &mut dyn ToolEventSink,
+        semantic: &mut dyn TurnEventSink,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, Some(semantic))
-            .await
+        self.execute_inner(call_id, tool_name, arguments, Some(semantic)).await
     }
     pub async fn execute_with_call_id(
         &self,
@@ -111,8 +110,7 @@ impl<'a> ToolExecutor<'a> {
         tool_name: &str,
         arguments: &Value,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, None)
-            .await
+        self.execute_inner(call_id, tool_name, arguments, None).await
     }
     pub async fn execute(&self, tool_name: &str, arguments: &Value) -> ToolResult {
         self.execute_with_call_id(
@@ -126,7 +124,7 @@ impl<'a> ToolExecutor<'a> {
     fn finish_terminal(
         &self,
         r: TerminalFinish<'_>,
-        mut semantic: Option<&mut dyn ToolEventSink>,
+        mut semantic: Option<&mut dyn TurnEventSink>,
     ) -> ToolResult {
         let TerminalFinish {
             call_id,
@@ -161,7 +159,7 @@ impl<'a> ToolExecutor<'a> {
             Some(meta),
         );
         if let Some(e) = semantic.as_mut() {
-            e.tool_result_received(call_id.to_string(), content.clone());
+            e.tool_result_received(call_id.to_string(), content.clone(), Some(ToolUiModel::generic(tool_name, arguments.clone())));
         }
         ToolResult {
             content,
@@ -175,13 +173,14 @@ impl<'a> ToolExecutor<'a> {
         call_id: ToolCallId,
         tool_name: &str,
         arguments: &Value,
-        mut semantic: Option<&mut dyn ToolEventSink>,
+        mut semantic: Option<&mut dyn TurnEventSink>,
     ) -> ToolResult {
         let info = ToolInfo::build(tool_name, arguments, self.cwd, None);
         let mut lifecycle = ToolLifecycle::new();
         self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
+        let ui = Some(ToolUiModel::generic(tool_name, arguments.clone()));
         if let Some(e) = semantic.as_mut() {
-            e.tool_call_requested(call_id.to_string(), tool_name.to_owned());
+            e.tool_call_requested(call_id.to_string(), tool_name.to_owned(), ui.clone());
         }
         if *self.cancellation.borrow() {
             return self.finish_terminal(
@@ -250,7 +249,7 @@ impl<'a> ToolExecutor<'a> {
                         .expect("permission -> executing must be legal");
                     self.emit_lifecycle(&call_id, &lifecycle, tool_name);
                     if let Some(e) = semantic.as_mut() {
-                        e.tool_execution_started(call_id.to_string());
+                        e.tool_execution_started(call_id.to_string(), ui.clone());
                     }
                 }
                 PermissionResult::Reject => {
@@ -336,7 +335,7 @@ impl<'a> ToolExecutor<'a> {
                 .expect("pending -> executing must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
             if let Some(e) = semantic.as_mut() {
-                e.tool_execution_started(call_id.to_string());
+                e.tool_execution_started(call_id.to_string(), ui.clone());
             }
         }
         let outcome = if tool_name == "shell_exec" {
@@ -362,11 +361,7 @@ impl<'a> ToolExecutor<'a> {
                 content: outcome.result.content,
                 is_ok: outcome.result.is_ok,
                 cancelled: outcome.cancelled,
-                reason: if outcome.cancelled {
-                    Some("cancelled")
-                } else {
-                    None
-                },
+                reason: if outcome.cancelled { Some("cancelled") } else { None },
                 terminal_id: outcome.terminal_id.as_deref(),
                 terminal_meta: outcome.terminal_meta,
             },
@@ -393,8 +388,7 @@ impl<'a> ToolExecutor<'a> {
             value = self.registry.call(request) => value,
             _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true }
         };
-        let cancelled =
-            session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
+        let cancelled = session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
         ExecutionOutcome {
             result: ToolResult {
                 content: result.content,
@@ -431,14 +425,8 @@ mod tests {
     }
     #[test]
     fn cancelled_terminal_preserves_partial_output() {
-        assert_eq!(
-            terminal::terminal_output_text(("partial output".into(), false)),
-            "partial output"
-        );
-        assert_eq!(
-            terminal::terminal_output_text(("partial output".into(), true)),
-            "partial output\n… (sortie tronquée par le client ACP)"
-        );
+        assert_eq!(terminal::terminal_output_text(("partial output".into(), false)), "partial output");
+        assert_eq!(terminal::terminal_output_text(("partial output".into(), true)), "partial output\n… (sortie tronquée par le client ACP)");
     }
     #[test]
     fn empty_cancelled_terminal_output_stays_empty() {
@@ -446,8 +434,7 @@ mod tests {
     }
     #[test]
     fn terminal_metadata_shape() {
-        let meta =
-            terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
+        let meta = terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
         assert_eq!(meta["terminal_info"]["terminal_id"], "term-1");
         assert_eq!(meta["terminal_output"]["data"], "hello");
         assert_eq!(meta["terminal_exit"]["exit_code"], 0);

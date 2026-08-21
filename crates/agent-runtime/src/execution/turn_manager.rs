@@ -1,40 +1,24 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 
 use crate::{AgentTurn, AgentTurnHandle, Cancellation, RuntimeError, TurnState};
 
-/// Coordinates turns so a session has at most one active turn at a time.
-///
-/// The manager owns the reservation, while `AgentTurn` owns the execution
-/// lifecycle. A reservation is installed before the worker is spawned, making
-/// concurrent `start` calls deterministic: exactly one wins the session slot.
+const CANCEL_WAIT: Duration = Duration::from_secs(5);
+const CANCEL_POLL: Duration = Duration::from_millis(10);
+
+/// Owns runtime turn concurrency, cancellation and active-turn handles.
+/// Cross-process ownership is deliberately left to `Store`'s busy sentinel.
 #[derive(Clone, Default)]
 pub struct TurnManager {
-    sessions: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     active: Arc<Mutex<HashMap<String, AgentTurnHandle>>>,
 }
 
 impl TurnManager {
-    pub fn new() -> Self {
-        Self::default()
-    }
+    pub fn new() -> Self { Self::default() }
 
-    async fn session_lock(&self, session_id: &str) -> Arc<Mutex<()>> {
-        let mut sessions = self.sessions.lock().await;
-        sessions
-            .entry(session_id.to_owned())
-            .or_insert_with(|| Arc::new(Mutex::new(())))
-            .clone()
-    }
-
-    /// Starts one turn for `session_id`.
-    ///
-    /// At most one turn can be active for a session. A competing call fails
-    /// before spawning work, so it cannot replace or orphan the first handle.
-    /// The returned handle remains valid after the manager removes its active
-    /// reservation when the turn reaches a terminal state.
     pub async fn start<F, Fut>(
         &self,
         session_id: impl Into<String>,
@@ -45,7 +29,6 @@ impl TurnManager {
         Fut: std::future::Future<Output = Result<(), RuntimeError>> + Send + 'static,
     {
         let session_id = session_id.into();
-        let lock = self.session_lock(&session_id).await;
         let (turn, handle) = AgentTurn::new();
         {
             let mut active = self.active.lock().await;
@@ -54,22 +37,12 @@ impl TurnManager {
             }
             active.insert(session_id.clone(), handle.clone());
         }
+
         let active = self.active.clone();
         let key = session_id.clone();
         let start_result = turn
             .start(move |cancellation| async move {
-                let mut cancellation_rx = cancellation.subscribe();
-                let guard = tokio::select! {
-                    guard = lock.lock() => guard,
-                    _ = cancellation_rx.changed() => return Ok(()),
-                };
-                if cancellation.is_cancelled() {
-                    drop(guard);
-                    active.lock().await.remove(&key);
-                    return Ok(());
-                }
                 let result = work(cancellation.clone()).await;
-                drop(guard);
                 active.lock().await.remove(&key);
                 result
             })
@@ -80,10 +53,6 @@ impl TurnManager {
         start_result.map(|()| handle)
     }
 
-    /// Requests cancellation of the currently active turn, if any.
-    ///
-    /// Returning `false` means the session has no active turn; this is not an
-    /// error and makes cancellation safe to race with normal completion.
     pub async fn cancel(&self, session_id: &str) -> Result<bool, RuntimeError> {
         let handle = self.active.lock().await.get(session_id).cloned();
         if let Some(handle) = handle {
@@ -93,7 +62,51 @@ impl TurnManager {
         Ok(false)
     }
 
-    /// Returns the state of the currently reserved turn, if one exists.
+    /// Cancels a turn and waits until its worker has actually left the active set.
+    pub async fn cancel_and_wait(&self, session_id: &str) -> Result<bool, RuntimeError> {
+        if !self.cancel(session_id).await? {
+            return Ok(false);
+        }
+        let deadline = Instant::now() + CANCEL_WAIT;
+        while Instant::now() < deadline {
+            if self.state(session_id).await.is_none() {
+                return Ok(true);
+            }
+            tokio::time::sleep(CANCEL_POLL).await;
+        }
+        Err(RuntimeError::Task(format!(
+            "timeout cancelling turn for session {session_id}"
+        )))
+    }
+
+    pub async fn cancel_all(&self) -> Result<usize, RuntimeError> {
+        let handles = self
+            .active
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut cancelled = 0usize;
+        for handle in handles {
+            handle.cancel().await?;
+            cancelled = cancelled.saturating_add(1);
+        }
+        Ok(cancelled)
+    }
+
+    /// Cancels every active turn and waits for all workers to leave the active set.
+    pub async fn cancel_all_and_wait(&self) -> Result<usize, RuntimeError> {
+        let session_ids = self.active.lock().await.keys().cloned().collect::<Vec<_>>();
+        let mut cancelled = 0usize;
+        for session_id in session_ids {
+            if self.cancel_and_wait(&session_id).await? {
+                cancelled = cancelled.saturating_add(1);
+            }
+        }
+        Ok(cancelled)
+    }
+
     pub async fn state(&self, session_id: &str) -> Option<TurnState> {
         let handle = self.active.lock().await.get(session_id).cloned();
         match handle {
@@ -117,6 +130,11 @@ mod tests {
         }
     }
 
+    async fn wait_for_cancellation(cancellation: Cancellation) -> Result<(), RuntimeError> {
+        cancellation.cancelled().await;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn concurrent_starts_have_exactly_one_winner() {
         let manager = TurnManager::new();
@@ -132,7 +150,10 @@ mod tests {
             m1.start("session", move |cancellation| async move {
                 s1.fetch_add(1, Ordering::SeqCst);
                 let mut rx = cancellation.subscribe();
-                tokio::select! { _ = b1.notified() => Ok(()), _ = rx.changed() => Ok(()) }
+                tokio::select! {
+                    _ = b1.notified() => Ok(()),
+                    _ = rx.changed() => Ok(()),
+                }
             })
             .await
         });
@@ -140,7 +161,10 @@ mod tests {
             m2.start("session", move |cancellation| async move {
                 s2.fetch_add(1, Ordering::SeqCst);
                 let mut rx = cancellation.subscribe();
-                tokio::select! { _ = b2.notified() => Ok(()), _ = rx.changed() => Ok(()) }
+                tokio::select! {
+                    _ = b2.notified() => Ok(()),
+                    _ = rx.changed() => Ok(()),
+                }
             })
             .await
         });
@@ -169,18 +193,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reservation_is_released_after_completion() {
+    async fn cancel_and_wait_removes_turn_before_return() {
         let manager = TurnManager::new();
-        let first = manager
-            .start("session", |_cancellation| async { Ok(()) })
+        let handle = manager
+            .start("session", wait_for_cancellation)
             .await
             .unwrap();
-        wait_for_terminal(&first).await;
+
+        assert!(manager.cancel_and_wait("session").await.unwrap());
         assert!(manager.state("session").await.is_none());
-        let second = manager
-            .start("session", |_cancellation| async { Ok(()) })
+        assert_eq!(handle.state().await, TurnState::Cancelled);
+    }
+
+    #[tokio::test]
+    async fn cancel_all_and_wait_waits_for_every_turn() {
+        let manager = TurnManager::new();
+        let a = manager
+            .start("a", wait_for_cancellation)
             .await
             .unwrap();
-        wait_for_terminal(&second).await;
+        let b = manager
+            .start("b", wait_for_cancellation)
+            .await
+            .unwrap();
+
+        assert_eq!(manager.cancel_all_and_wait().await.unwrap(), 2);
+        assert!(manager.state("a").await.is_none());
+        assert!(manager.state("b").await.is_none());
+        assert_eq!(a.state().await, TurnState::Cancelled);
+        assert_eq!(b.state().await, TurnState::Cancelled);
     }
 }

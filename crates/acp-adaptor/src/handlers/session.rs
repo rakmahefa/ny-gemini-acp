@@ -307,6 +307,12 @@ pub async fn handle_delete(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
+    state.turns.cancel_and_wait(&req.session_id.0).await.map_err(|error| {
+        AcpError::invalid_params().data(serde_json::json!({
+            "session_id": req.session_id.to_string(),
+            "error": error.to_string(),
+        }))
+    })?;
     match state.sessions.delete(&req.session_id.0).await {
         Ok(true) => responder.respond(DeleteSessionResponse::new()),
         Ok(false) => responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
@@ -324,6 +330,12 @@ pub async fn handle_close(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
+    state.turns.cancel_and_wait(&req.session_id.0).await.map_err(|error| {
+        AcpError::invalid_params().data(serde_json::json!({
+            "session_id": req.session_id.to_string(),
+            "error": error.to_string(),
+        }))
+    })?;
     match state.sessions.close(&req.session_id.0).await {
         Ok(true) => responder.respond(CloseSessionResponse::new()),
         Ok(false) => responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({

@@ -2,7 +2,7 @@ use crate::{handlers, prompt};
 use agent_client_protocol::schema::v1::*;
 use agent_client_protocol::{Agent, Error as AcpError, Stdio};
 use agent_runtime::events::TurnEventEmitter;
-use agent_runtime::{AppState, RuntimeError, TurnManager};
+use agent_runtime::{AppState, RuntimeError};
 use tools_provider::tools::interactive;
 
 pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
@@ -10,7 +10,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_tools = state.tools.clone();
     let h_llm = state.llm.clone();
     let h_events = state.events.clone();
-    let turn_manager = TurnManager::new();
+    let turn_manager = state.turns.clone();
 
     Agent::builder(Agent)
         .name("gemini-acp")
@@ -73,7 +73,11 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
 
                             interactive::scope(interactive_context, async move {
                                 let emitter_events = events.clone();
-                                let mut semantic = TurnEventEmitter::new(emitter_events, sid.clone(), turn_id.clone());
+                                let mut semantic = TurnEventEmitter::new_with_required_transport(
+                                    emitter_events,
+                                    sid.clone(),
+                                    turn_id.clone(),
+                                );
                                 let turn_context = prompt::TurnContext {
                                     store,
                                     tools,
@@ -82,8 +86,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     semantic: &mut semantic,
                                     cancellation,
                                 };
-                                let turn_result = prompt::run_turn(turn_context, req)
-                                    .await;
+                                let turn_result = prompt::run_turn(turn_context, req).await;
 
                                 if turn_result.is_err() && !semantic.is_terminal() {
                                     let _ = semantic.turn_failed();
@@ -187,8 +190,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
         .on_receive_notification(
             {
                 let state = state.clone();
-                let turn_manager = turn_manager.clone();
-                async move |notif: CancelNotification, _cx| handlers::cancel::handle(notif, &state, &turn_manager).await
+                async move |notif: CancelNotification, _cx| handlers::cancel::handle(notif, &state).await
             },
             agent_client_protocol::on_receive_notification!(),
         )

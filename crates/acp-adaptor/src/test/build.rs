@@ -33,8 +33,17 @@ fn prompt_contient_systeme_et_tour_courant() {
     let p = build_prompt(&s, None);
     assert!(p.contains("[System instruction]"));
     assert!(p.contains("CWD: /home/dev/projet"));
-    assert!(p.contains("[User]: Question 2"));
-    assert!(p.contains("[Assistant]: Réponse 1"));
+    assert!(p.contains("<user_message>\nQuestion 2\n</user_message>"));
+    assert!(p.contains("<assistant_message>\nRéponse 1\n</assistant_message>"));
+    assert!(!p.contains("[Assistant]: Réponse 1"));
+}
+
+#[test]
+fn assistant_history_ne_reinjecte_pas_le_marqueur_de_transport() {
+    let s = session(&[("a", "réponse historique")]);
+    let p = build_prompt(&s, None);
+    assert!(!p.contains("<assistant_message>\n[Assistant]:"));
+    assert!(p.contains("<assistant_message>\nréponse historique\n</assistant_message>"));
 }
 
 #[test]
@@ -94,7 +103,7 @@ fn fenetre_glissante_12_max() {
     let p = build_prompt(&s, None);
     assert!(p.contains("Question 39"));
     assert!(!p.contains("Question 0"));
-    assert!(p.matches("[User]").count() <= 12);
+    assert!(p.matches("<user_message>").count() <= 12);
 }
 
 #[test]
@@ -123,7 +132,7 @@ fn build_prompt_vide_renvoie_juste_systeme() {
     let s = Session::new("s".into(), "/tmp".into(), vec![], "m");
     let p = build_prompt(&s, None);
     assert!(p.contains("[System instruction]"));
-    assert!(!p.contains("[User]"));
+    assert!(!p.contains("<user_message>"));
 }
 
 #[test]
