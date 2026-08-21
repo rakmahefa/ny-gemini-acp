@@ -1,5 +1,6 @@
 //! Provider-neutral runtime composition root.
 use crate::events::EventBus;
+use crate::execution::TurnManager;
 use crate::session::SessionManager;
 use crate::{SharedLlmProvider, SharedToolProvider};
 use anyhow::{Context, Result};
@@ -16,6 +17,7 @@ pub struct RuntimeConfig {
 pub struct AppState {
     pub store: Arc<crate::state::Store>,
     pub sessions: SessionManager,
+    pub turns: TurnManager,
     pub llm: SharedLlmProvider,
     pub tools: SharedToolProvider,
     pub config: Arc<RuntimeConfig>,
@@ -43,6 +45,7 @@ impl AgentRuntime {
             state: AppState {
                 store,
                 sessions,
+                turns: TurnManager::new(),
                 llm,
                 tools,
                 config: Arc::new(config),
@@ -50,13 +53,11 @@ impl AgentRuntime {
             },
         })
     }
-    pub fn state(&self) -> &AppState {
-        &self.state
-    }
+    pub fn state(&self) -> &AppState { &self.state }
     pub async fn shutdown(&self) {
-        let store = Arc::clone(&self.state.store);
-        match tokio::time::timeout(SHUTDOWN_TIMEOUT, store.cancel_all()).await {
-            Ok(_) => tracing::info!("tours actifs annulés"),
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.state.turns.cancel_all()).await {
+            Ok(Ok(_)) => tracing::info!("tours actifs annulés"),
+            Ok(Err(error)) => tracing::warn!(%error, "échec de l'annulation des tours actifs"),
             Err(_) => tracing::warn!(
                 timeout_secs = SHUTDOWN_TIMEOUT.as_secs(),
                 "timeout pendant l'arrêt gracieux"
