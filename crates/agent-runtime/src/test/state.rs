@@ -30,9 +30,9 @@ async fn busy_sentinel_blocks_second_persistence_transaction() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store.create("/tmp".into(), vec![], TEST_MODEL).await.unwrap();
-    let (session, generation) = store.begin_turn(&s.id).await.unwrap();
+    let (session1, generation1) = store.begin_turn(&s.id).await.unwrap();
     assert!(matches!(store.begin_turn(&s.id).await, Err(TurnError::AlreadyRunning)));
-    store.end_turn(&s.id, session, generation).await.unwrap();
+    store.end_turn(&s.id, session1, generation1).await.unwrap();
     assert!(store.begin_turn(&s.id).await.is_ok());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -52,8 +52,10 @@ async fn generation_rejects_stale_turn_finish() {
     let dir = std::env::temp_dir().join(format!("acp-test-{}", uuid::Uuid::new_v4().simple()));
     let store = Store::open(&dir).await.unwrap();
     let s = store.create("/tmp".into(), vec![], TEST_MODEL).await.unwrap();
-    let (session, generation) = store.begin_turn(&s.id).await.unwrap();
-    let stale = generation.saturating_sub(1);
-    assert!(store.end_turn(&s.id, session, stale).await.is_err());
+    let (session1, generation1) = store.begin_turn(&s.id).await.unwrap();
+    store.end_turn(&s.id, session1, generation1).await.unwrap();
+    let (session2, generation2) = store.begin_turn(&s.id).await.unwrap();
+    assert_eq!(generation2, generation1 + 1);
+    assert!(store.end_turn(&s.id, session2, generation1).await.is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
