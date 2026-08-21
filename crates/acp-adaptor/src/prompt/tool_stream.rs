@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
-use agent_runtime::events::{EventContext, SemanticEvent, TurnEventEmitter};
+use agent_runtime::events::{EventContext, SemanticEvent};
 use agent_runtime::Cancellation;
 use tokio::sync::mpsc;
 
@@ -199,6 +199,7 @@ pub async fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime::events::TurnEventEmitter;
     use serde_json::json;
 
     fn context(sequence: u64) -> EventContext {
@@ -267,8 +268,6 @@ mod tests {
         }
         assert_eq!(events.len(), 5);
 
-        // Inject transport corruption: drop AssistantDelta(sequence=2)
-        // before the ACP projection sees it.
         events.retain(|event| event_context(event).sequence != 2);
 
         let mut sequence = SequenceTracker::default();
