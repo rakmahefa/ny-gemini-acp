@@ -28,9 +28,14 @@ impl EventBus {
         self.sender.send(event).unwrap_or(0)
     }
 
+    /// Returns whether the mandatory ACP turn transport is currently connected.
+    pub fn has_turn_subscriber(&self, turn_id: &str) -> bool {
+        self.turn_senders.lock().map(|senders| senders.contains_key(turn_id)).unwrap_or(false)
+    }
+
     /// Mandatory per-turn transport used by ACP semantic projection.
-    /// The event is considered emitted only if a live turn consumer accepted it.
-    pub fn publish_turn(&self, event: SemanticEvent) -> Result<(), SemanticEvent> {
+    /// The event is considered emitted only when a live turn consumer accepts it.
+    pub fn publish_turn(&self, event: SemanticEvent) -> Result<(), String> {
         let turn_id = event_turn_id(&event).to_owned();
         let sender = self
             .turn_senders
@@ -38,21 +43,19 @@ impl EventBus {
             .ok()
             .and_then(|senders| senders.get(&turn_id).cloned());
 
-        let Some(sender) = sender else { return Err(event); };
+        let Some(sender) = sender else { return Err(format!("no ACP subscriber for turn {turn_id}")); };
         if sender.send(event).is_ok() {
             Ok(())
         } else {
             if let Ok(mut senders) = self.turn_senders.lock() {
                 senders.remove(&turn_id);
             }
-            Err(SemanticEvent::TurnFailed {
-                context: super::EventContext::new("", turn_id, 0),
-            })
+            Err(format!("ACP subscriber for turn {turn_id} disconnected"))
         }
     }
 
     /// Compatibility helper: best-effort broadcast plus mandatory turn delivery.
-    pub fn publish(&self, event: SemanticEvent) -> Result<(), SemanticEvent> {
+    pub fn publish(&self, event: SemanticEvent) -> Result<(), String> {
         self.publish_global(event.clone());
         self.publish_turn(event)
     }
@@ -114,9 +117,7 @@ mod tests {
     async fn turn_transport_does_not_lag_under_a_burst() {
         let bus = EventBus::new();
         let mut receiver = bus.subscribe_turn("burst");
-        for sequence in 0..10_000u64 {
-            bus.publish_turn(event("burst", sequence)).unwrap();
-        }
+        for sequence in 0..10_000u64 { bus.publish_turn(event("burst", sequence)).unwrap(); }
         for sequence in 0..10_000u64 {
             let received = receiver.recv().await.unwrap();
             assert_eq!(sequence, match received { SemanticEvent::TurnStarted { context } => context.sequence, _ => unreachable!() });
@@ -133,6 +134,7 @@ mod tests {
     fn turn_transport_is_mandatory() {
         let bus = EventBus::new();
         assert!(bus.publish_turn(event("turn", 0)).is_err());
+        assert!(!bus.has_turn_subscriber("turn"));
     }
 
     #[test]
