@@ -122,7 +122,7 @@ pub fn system_prompt(session: &Session, persona: Option<Persona>) -> String {
 - Avant la réponse finale, vérifie que les changements demandés ont effectivement été réalisés et qu'ils correspondent à la demande.\n"
         );
     } else {
-        system.push_str("\n");
+        system.push('\n');
     }
 
     system.push_str(
@@ -137,7 +137,7 @@ pub fn system_prompt(session: &Session, persona: Option<Persona>) -> String {
 - Ne présente jamais un résultat d'outil ou une modification comme observé si le résultat correspondant n'a pas réellement été reçu.\n\
 - Quand tu n'es pas certain qu'une action a réussi, dis-le explicitement et vérifie avec un outil lorsque c'est possible.\n"
     );
-    system.push_str("\n");
+    system.push('\n');
     system
 }
 
