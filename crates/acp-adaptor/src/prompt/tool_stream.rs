@@ -2,7 +2,7 @@ use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::events::{EventContext, SemanticEvent};
 use agent_runtime::Cancellation;
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 
 use super::notify::{
     notify_reasoning, notify_text, notify_tool_call, notify_tool_call_update,
@@ -10,12 +10,12 @@ use super::notify::{
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectionError {
-    #[error("semantic event transport lagged and skipped {skipped} event(s)")]
-    Lagged { skipped: u64 },
+    #[error("semantic event transport channel closed before the turn reached a terminal event")]
+    Closed,
     #[error("semantic event sequence gap: expected {expected}, received {actual}")]
     SequenceGap { expected: u64, actual: u64 },
-    #[error("semantic event transport closed before the turn reached a terminal event")]
-    Closed,
+    #[error("semantic event belongs to unexpected turn {expected}, received {actual}")]
+    UnexpectedTurn { expected: String, actual: String },
     #[error("ACP notification failed: {0}")]
     Acp(#[from] AcpError),
 }
@@ -60,12 +60,11 @@ fn event_context(event: &SemanticEvent) -> &EventContext {
 
 /// Projects validated semantic runtime events into ACP.
 ///
-/// This transport is deliberately fail-closed: a lagged broadcast receiver,
-/// sequence gap, or closed bus is a transport integrity failure. We never skip
-/// events and continue, because doing so would make ACP observe an incomplete
-/// semantic turn while the runtime believes the turn is intact.
+/// The dedicated per-turn queue is lossless. Sequence validation remains in place as
+/// a second integrity barrier, so a producer bug that reorders, duplicates, or mutates
+/// event sequencing is still detected rather than rendered as an apparently valid ACP turn.
 pub async fn project(
-    mut events: broadcast::Receiver<SemanticEvent>,
+    mut events: mpsc::UnboundedReceiver<SemanticEvent>,
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     message_id: &MessageId,
@@ -75,58 +74,55 @@ pub async fn project(
     let mut sequence = SequenceTracker::default();
 
     loop {
-        match events.recv().await {
-            Ok(event) => {
-                let context = event_context(&event);
-                if context.turn_id != turn_id {
-                    continue;
-                }
-
-                if let Err(error) = sequence.observe(context) {
-                    cancellation.cancel();
-                    return Err(error);
-                }
-
-                let notification = match event {
-                    SemanticEvent::AssistantDelta { delta, .. } => {
-                        notify_text(cx, session_id, message_id, delta)
-                    }
-                    SemanticEvent::ThinkingDelta { delta, .. } => {
-                        notify_reasoning(cx, session_id, message_id, delta)
-                    }
-                    SemanticEvent::ToolCallRequested {
-                        context,
-                        ui: Some(ui),
-                        ..
-                    } => notify_tool_call(cx, session_id, &context.tool_call_id, &ui),
-                    SemanticEvent::ToolExecutionStarted {
-                        context,
-                        ui: Some(ui),
-                    } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui),
-                    SemanticEvent::ToolResultReceived {
-                        context,
-                        ui: Some(ui),
-                        ..
-                    } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui),
-                    SemanticEvent::TurnCancelled { .. }
-                    | SemanticEvent::TurnFailed { .. }
-                    | SemanticEvent::TurnCompleted { .. } => return Ok(()),
-                    _ => Ok(()),
-                };
-
-                if let Err(error) = notification {
-                    cancellation.cancel();
-                    return Err(ProjectionError::Acp(error));
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                cancellation.cancel();
-                return Err(ProjectionError::Lagged { skipped });
-            }
-            Err(broadcast::error::RecvError::Closed) => {
+        let event = match events.recv().await {
+            Some(event) => event,
+            None => {
                 cancellation.cancel();
                 return Err(ProjectionError::Closed);
             }
+        };
+
+        let context = event_context(&event);
+        if context.turn_id != turn_id {
+            cancellation.cancel();
+            return Err(ProjectionError::UnexpectedTurn {
+                expected: turn_id.to_owned(),
+                actual: context.turn_id.clone(),
+            });
+        }
+
+        sequence.observe(context)?;
+
+        let notification = match event {
+            SemanticEvent::AssistantDelta { delta, .. } => {
+                notify_text(cx, session_id, message_id, delta)
+            }
+            SemanticEvent::ThinkingDelta { delta, .. } => {
+                notify_reasoning(cx, session_id, message_id, delta)
+            }
+            SemanticEvent::ToolCallRequested {
+                context,
+                ui: Some(ui),
+                ..
+            } => notify_tool_call(cx, session_id, &context.tool_call_id, &ui),
+            SemanticEvent::ToolExecutionStarted {
+                context,
+                ui: Some(ui),
+            } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui),
+            SemanticEvent::ToolResultReceived {
+                context,
+                ui: Some(ui),
+                ..
+            } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui),
+            SemanticEvent::TurnCancelled { .. }
+            | SemanticEvent::TurnFailed { .. }
+            | SemanticEvent::TurnCompleted { .. } => return Ok(()),
+            _ => Ok(()),
+        };
+
+        if let Err(error) = notification {
+            cancellation.cancel();
+            return Err(ProjectionError::Acp(error));
         }
     }
 }
