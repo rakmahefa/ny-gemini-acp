@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{SessionId, ToolCallId, ToolCallStatus};
 use agent_client_protocol::{Client, ConnectionTo};
-use agent_runtime::{ToolCallRequest, ToolProvider, TurnEventSink};
+use agent_runtime::{ToolCallRequest, ToolProvider, ToolUiModel, TurnEventSink};
 use serde_json::{Map, Value};
 use tokio::sync::watch;
 
@@ -159,7 +159,7 @@ impl<'a> ToolExecutor<'a> {
             Some(meta),
         );
         if let Some(e) = semantic.as_mut() {
-            e.tool_result_received(call_id.to_string(), content.clone(), None);
+            e.tool_result_received(call_id.to_string(), content.clone(), Some(ToolUiModel::generic(tool_name, arguments.clone())));
         }
         ToolResult {
             content,
@@ -178,8 +178,9 @@ impl<'a> ToolExecutor<'a> {
         let info = ToolInfo::build(tool_name, arguments, self.cwd, None);
         let mut lifecycle = ToolLifecycle::new();
         self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
+        let ui = Some(ToolUiModel::generic(tool_name, arguments.clone()));
         if let Some(e) = semantic.as_mut() {
-            e.tool_call_requested(call_id.to_string(), tool_name.to_owned(), Some(ToolUiModel::generic(tool_name, arguments.clone())));
+            e.tool_call_requested(call_id.to_string(), tool_name.to_owned(), ui.clone());
         }
         if *self.cancellation.borrow() {
             return self.finish_terminal(
@@ -248,7 +249,7 @@ impl<'a> ToolExecutor<'a> {
                         .expect("permission -> executing must be legal");
                     self.emit_lifecycle(&call_id, &lifecycle, tool_name);
                     if let Some(e) = semantic.as_mut() {
-                        e.tool_execution_started(call_id.to_string(), Some(ToolUiModel::generic(tool_name, arguments.clone())));
+                        e.tool_execution_started(call_id.to_string(), ui.clone());
                     }
                 }
                 PermissionResult::Reject => {
@@ -334,7 +335,7 @@ impl<'a> ToolExecutor<'a> {
                 .expect("pending -> executing must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
             if let Some(e) = semantic.as_mut() {
-                e.tool_execution_started(call_id.to_string(), Some(ToolUiModel::generic(tool_name, arguments.clone())));
+                e.tool_execution_started(call_id.to_string(), ui.clone());
             }
         }
         let outcome = if tool_name == "shell_exec" {
