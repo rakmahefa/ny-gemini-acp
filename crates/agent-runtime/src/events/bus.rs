@@ -14,73 +14,60 @@ pub struct EventBus {
 }
 
 impl Default for EventBus {
-    fn default() -> Self {
-        Self::new()
-    }
+    fn default() -> Self { Self::new() }
 }
 
 impl EventBus {
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(DEFAULT_CAPACITY);
-        Self {
-            sender,
-            turn_senders: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { sender, turn_senders: Arc::new(Mutex::new(HashMap::new())) }
     }
 
-    /// Publishes globally for observers and losslessly to the dedicated turn stream.
-    ///
-    /// The global broadcast remains a best-effort diagnostic fan-out. The per-turn
-    /// channel is the protocol transport and is deliberately unbounded: ACP must never
-    /// observe a synthetic sequence gap because a bounded queue discarded events.
-    pub fn publish(
-        &self,
-        event: SemanticEvent,
-    ) -> Result<usize, Box<broadcast::error::SendError<SemanticEvent>>> {
-        let turn_id = event_turn_id(&event).to_owned();
-        let error_event = event.clone();
-        let mut delivered = self.sender.send(event.clone()).unwrap_or(0);
+    /// Best-effort diagnostic fan-out. No protocol invariant depends on delivery here.
+    pub fn publish_global(&self, event: SemanticEvent) -> usize {
+        self.sender.send(event).unwrap_or(0)
+    }
 
-        let turn_sender = self
+    /// Mandatory per-turn transport used by ACP semantic projection.
+    /// The event is considered emitted only if a live turn consumer accepted it.
+    pub fn publish_turn(&self, event: SemanticEvent) -> Result<(), SemanticEvent> {
+        let turn_id = event_turn_id(&event).to_owned();
+        let sender = self
             .turn_senders
             .lock()
             .ok()
             .and_then(|senders| senders.get(&turn_id).cloned());
 
-        if let Some(sender) = turn_sender {
-            if sender.send(event).is_ok() {
-                delivered = delivered.saturating_add(1);
-            } else if let Ok(mut senders) = self.turn_senders.lock() {
+        let Some(sender) = sender else { return Err(event); };
+        if sender.send(event).is_ok() {
+            Ok(())
+        } else {
+            if let Ok(mut senders) = self.turn_senders.lock() {
                 senders.remove(&turn_id);
             }
-        }
-
-        if delivered == 0 {
-            Err(Box::new(broadcast::error::SendError(error_event)))
-        } else {
-            Ok(delivered)
+            Err(SemanticEvent::TurnFailed {
+                context: super::EventContext::new("", turn_id, 0),
+            })
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {
-        self.sender.subscribe()
+    /// Compatibility helper: best-effort broadcast plus mandatory turn delivery.
+    pub fn publish(&self, event: SemanticEvent) -> Result<(), SemanticEvent> {
+        self.publish_global(event.clone());
+        self.publish_turn(event)
     }
 
-    /// Subscribe to one turn only using a lossless point-to-point queue.
+    pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> { self.sender.subscribe() }
+
     pub fn subscribe_turn(&self, turn_id: &str) -> mpsc::UnboundedReceiver<SemanticEvent> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let mut senders = self
-            .turn_senders
-            .lock()
-            .expect("event bus turn sender registry poisoned");
+        let mut senders = self.turn_senders.lock().expect("event bus turn sender registry poisoned");
         senders.insert(turn_id.to_owned(), sender);
         receiver
     }
 
     pub fn close_turn(&self, turn_id: &str) {
-        if let Ok(mut senders) = self.turn_senders.lock() {
-            senders.remove(turn_id);
-        }
+        if let Ok(mut senders) = self.turn_senders.lock() { senders.remove(turn_id); }
     }
 }
 
@@ -109,9 +96,7 @@ mod tests {
     use crate::events::EventContext;
 
     fn event(turn_id: &str, sequence: u64) -> SemanticEvent {
-        SemanticEvent::TurnStarted {
-            context: EventContext::new("session", turn_id, sequence),
-        }
+        SemanticEvent::TurnStarted { context: EventContext::new("session", turn_id, sequence) }
     }
 
     #[tokio::test]
@@ -119,14 +104,10 @@ mod tests {
         let bus = EventBus::new();
         let mut turn_a = bus.subscribe_turn("turn-a");
         let mut turn_b = bus.subscribe_turn("turn-b");
-
-        bus.publish(event("turn-a", 0)).expect("turn-a has a receiver");
-        bus.publish(event("turn-b", 0)).expect("turn-b has a receiver");
-
-        let a = turn_a.recv().await.unwrap();
-        let b = turn_b.recv().await.unwrap();
-        assert_eq!(event_turn_id(&a), "turn-a");
-        assert_eq!(event_turn_id(&b), "turn-b");
+        bus.publish_turn(event("turn-a", 0)).unwrap();
+        bus.publish_turn(event("turn-b", 0)).unwrap();
+        assert_eq!(event_turn_id(&turn_a.recv().await.unwrap()), "turn-a");
+        assert_eq!(event_turn_id(&turn_b.recv().await.unwrap()), "turn-b");
     }
 
     #[tokio::test]
@@ -134,29 +115,37 @@ mod tests {
         let bus = EventBus::new();
         let mut receiver = bus.subscribe_turn("burst");
         for sequence in 0..10_000u64 {
-            bus.publish(event("burst", sequence)).expect("turn receiver is alive");
+            bus.publish_turn(event("burst", sequence)).unwrap();
         }
-
         for sequence in 0..10_000u64 {
-            let received = receiver.recv().await.expect("event must not be dropped");
-            assert_eq!(event_turn_id(&received), "burst");
+            let received = receiver.recv().await.unwrap();
             assert_eq!(sequence, match received { SemanticEvent::TurnStarted { context } => context.sequence, _ => unreachable!() });
         }
     }
 
-    #[tokio::test]
-    async fn closing_a_turn_removes_only_its_dedicated_sender() {
+    #[test]
+    fn global_broadcast_is_best_effort_without_subscribers() {
+        let bus = EventBus::new();
+        assert_eq!(bus.publish_global(event("turn", 0)), 0);
+    }
+
+    #[test]
+    fn turn_transport_is_mandatory() {
+        let bus = EventBus::new();
+        assert!(bus.publish_turn(event("turn", 0)).is_err());
+    }
+
+    #[test]
+    fn closing_a_turn_removes_only_its_dedicated_sender() {
         let bus = EventBus::new();
         let _turn_a = bus.subscribe_turn("turn-a");
         let _turn_b = bus.subscribe_turn("turn-b");
-
         bus.close_turn("turn-a");
-        assert!(bus.publish(event("turn-a", 0)).is_err());
-
+        assert!(bus.publish_turn(event("turn-a", 0)).is_err());
         bus.close_turn("turn-b");
         let mut turn_b = bus.subscribe_turn("turn-b");
-        bus.publish(event("turn-b", 1)).expect("turn-b has a new receiver");
-        assert_eq!(event_turn_id(&turn_b.recv().await.unwrap()), "turn-b");
+        bus.publish_turn(event("turn-b", 1)).unwrap();
+        assert_eq!(event_turn_id(&turn_b.try_recv().unwrap()), "turn-b");
     }
 
     #[tokio::test]
@@ -164,9 +153,9 @@ mod tests {
         let bus = EventBus::new();
         let mut global = bus.subscribe();
         let mut turn = bus.subscribe_turn("turn");
-
-        bus.publish(event("turn", 0)).unwrap();
-
+        let value = event("turn", 0);
+        bus.publish_global(value.clone());
+        bus.publish_turn(value).unwrap();
         assert_eq!(event_turn_id(&global.recv().await.unwrap()), "turn");
         assert_eq!(event_turn_id(&turn.recv().await.unwrap()), "turn");
     }
