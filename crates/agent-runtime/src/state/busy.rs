@@ -47,14 +47,6 @@ impl Store {
     pub(crate) async fn release_busy(&self, id: &str) {
         let _ = tokio::fs::remove_file(self.busy_path(id)).await;
     }
-
-    /// Force a session back to idle after an adapter-side turn guard drops.
-    pub async fn force_idle(&self, id: &str) {
-        if let Some(entry) = self.live.write().await.get_mut(id) {
-            entry.busy = false;
-        }
-        self.release_busy(id).await;
-    }
 }
 
 async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
