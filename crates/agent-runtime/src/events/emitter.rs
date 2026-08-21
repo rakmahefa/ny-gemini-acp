@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
+use super::integrity::{IntegrityError, ToolTerminalReason, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
 use crate::ToolUiModel;
 
@@ -21,21 +21,11 @@ impl TurnEventEmitter {
         Self::build(bus, session_id, turn_id, false)
     }
 
-    /// Creates an emitter whose semantic events must be accepted by the dedicated turn transport.
-    pub fn new_with_required_transport(
-        bus: EventBus,
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
-    ) -> Self {
+    pub fn new_with_required_transport(bus: EventBus, session_id: impl Into<String>, turn_id: impl Into<String>) -> Self {
         Self::build(bus, session_id, turn_id, true)
     }
 
-    fn build(
-        bus: EventBus,
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
-        require_transport: bool,
-    ) -> Self {
+    fn build(bus: EventBus, session_id: impl Into<String>, turn_id: impl Into<String>, require_transport: bool) -> Self {
         Self {
             bus,
             session_id: session_id.into(),
@@ -80,7 +70,6 @@ impl TurnEventEmitter {
             self.bus.publish_global(event);
             return true;
         }
-
         self.bus.publish_global(event.clone());
         match self.bus.publish_turn(event) {
             Ok(()) => true,
@@ -226,9 +215,23 @@ impl TurnEventEmitter {
         emitted
     }
 
+    fn abort_scopes(&mut self, reason: ToolTerminalReason) -> bool {
+        if self.integrity.thinking_active() && !self.thinking_completed() { return false; }
+        if self.integrity.assistant_active() && !self.assistant_completed() { return false; }
+        self.integrity.abort_open_tools(reason).is_ok()
+    }
+
     fn finish_terminal(&mut self, event: &str) -> bool {
         if !self.transport_ready() { return false; }
-        if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
+
+        if event == "turn_completed" {
+            if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
+        } else {
+            let reason = self.integrity.terminal_reason_for(event);
+            if !self.abort_scopes(reason) { return self.reject(IntegrityError::new(format!("{event} could not abort open semantic scopes"))); }
+            if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
+        }
+
         let context = self.context();
         let emitted = match event {
             "turn_cancelled" => self.publish(SemanticEvent::TurnCancelled { context }),
@@ -272,15 +275,17 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_turn_does_not_synthesize_tool_result() {
+    fn cancelled_turn_aborts_open_tool_without_synthesizing_result() {
         let (mut e, mut rx) = emitter();
         assert!(e.turn_started());
         assert!(e.tool_call_requested("call-1", "shell"));
-        assert!(!e.turn_cancelled());
+        assert!(e.turn_cancelled());
+        assert!(e.is_terminal());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
         assert!(matches!(events[0], SemanticEvent::TurnStarted { .. }));
         assert!(matches!(events[1], SemanticEvent::ToolCallRequested { .. }));
+        assert!(matches!(events[2], SemanticEvent::TurnCancelled { .. }));
     }
 
     #[test]
