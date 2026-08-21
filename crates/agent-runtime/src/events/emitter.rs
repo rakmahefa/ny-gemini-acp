@@ -13,10 +13,29 @@ pub struct TurnEventEmitter {
     integrity: TurnIntegrity,
     tool_bindings: HashMap<String, String>,
     seen_tool_ids: HashSet<String>,
+    require_transport: bool,
 }
 
 impl TurnEventEmitter {
     pub fn new(bus: EventBus, session_id: impl Into<String>, turn_id: impl Into<String>) -> Self {
+        Self::build(bus, session_id, turn_id, false)
+    }
+
+    /// Creates an emitter whose semantic events must be accepted by the dedicated turn transport.
+    pub fn new_with_required_transport(
+        bus: EventBus,
+        session_id: impl Into<String>,
+        turn_id: impl Into<String>,
+    ) -> Self {
+        Self::build(bus, session_id, turn_id, true)
+    }
+
+    fn build(
+        bus: EventBus,
+        session_id: impl Into<String>,
+        turn_id: impl Into<String>,
+        require_transport: bool,
+    ) -> Self {
         Self {
             bus,
             session_id: session_id.into(),
@@ -25,6 +44,7 @@ impl TurnEventEmitter {
             integrity: TurnIntegrity::default(),
             tool_bindings: HashMap::new(),
             seen_tool_ids: HashSet::new(),
+            require_transport,
         }
     }
 
@@ -33,7 +53,7 @@ impl TurnEventEmitter {
     pub fn is_terminal(&self) -> bool { self.integrity.phase() == TurnPhase::Terminal }
 
     fn transport_ready(&self) -> bool {
-        if self.bus.has_turn_subscriber(&self.turn_id) { true }
+        if !self.require_transport || self.bus.has_turn_subscriber(&self.turn_id) { true }
         else {
             self.reject(IntegrityError::new(format!("no ACP transport subscriber for turn {}", self.turn_id)));
             false
@@ -56,6 +76,11 @@ impl TurnEventEmitter {
     }
 
     fn publish(&self, event: SemanticEvent) -> bool {
+        if !self.require_transport {
+            self.bus.publish_global(event);
+            return true;
+        }
+
         self.bus.publish_global(event.clone());
         match self.bus.publish_turn(event) {
             Ok(()) => true,
@@ -68,9 +93,7 @@ impl TurnEventEmitter {
 
     fn bind_tool_identity(&mut self, upstream_id: &str) -> Result<String, IntegrityError> {
         if !self.seen_tool_ids.insert(upstream_id.to_owned()) {
-            return Err(IntegrityError::new(format!(
-                "tool_call_id {upstream_id} was already used in this turn"
-            )));
+            return Err(IntegrityError::new(format!("tool_call_id {upstream_id} was already used in this turn")));
         }
         let semantic_id = upstream_id.to_owned();
         self.tool_bindings.insert(upstream_id.to_owned(), semantic_id.clone());
@@ -283,9 +306,9 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_mandatory_transport_rejects_before_state_mutation() {
+    fn required_transport_rejects_before_state_mutation() {
         let bus = EventBus::new();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        let mut e = TurnEventEmitter::new_with_required_transport(bus, "s", "t");
         assert!(!e.turn_started());
         assert_eq!(e.phase(), TurnPhase::NotStarted);
         assert_eq!(e.sequence(), 0);
