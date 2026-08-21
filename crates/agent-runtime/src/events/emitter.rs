@@ -86,9 +86,7 @@ impl TurnEventEmitter {
     fn open_tool_bindings(&self) -> Vec<(String, String)> {
         let mut open = Vec::new();
         for (upstream_id, queue) in &self.tool_bindings {
-            for semantic_id in queue {
-                open.push((upstream_id.clone(), semantic_id.clone()));
-            }
+            for semantic_id in queue { open.push((upstream_id.clone(), semantic_id.clone())); }
         }
         open.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
         open
@@ -147,12 +145,7 @@ impl TurnEventEmitter {
         self.tool_call_requested_with_ui(upstream_id, name, None)
     }
 
-    pub fn tool_call_requested_with_ui(
-        &mut self,
-        upstream_id: impl Into<String>,
-        name: impl Into<String>,
-        ui: Option<ToolUiModel>,
-    ) -> bool {
+    pub fn tool_call_requested_with_ui(&mut self, upstream_id: impl Into<String>, name: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
         let upstream_id = upstream_id.into();
         if upstream_id.is_empty() { return self.reject(IntegrityError::new("tool call identity must be non-empty")); }
         let semantic_id = self.bind_tool_identity(&upstream_id);
@@ -195,12 +188,7 @@ impl TurnEventEmitter {
         self.tool_result_received_with_ui(upstream_id, result, None)
     }
 
-    pub fn tool_result_received_with_ui(
-        &mut self,
-        upstream_id: impl Into<String>,
-        result: impl Into<String>,
-        ui: Option<ToolUiModel>,
-    ) -> bool {
+    pub fn tool_result_received_with_ui(&mut self, upstream_id: impl Into<String>, result: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
         let upstream_id = upstream_id.into();
         let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
             return self.reject(IntegrityError::new(format!("tool_result_received references unknown upstream tool {upstream_id}")));
@@ -213,17 +201,10 @@ impl TurnEventEmitter {
     }
 
     fn close_open_scopes(&mut self, reason: ToolTerminalReason) -> bool {
-        if self.integrity.thinking_active() {
-            if !self.thinking_completed() { return false; }
-        }
-        if self.integrity.assistant_active() {
-            if !self.assistant_completed() { return false; }
-        }
-
+        if self.integrity.thinking_active() && !self.thinking_completed() { return false; }
+        if self.integrity.assistant_active() && !self.assistant_completed() { return false; }
         for (upstream_id, semantic_id) in self.open_tool_bindings() {
-            if let Err(error) = self.integrity.close_tool_for_terminal(&semantic_id, reason) {
-                return self.reject(error);
-            }
+            if let Err(error) = self.integrity.close_tool_for_terminal(&semantic_id, reason) { return self.reject(error); }
             let text = match reason {
                 ToolTerminalReason::TurnCancelled => "tool call closed because the turn was cancelled",
                 ToolTerminalReason::TurnFailed => "tool call closed because the turn failed",
@@ -231,11 +212,7 @@ impl TurnEventEmitter {
                 ToolTerminalReason::Result | ToolTerminalReason::PermissionDenied => "tool call closed",
             };
             let context = self.tool_context(semantic_id);
-            self.publish(SemanticEvent::ToolResultReceived {
-                context,
-                result: text.to_owned(),
-                ui: None,
-            });
+            self.publish(SemanticEvent::ToolResultReceived { context, result: text.to_owned(), ui: None });
             self.release_tool_identity(&upstream_id);
         }
         true
@@ -246,9 +223,7 @@ impl TurnEventEmitter {
         if let Err(error) = self.integrity.finish_terminal_after_scopes(event) {
             if error.message.contains("all semantic scopes") {
                 if !self.close_open_scopes(reason) { return false; }
-                if let Err(error) = self.integrity.finish_terminal_after_scopes(event) {
-                    return self.reject(error);
-                }
+                if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
             } else {
                 return self.reject(error);
             }
@@ -394,9 +369,9 @@ mod tests {
         assert!(e.tool_call_requested("model_call_0", "shell_exec"));
         assert!(e.turn_cancelled());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 3);
-        assert!(matches!(&events[1], SemanticEvent::ToolResultReceived { context, result, .. } if context.tool_call_id == "model_call_0" && result.contains("cancelled")));
-        assert!(matches!(&events[2], SemanticEvent::TurnCancelled { .. }));
+        assert_eq!(events.len(), 4);
+        assert!(matches!(&events[2], SemanticEvent::ToolResultReceived { context, result, .. } if context.tool_call_id == "model_call_0" && result.contains("cancelled")));
+        assert!(matches!(&events[3], SemanticEvent::TurnCancelled { .. }));
         assert!(events.windows(2).all(|pair| seq(&pair[0]) < seq(&pair[1])));
         assert!(!e.turn_completed());
     }
