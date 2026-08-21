@@ -66,17 +66,23 @@ impl TurnEventEmitter {
     }
 
     fn publish(&self, event: SemanticEvent) -> bool {
-        if !self.require_transport {
-            self.bus.publish_global(event);
-            return true;
-        }
-        self.bus.publish_global(event.clone());
-        match self.bus.publish_turn(event) {
-            Ok(()) => true,
-            Err(error) => {
-                tracing::error!(session=%self.session_id, turn=%self.turn_id, error=%error, "mandatory ACP semantic transport failed");
-                false
+        if self.require_transport {
+            self.bus.publish_global(event.clone());
+            match self.bus.publish_turn(event) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::error!(session=%self.session_id, turn=%self.turn_id, error=%error, "mandatory ACP semantic transport failed");
+                    false
+                }
             }
+        } else {
+            self.bus.publish_global(event.clone());
+            if self.bus.has_turn_subscriber(&self.turn_id) {
+                if let Err(error) = self.bus.publish_turn(event) {
+                    tracing::debug!(session=%self.session_id, turn=%self.turn_id, error=%error, "best-effort semantic turn transport failed");
+                }
+            }
+            true
         }
     }
 
@@ -252,6 +258,9 @@ impl TurnEventEmitter {
 
     #[cfg(test)]
     pub fn bind_count(&self) -> usize { self.tool_bindings.len() }
+
+    #[cfg(test)]
+    pub fn set_require_transport_for_test(&mut self, required: bool) { self.require_transport = required; }
 }
 
 #[cfg(test)]
