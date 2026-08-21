@@ -3,7 +3,7 @@ use std::sync::OnceLock;
 
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
-use agent_runtime::events::{EventContext, SemanticEvent};
+use agent_runtime::events::{EventContext, SemanticEvent, TurnEventEmitter};
 use agent_runtime::Cancellation;
 use tokio::sync::mpsc;
 
@@ -75,6 +75,16 @@ impl SequenceTracker {
     }
 }
 
+#[derive(Debug)]
+enum ProjectionAction {
+    Text(String),
+    Reasoning(String),
+    ToolCall { id: String, ui: agent_runtime::ToolUiModel },
+    ToolUpdate { id: String, ui: agent_runtime::ToolUiModel },
+    Terminal,
+    Ignore,
+}
+
 fn event_context(event: &SemanticEvent) -> &EventContext {
     match event {
         SemanticEvent::TurnStarted { context }
@@ -92,6 +102,37 @@ fn event_context(event: &SemanticEvent) -> &EventContext {
         | SemanticEvent::ToolExecutionStarted { context, .. }
         | SemanticEvent::ToolResultReceived { context, .. } => &context.event,
     }
+}
+
+fn project_event(
+    sequence: &mut SequenceTracker,
+    event: SemanticEvent,
+    turn_id: &str,
+) -> Result<ProjectionAction, ProjectionError> {
+    let context = event_context(&event);
+    if context.turn_id != turn_id {
+        return Err(ProjectionError::UnexpectedTurn {
+            expected: turn_id.to_owned(),
+            actual: context.turn_id.clone(),
+        });
+    }
+    sequence.observe(context)?;
+
+    Ok(match event {
+        SemanticEvent::AssistantDelta { delta, .. } => ProjectionAction::Text(delta),
+        SemanticEvent::ThinkingDelta { delta, .. } => ProjectionAction::Reasoning(delta),
+        SemanticEvent::ToolCallRequested { context, ui: Some(ui), .. } => {
+            ProjectionAction::ToolCall { id: context.tool_call_id, ui }
+        }
+        SemanticEvent::ToolExecutionStarted { context, ui: Some(ui) }
+        | SemanticEvent::ToolResultReceived { context, ui: Some(ui), .. } => {
+            ProjectionAction::ToolUpdate { id: context.tool_call_id, ui }
+        }
+        SemanticEvent::TurnCancelled { .. }
+        | SemanticEvent::TurnFailed { .. }
+        | SemanticEvent::TurnCompleted { .. } => ProjectionAction::Terminal,
+        _ => ProjectionAction::Ignore,
+    })
 }
 
 /// Projects validated semantic runtime events into ACP.
@@ -120,47 +161,31 @@ pub async fn project(
             }
         };
 
-        let context = event_context(&event);
-        if context.turn_id != turn_id {
-            metrics.unexpected_turns.fetch_add(1, Ordering::Relaxed);
-            cancellation.cancel();
-            return Err(ProjectionError::UnexpectedTurn {
-                expected: turn_id.to_owned(),
-                actual: context.turn_id.clone(),
-            });
-        }
-
-        if let Err(error) = sequence.observe(context) {
-            metrics.sequence_gaps.fetch_add(1, Ordering::Relaxed);
-            cancellation.cancel();
-            return Err(error);
-        }
-
-        let notification = match event {
-            SemanticEvent::AssistantDelta { delta, .. } => {
-                notify_text(cx, session_id, message_id, delta)
+        let action = match project_event(&mut sequence, event, turn_id) {
+            Ok(action) => action,
+            Err(error @ ProjectionError::UnexpectedTurn { .. }) => {
+                metrics.unexpected_turns.fetch_add(1, Ordering::Relaxed);
+                cancellation.cancel();
+                return Err(error);
             }
-            SemanticEvent::ThinkingDelta { delta, .. } => {
-                notify_reasoning(cx, session_id, message_id, delta)
+            Err(error @ ProjectionError::SequenceGap { .. }) => {
+                metrics.sequence_gaps.fetch_add(1, Ordering::Relaxed);
+                cancellation.cancel();
+                return Err(error);
             }
-            SemanticEvent::ToolCallRequested {
-                context,
-                ui: Some(ui),
-                ..
-            } => notify_tool_call(cx, session_id, &context.tool_call_id, &ui),
-            SemanticEvent::ToolExecutionStarted {
-                context,
-                ui: Some(ui),
-            } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui),
-            SemanticEvent::ToolResultReceived {
-                context,
-                ui: Some(ui),
-                ..
-            } => notify_tool_call_update(cx, session_id, &context.tool_call_id, &ui),
-            SemanticEvent::TurnCancelled { .. }
-            | SemanticEvent::TurnFailed { .. }
-            | SemanticEvent::TurnCompleted { .. } => return Ok(()),
-            _ => Ok(()),
+            Err(error) => {
+                cancellation.cancel();
+                return Err(error);
+            }
+        };
+
+        let notification = match action {
+            ProjectionAction::Text(text) => notify_text(cx, session_id, message_id, text),
+            ProjectionAction::Reasoning(text) => notify_reasoning(cx, session_id, message_id, text),
+            ProjectionAction::ToolCall { id, ui } => notify_tool_call(cx, session_id, &id, &ui),
+            ProjectionAction::ToolUpdate { id, ui } => notify_tool_call_update(cx, session_id, &id, &ui),
+            ProjectionAction::Terminal => return Ok(()),
+            ProjectionAction::Ignore => Ok(()),
         };
 
         if let Err(error) = notification {
@@ -174,6 +199,7 @@ pub async fn project(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn context(sequence: u64) -> EventContext {
         EventContext::new("session", "turn", sequence)
@@ -222,5 +248,82 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.sequence_gaps, 2);
         assert_eq!(snapshot.acp_failures, 3);
+    }
+
+    #[tokio::test]
+    async fn semantic_event_to_acp_projection_rejects_injected_loss_before_notification() {
+        let bus = agent_runtime::EventBus::new();
+        let mut receiver = bus.subscribe_turn("turn-e2e");
+        let mut emitter = TurnEventEmitter::new(bus, "session-e2e", "turn-e2e");
+        assert!(emitter.turn_started());
+        assert!(emitter.assistant_started());
+        assert!(emitter.assistant_delta("hello"));
+        assert!(emitter.assistant_completed());
+        assert!(emitter.turn_completed());
+
+        let mut events = Vec::new();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        assert_eq!(events.len(), 5);
+
+        // Inject transport corruption: drop AssistantDelta(sequence=2)
+        // before the ACP projection sees it.
+        events.retain(|event| event_context(event).sequence != 2);
+
+        let mut sequence = SequenceTracker::default();
+        let mut actions = Vec::new();
+        for event in events {
+            match project_event(&mut sequence, event, "turn-e2e") {
+                Ok(action) => {
+                    let terminal = matches!(action, ProjectionAction::Terminal);
+                    actions.push(action);
+                    if terminal {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    assert!(matches!(
+                        error,
+                        ProjectionError::SequenceGap { expected: 2, actual: 3 }
+                    ));
+                    assert!(actions.iter().all(|action| !matches!(action, ProjectionAction::Terminal)));
+                    return;
+                }
+            }
+        }
+        panic!("injected event loss was not rejected");
+    }
+
+    #[tokio::test]
+    async fn semantic_event_to_acp_projection_preserves_tool_id_and_ui() {
+        let bus = agent_runtime::EventBus::new();
+        let mut receiver = bus.subscribe_turn("turn-tool-e2e");
+        let mut emitter = TurnEventEmitter::new(bus, "session-e2e", "turn-tool-e2e");
+        let ui = agent_runtime::ToolUiModel::generic("shell_exec", json!({"command":"pwd"}));
+        assert!(emitter.turn_started());
+        assert!(emitter.tool_call_requested_with_ui("provider-call-7", "shell_exec", Some(ui.clone())));
+        assert!(emitter.tool_execution_started_with_ui("provider-call-7", Some(ui.clone().running())));
+        assert!(emitter.tool_result_received_with_ui("provider-call-7", "ok", Some(ui.clone().completed(true, Some(json!({"text":"ok"}))))));
+        assert!(emitter.turn_completed());
+
+        let mut sequence = SequenceTracker::default();
+        let mut tool_call_id = None;
+        let mut tool_status = None;
+        while let Ok(event) = receiver.try_recv() {
+            match project_event(&mut sequence, event, "turn-tool-e2e").unwrap() {
+                ProjectionAction::ToolCall { id, ui } => {
+                    tool_call_id = Some(id);
+                    tool_status = Some(ui.status);
+                }
+                ProjectionAction::ToolUpdate { id, ui } => {
+                    assert_eq!(id, "provider-call-7");
+                    tool_status = Some(ui.status);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(tool_call_id.as_deref(), Some("provider-call-7"));
+        assert_eq!(tool_status, Some(agent_runtime::ToolUiStatus::Succeeded));
     }
 }
