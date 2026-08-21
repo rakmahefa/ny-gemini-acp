@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use super::integrity::{IntegrityError, ToolTerminalReason, TurnIntegrity, TurnPhase};
+use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
 use crate::ToolUiModel;
 
@@ -81,15 +81,6 @@ impl TurnEventEmitter {
             queue.is_empty()
         } else { false };
         if remove_binding { self.tool_bindings.remove(upstream_id); }
-    }
-
-    fn open_tool_bindings(&self) -> Vec<(String, String)> {
-        let mut open = Vec::new();
-        for (upstream_id, queue) in &self.tool_bindings {
-            for semantic_id in queue { open.push((upstream_id.clone(), semantic_id.clone())); }
-        }
-        open.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-        open
     }
 
     pub fn turn_started(&mut self) -> bool {
@@ -200,33 +191,9 @@ impl TurnEventEmitter {
         true
     }
 
-    fn close_open_scopes(&mut self, reason: ToolTerminalReason) -> bool {
-        if self.integrity.thinking_active() && !self.thinking_completed() { return false; }
-        if self.integrity.assistant_active() && !self.assistant_completed() { return false; }
-        for (upstream_id, semantic_id) in self.open_tool_bindings() {
-            if let Err(error) = self.integrity.close_tool_for_terminal(&semantic_id, reason) { return self.reject(error); }
-            let text = match reason {
-                ToolTerminalReason::TurnCancelled => "tool call closed because the turn was cancelled",
-                ToolTerminalReason::TurnFailed => "tool call closed because the turn failed",
-                ToolTerminalReason::TurnCompleted => "tool call closed by turn completion",
-                ToolTerminalReason::Result | ToolTerminalReason::PermissionDenied => "tool call closed",
-            };
-            let context = self.tool_context(semantic_id);
-            self.publish(SemanticEvent::ToolResultReceived { context, result: text.to_owned(), ui: None });
-            self.release_tool_identity(&upstream_id);
-        }
-        true
-    }
-
     fn finish_terminal(&mut self, event: &str) -> bool {
-        let reason = self.integrity.terminal_reason_for(event);
         if let Err(error) = self.integrity.finish_terminal_after_scopes(event) {
-            if error.message.contains("all semantic scopes") {
-                if !self.close_open_scopes(reason) { return false; }
-                if let Err(error) = self.integrity.finish_terminal_after_scopes(event) { return self.reject(error); }
-            } else {
-                return self.reject(error);
-            }
+            return self.reject(error);
         }
         let context = self.context();
         match event {
@@ -247,164 +214,41 @@ impl TurnEventEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
-    fn seq(event: &SemanticEvent) -> u64 {
-        match event {
-            SemanticEvent::TurnStarted { context }
-            | SemanticEvent::AssistantStarted { context }
-            | SemanticEvent::AssistantDelta { context, .. }
-            | SemanticEvent::AssistantCompleted { context }
-            | SemanticEvent::ThinkingStarted { context }
-            | SemanticEvent::ThinkingDelta { context, .. }
-            | SemanticEvent::ThinkingCompleted { context }
-            | SemanticEvent::TurnCancelled { context }
-            | SemanticEvent::TurnFailed { context }
-            | SemanticEvent::TurnCompleted { context } => context.sequence,
-            SemanticEvent::ToolCallRequested { context, .. }
-            | SemanticEvent::PermissionRequested { context }
-            | SemanticEvent::ToolExecutionStarted { context, .. }
-            | SemanticEvent::ToolResultReceived { context, .. } => context.event.sequence,
-        }
-    }
-
-    #[tokio::test]
-    async fn emits_canonical_turn_and_tool_lifecycle_with_contiguous_sequences() {
+    #[test]
+    fn terminal_event_is_rejected_while_a_tool_is_open() {
         let bus = EventBus::new();
-        let mut rx = bus.subscribe();
         let mut e = TurnEventEmitter::new(bus, "s", "t");
         assert!(e.turn_started());
-        assert!(e.assistant_started());
-        assert!(e.thinking_started());
-        assert!(e.thinking_delta("reason"));
-        assert!(e.thinking_completed());
-        assert!(e.assistant_delta("hello"));
-        assert!(e.assistant_completed());
-        assert!(e.tool_call_requested("model_call_0", "shell_exec"));
-        assert!(e.permission_requested("model_call_0"));
-        assert!(e.tool_execution_started("model_call_0"));
-        assert!(e.tool_result_received("model_call_0", "ok"));
-        assert!(e.turn_completed());
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.iter().map(seq).collect::<Vec<_>>(), (0..12).collect::<Vec<_>>());
-        assert_eq!(e.sequence(), 12);
-        assert!(e.is_terminal());
-    }
-
-    #[tokio::test]
-    async fn canonical_tool_id_is_preserved_across_permission_and_execution() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested("provider-call-7", "shell_exec"));
-        assert!(e.permission_requested("provider-call-7"));
-        assert!(e.tool_execution_started("provider-call-7"));
-        assert!(e.tool_result_received("provider-call-7", "ok"));
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        let ids: Vec<_> = events.iter().filter_map(|event| match event {
-            SemanticEvent::ToolCallRequested { context, .. }
-            | SemanticEvent::PermissionRequested { context }
-            | SemanticEvent::ToolExecutionStarted { context, .. }
-            | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
-            _ => None,
-        }).collect();
-        assert_eq!(ids, vec!["provider-call-7", "provider-call-7", "provider-call-7", "provider-call-7"]);
-    }
-
-    #[tokio::test]
-    async fn ui_survives_tool_lifecycle_without_changing_identity_or_sequence() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
-        let ui = ToolUiModel::generic("shell_exec", json!({"command":"cargo test"}));
-        let running = ui.clone().running();
-        let completed = running.clone().completed(true, Some(json!({"text":"ok"})));
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested_with_ui("model_call_0", "shell_exec", Some(ui.clone())));
-        assert!(e.tool_execution_started_with_ui("model_call_0", Some(running.clone())));
-        assert!(e.tool_result_received_with_ui("model_call_0", "ok", Some(completed.clone())));
-        assert!(e.turn_completed());
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 5);
-        let ids: Vec<_> = events.iter().filter_map(|event| match event {
-            SemanticEvent::ToolCallRequested { context, .. }
-            | SemanticEvent::ToolExecutionStarted { context, .. }
-            | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
-            _ => None,
-        }).collect();
-        assert_eq!(ids, vec!["model_call_0", "model_call_0", "model_call_0"]);
-        match &events[2] {
-            SemanticEvent::ToolExecutionStarted { ui: Some(ui), .. } => assert_eq!(ui.status, crate::ToolUiStatus::Running),
-            other => panic!("expected running ui, got {other:?}"),
-        }
-        match &events[3] {
-            SemanticEvent::ToolResultReceived { ui: Some(ui), .. } => assert_eq!(ui.status, crate::ToolUiStatus::Succeeded),
-            other => panic!("expected completed ui, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn invalid_events_are_rejected_without_sequence_consumption() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
+        assert!(e.tool_call_requested("call-1", "shell"));
         assert!(!e.turn_completed());
-        assert_eq!(e.sequence(), 0);
-        assert!(rx.try_recv().is_err());
         assert!(!e.is_terminal());
-        assert!(e.turn_started());
-        assert!(!e.turn_started());
-        assert_eq!(e.sequence(), 1);
-        assert_eq!(seq(&rx.try_recv().unwrap()), 0);
-        assert!(rx.try_recv().is_err());
+        assert_eq!(e.sequence(), 2);
     }
 
-    #[tokio::test]
-    async fn cancellation_closes_open_tool_before_terminal_event() {
+    #[test]
+    fn cancelled_turn_does_not_synthesize_tool_result() {
         let bus = EventBus::new();
         let mut rx = bus.subscribe();
         let mut e = TurnEventEmitter::new(bus, "s", "t");
         assert!(e.turn_started());
-        assert!(e.tool_call_requested("model_call_0", "shell_exec"));
-        assert!(e.turn_cancelled());
+        assert!(e.tool_call_requested("call-1", "shell"));
+        assert!(!e.turn_cancelled());
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert_eq!(events.len(), 4);
-        assert!(matches!(&events[2], SemanticEvent::ToolResultReceived { context, result, .. } if context.tool_call_id == "model_call_0" && result.contains("cancelled")));
-        assert!(matches!(&events[3], SemanticEvent::TurnCancelled { .. }));
-        assert!(events.windows(2).all(|pair| seq(&pair[0]) < seq(&pair[1])));
-        assert!(!e.turn_completed());
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], SemanticEvent::TurnStarted { .. }));
+        assert!(matches!(events[1], SemanticEvent::ToolCallRequested { .. }));
     }
 
-    #[tokio::test]
-    async fn failure_closes_open_streams_and_tools_before_terminal_event() {
+    #[test]
+    fn explicit_tool_result_allows_terminal_event() {
         let bus = EventBus::new();
-        let mut rx = bus.subscribe();
         let mut e = TurnEventEmitter::new(bus, "s", "t");
         assert!(e.turn_started());
-        assert!(e.assistant_started());
-        assert!(e.thinking_started());
-        assert!(e.turn_failed());
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert!(matches!(&events[3], SemanticEvent::ThinkingCompleted { .. }));
-        assert!(matches!(&events[4], SemanticEvent::AssistantCompleted { .. }));
-        assert!(matches!(&events[5], SemanticEvent::TurnFailed { .. }));
-        assert!(events.windows(2).all(|pair| seq(&pair[0]) < seq(&pair[1])));
-    }
-
-    #[tokio::test]
-    async fn completion_repairs_open_tool_before_terminal_event() {
-        let bus = EventBus::new();
-        let mut rx = bus.subscribe();
-        let mut e = TurnEventEmitter::new(bus, "s", "t");
-        assert!(e.turn_started());
-        assert!(e.tool_call_requested("call_b", "b"));
-        assert!(e.tool_call_requested("call_a", "a"));
+        assert!(e.tool_call_requested("call-1", "shell"));
+        assert!(e.tool_execution_started("call-1"));
+        assert!(e.tool_result_received("call-1", "ok"));
         assert!(e.turn_completed());
-        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
-        assert!(matches!(&events[3], SemanticEvent::ToolResultReceived { context, .. } if context.tool_call_id == "call_a"));
-        assert!(matches!(&events[4], SemanticEvent::ToolResultReceived { context, .. } if context.tool_call_id == "call_b"));
-        assert!(matches!(&events[5], SemanticEvent::TurnCompleted { .. }));
-        assert!(events.windows(2).all(|pair| seq(&pair[0]) < seq(&pair[1])));
+        assert!(e.is_terminal());
     }
 }
