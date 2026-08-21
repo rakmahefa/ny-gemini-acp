@@ -72,7 +72,14 @@ impl AgentLoop {
     pub fn with_permission_handler(mut self, handler: Arc<dyn ToolPermissionHandler>) -> Self { self.permission_handler = Some(handler); self }
     pub fn config(&self) -> AgentLoopConfig { self.config }
 
-    pub async fn run<F>(&self, session: &mut Session, references: &[String], cancellation: Cancellation, sink: &mut dyn TurnEventSink, build_prompt: F) -> Result<AgentLoopOutcome, AgentLoopError>
+    pub async fn run<F>(
+        &self,
+        session: &mut Session,
+        references: &[String],
+        cancellation: Cancellation,
+        sink: &mut dyn TurnEventSink,
+        build_prompt: F,
+    ) -> Result<AgentLoopOutcome, AgentLoopError>
     where F: Fn(&Session, &dyn ToolProvider) -> String {
         validate_session(session)?;
         if cancellation.is_cancelled() { let _ = sink.turn_cancelled(); return Err(AgentLoopError::Cancelled); }
@@ -254,7 +261,39 @@ mod tests {
             for item in items { tx.send(item).await.map_err(|_| LlmError::Provider("fake channel closed".into()))?; }
             drop(tx); Ok(rx)
         }
-        async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> { Err(LlmError::Unavailable("not implemented".into())) }
-        fn model_info(&self, _: &str) -> crate::LlmModelInfo { crate::LlmModelInfo::default() }
+        async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> { Err(LlmError::Unavailable("not supported".into())) }
+        fn model_info(&self, _: &str) -> crate::LlmModelInfo { crate::LlmModelInfo { supports_reasoning: true } }
+    }
+
+    fn session() -> Session {
+        Session::new("sess_0123456789abcdef0123456789abcdef".into(), std::env::temp_dir(), vec![], "fake-model")
+    }
+    fn emitter() -> crate::TurnEventEmitter {
+        crate::TurnEventEmitter::new(crate::EventBus::new(), "sess_0123456789abcdef0123456789abcdef", "turn_test")
+    }
+    #[tokio::test]
+    async fn completes_text_round() {
+        let llm = Arc::new(FakeLlm::default());
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("hello".into()))]);
+        let agent = AgentLoop::new(llm, Arc::new(crate::NullToolProvider), AgentLoopConfig::default()).unwrap();
+        let mut session = session(); let mut emitter = emitter();
+        let outcome = agent.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into()).await.unwrap();
+        assert_eq!(outcome.output, "hello"); assert_eq!(outcome.rounds, 1);
+    }
+    #[tokio::test]
+    async fn canonical_tool_ids_survive_history_roundtrip() {
+        let llm = Arc::new(FakeLlm::default());
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::ToolCall { id: "call-42".into(), name: "search".into(), arguments: serde_json::json!({"q": "rust"}) })]);
+        llm.rounds.lock().unwrap().push_back(vec![Ok(ModelEvent::TextDelta("done".into()))]);
+        let agent = AgentLoop::new(llm, Arc::new(crate::NullToolProvider), AgentLoopConfig::default()).unwrap();
+        let mut session = session(); let mut emitter = emitter();
+        let _ = agent.run(&mut session, &[], Cancellation::new(), &mut emitter, |_, _| "prompt".into()).await;
+        let raw = serde_json::to_string(&session.messages).unwrap();
+        let restored: crate::state::History = serde_json::from_str(&raw).unwrap();
+        assert!(restored.entries().iter().any(|entry| matches!(entry, crate::state::HistoryEntry::ToolCall { id, name, .. } if id == "call-42" && name == "search")));
+    }
+    #[test]
+    fn rejects_zero_limits() {
+        assert!(AgentLoop::new(Arc::new(crate::NullLlmProvider), Arc::new(crate::NullToolProvider), AgentLoopConfig { max_rounds: 0, max_tool_calls_per_round: 1 }).is_err());
     }
 }
