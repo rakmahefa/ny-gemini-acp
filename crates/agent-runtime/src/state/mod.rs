@@ -3,15 +3,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
-use tokio::sync::{watch, RwLock};
-
-use crate::Cancellation;
+use tokio::sync::RwLock;
 
 mod busy;
 pub mod history;
 mod persistence;
 mod snapshot;
-pub(crate) mod turn_support;
 mod types;
 
 pub use history::{History, HistoryEntry};
@@ -25,47 +22,36 @@ pub struct Store {
 }
 
 impl Store {
-    pub async fn begin_turn(
-        &self,
-        id: &str,
-    ) -> Result<(Session, watch::Receiver<bool>, u64), TurnError> {
+    /// Begins a persistence transaction for a turn.
+    ///
+    /// Runtime concurrency and cancellation are owned by `TurnManager`; this method only
+    /// acquires the cross-process busy sentinel and advances a persistence generation.
+    pub async fn begin_turn(&self, id: &str) -> Result<(Session, u64), TurnError> {
         let mut live = self.live.write().await;
-        if let Some(entry) = live.get_mut(id) {
-            if entry.busy {
-                return Err(TurnError::AlreadyRunning);
-            }
-            self.acquire_busy(id)
-                .await
-                .map_err(|_| TurnError::AlreadyRunning)?;
-            entry.busy = true;
-            entry.generation += 1;
-            let gen = entry.generation;
-            entry.cancel = Cancellation::new();
-            let rx = entry.cancel.subscribe();
-            turn_support::begin_partial_output(id);
-            return Ok((entry.session.clone(), rx, gen));
-        }
-
-        let session = self
-            .read(id)
-            .await
-            .ok_or_else(|| TurnError::NotFound(id.to_string()))?;
         self.acquire_busy(id)
             .await
             .map_err(|_| TurnError::AlreadyRunning)?;
-        let cancellation = Cancellation::new();
-        let rx = cancellation.subscribe();
-        turn_support::begin_partial_output(id);
+
+        if let Some(entry) = live.get_mut(id) {
+            entry.generation = entry.generation.saturating_add(1);
+            return Ok((entry.session.clone(), entry.generation));
+        }
+
+        let session = match self.read(id).await {
+            Some(session) => session,
+            None => {
+                self.release_busy(id).await;
+                return Err(TurnError::NotFound(id.to_string()));
+            }
+        };
         live.insert(
             id.to_string(),
             Live {
                 session: session.clone(),
-                cancel: cancellation,
-                busy: true,
                 generation: 1,
             },
         );
-        Ok((session, rx, 1))
+        Ok((session, 1))
     }
 
     pub async fn update_session<F>(&self, id: &str, f: F) -> Result<()>
@@ -106,14 +92,7 @@ impl Store {
             }
         }
 
-        let partial = turn_support::take_partial_output(id);
-        if !partial.trim().is_empty()
-            && matches!(session.messages.last(), Some(HistoryEntry::User { .. }))
-        {
-            session.messages.push_assistant(partial);
-        }
         session.messages.normalize_legacy();
-
         session.updated_at = crate::time::now_iso();
         session.turn_count += 1;
         if let Some(current) = self.get(id).await {
@@ -128,36 +107,16 @@ impl Store {
         let persist_result = self.persist(&session).await;
         if let Some(entry) = self.live.write().await.get_mut(id) {
             entry.session = session.clone();
-            entry.busy = false;
         }
         self.release_busy(id).await;
         persist_result
     }
 
-    pub async fn cancel(&self, id: &str) {
-        let live = self.live.read().await;
-        if let Some(entry) = live.get(id) {
-            entry.cancel.cancel();
-        }
-    }
-
-    pub async fn cancel_all(&self) {
-        let live = self.live.read().await;
-        for (id, entry) in live.iter() {
-            entry.cancel.cancel();
-            tracing::debug!(session = %id, "session cancellation requested");
-        }
-    }
-
     pub async fn close(&self, id: &str) -> bool {
         let mut live = self.live.write().await;
         let existed = live.contains_key(id) || self.path(id).exists();
-        if let Some(entry) = live.get(id) {
-            entry.cancel.cancel();
-        }
         live.remove(id);
         drop(live);
-        let _ = turn_support::take_partial_output(id);
         self.release_busy(id).await;
         existed
     }
@@ -174,8 +133,6 @@ impl Store {
             forked.id.clone(),
             Live {
                 session: forked.clone(),
-                cancel: Cancellation::new(),
-                busy: false,
                 generation: 0,
             },
         );
