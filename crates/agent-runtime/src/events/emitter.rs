@@ -12,7 +12,6 @@ pub struct TurnEventEmitter {
     session_id: String,
     turn_id: String,
     next_sequence: u64,
-    next_tool_invocation: u64,
     integrity: TurnIntegrity,
     tool_bindings: HashMap<String, String>,
 }
@@ -24,7 +23,6 @@ impl TurnEventEmitter {
             session_id: session_id.into(),
             turn_id: turn_id.into(),
             next_sequence: 0,
-            next_tool_invocation: 0,
             integrity: TurnIntegrity::default(),
             tool_bindings: HashMap::new(),
         }
@@ -66,12 +64,6 @@ impl TurnEventEmitter {
                 false
             }
         }
-    }
-
-    fn allocate_tool_identity(&mut self) -> String {
-        let index = self.next_tool_invocation;
-        self.next_tool_invocation = self.next_tool_invocation.saturating_add(1);
-        format!("{}/tool_{}", self.turn_id, index)
     }
 
     fn bind_tool_identity(&mut self, upstream_id: &str) -> Result<String, IntegrityError> {
