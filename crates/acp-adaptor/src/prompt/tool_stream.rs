@@ -1,3 +1,6 @@
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+
 use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::events::{EventContext, SemanticEvent};
@@ -7,6 +10,39 @@ use tokio::sync::mpsc;
 use super::notify::{
     notify_reasoning, notify_text, notify_tool_call, notify_tool_call_update,
 };
+
+#[derive(Debug, Default)]
+pub struct ProjectionMetrics {
+    pub sequence_gaps: AtomicU64,
+    pub unexpected_turns: AtomicU64,
+    pub acp_failures: AtomicU64,
+    pub transport_closes: AtomicU64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProjectionMetricsSnapshot {
+    pub sequence_gaps: u64,
+    pub unexpected_turns: u64,
+    pub acp_failures: u64,
+    pub transport_closes: u64,
+}
+
+impl ProjectionMetrics {
+    pub fn snapshot(&self) -> ProjectionMetricsSnapshot {
+        ProjectionMetricsSnapshot {
+            sequence_gaps: self.sequence_gaps.load(Ordering::Relaxed),
+            unexpected_turns: self.unexpected_turns.load(Ordering::Relaxed),
+            acp_failures: self.acp_failures.load(Ordering::Relaxed),
+            transport_closes: self.transport_closes.load(Ordering::Relaxed),
+        }
+    }
+}
+
+static METRICS: OnceLock<ProjectionMetrics> = OnceLock::new();
+
+pub fn projection_metrics() -> &'static ProjectionMetrics {
+    METRICS.get_or_init(ProjectionMetrics::default)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectionError {
@@ -71,12 +107,14 @@ pub async fn project(
     turn_id: &str,
     cancellation: Cancellation,
 ) -> Result<(), ProjectionError> {
+    let metrics = projection_metrics();
     let mut sequence = SequenceTracker::default();
 
     loop {
         let event = match events.recv().await {
             Some(event) => event,
             None => {
+                metrics.transport_closes.fetch_add(1, Ordering::Relaxed);
                 cancellation.cancel();
                 return Err(ProjectionError::Closed);
             }
@@ -84,6 +122,7 @@ pub async fn project(
 
         let context = event_context(&event);
         if context.turn_id != turn_id {
+            metrics.unexpected_turns.fetch_add(1, Ordering::Relaxed);
             cancellation.cancel();
             return Err(ProjectionError::UnexpectedTurn {
                 expected: turn_id.to_owned(),
@@ -91,7 +130,11 @@ pub async fn project(
             });
         }
 
-        sequence.observe(context)?;
+        if let Err(error) = sequence.observe(context) {
+            metrics.sequence_gaps.fetch_add(1, Ordering::Relaxed);
+            cancellation.cancel();
+            return Err(error);
+        }
 
         let notification = match event {
             SemanticEvent::AssistantDelta { delta, .. } => {
@@ -121,6 +164,7 @@ pub async fn project(
         };
 
         if let Err(error) = notification {
+            metrics.acp_failures.fetch_add(1, Ordering::Relaxed);
             cancellation.cancel();
             return Err(ProjectionError::Acp(error));
         }
@@ -168,5 +212,15 @@ mod tests {
                 actual: 1
             }
         ));
+    }
+
+    #[test]
+    fn metrics_are_snapshotable() {
+        let metrics = ProjectionMetrics::default();
+        metrics.sequence_gaps.fetch_add(2, Ordering::Relaxed);
+        metrics.acp_failures.fetch_add(3, Ordering::Relaxed);
+        let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.sequence_gaps, 2);
+        assert_eq!(snapshot.acp_failures, 3);
     }
 }
