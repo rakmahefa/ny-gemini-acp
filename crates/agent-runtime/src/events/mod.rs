@@ -6,7 +6,6 @@ mod integrity;
 mod model_projection;
 mod sink;
 mod stream;
-mod tool_sink;
 
 pub use bus::EventBus;
 pub use context::{EventContext, ToolEventContext};
