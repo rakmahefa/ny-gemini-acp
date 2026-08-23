@@ -147,11 +147,15 @@ fn parse_results(html: &str, max_results: usize) -> Vec<SearchResult> {
             break;
         };
         let class_start = cursor + start;
+        let Some(anchor_start) = html[..class_start].rfind("<a ") else {
+            cursor = class_start + 1;
+            continue;
+        };
         let Some(tag_end_rel) = html[class_start..].find('>') else {
             break;
         };
         let tag_end = class_start + tag_end_rel;
-        let opening = &html[class_start..tag_end];
+        let opening = &html[anchor_start..tag_end];
         let Some(href) = extract_attribute(opening, "href") else {
             cursor = tag_end + 1;
             continue;
