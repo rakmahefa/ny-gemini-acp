@@ -102,6 +102,7 @@ impl ToolRegistry {
         self.register(Box::new(crate::tools::builtin::filesystem::ListDirectoryTool));
         self.register(Box::new(crate::tools::builtin::shell::ShellExecTool));
         self.register(Box::new(crate::tools::builtin::search::SearchTool));
+        self.register(Box::new(crate::tools::builtin::web_search::WebSearchTool));
         self.register(Box::new(crate::tools::builtin::composed::SearchAndReadTool));
         self.register(Box::new(crate::tools::builtin::composed::ReplaceInFileTool));
         self.register(Box::new(crate::tools::interactive::AskUserQuestionTool));
@@ -143,7 +144,7 @@ mod tests {
         let reg = ToolRegistry::builtin();
         let defs = reg.definitions();
         let names: Vec<&str> = defs.iter().filter_map(|d| d.get("name").and_then(Value::as_str)).collect();
-        for expected in ["file_read", "file_write", "file_edit", "glob", "list_directory", "shell_exec", "search", "search_and_read", "replace_in_file", "AskUserQuestion"] {
+        for expected in ["file_read", "file_write", "file_edit", "glob", "list_directory", "shell_exec", "search", "web_search", "search_and_read", "replace_in_file", "AskUserQuestion"] {
             assert!(names.contains(&expected), "missing {expected}");
         }
         assert!(!names.contains(&"FollowUp"), "FollowUp must not be an executable tool");
