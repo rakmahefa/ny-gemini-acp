@@ -111,18 +111,12 @@ async fn search_duckduckgo(
     region: &str,
     max_results: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    search_endpoint(
-        &Client::builder()
-            .timeout(REQUEST_TIMEOUT)
-            .user_agent("ny-gemini-acp/0.2 web_search")
-            .build()
-            .map_err(|error| format!("initialisation HTTP impossible: {error}"))?,
-        SEARCH_ENDPOINT,
-        query,
-        region,
-        max_results,
-    )
-    .await
+    let client = Client::builder()
+        .timeout(REQUEST_TIMEOUT)
+        .user_agent("ny-gemini-acp/0.2 web_search")
+        .build()
+        .map_err(|error| format!("initialisation HTTP impossible: {error}"))?;
+    search_endpoint(&client, SEARCH_ENDPOINT, query, region, max_results).await
 }
 
 async fn search_endpoint(
@@ -146,13 +140,12 @@ async fn search_endpoint(
 
     let status = response.status();
     if !status.is_success() {
-        let message = match status.as_u16() {
+        return Err(match status.as_u16() {
             429 => "limite de requêtes du moteur web atteinte".to_owned(),
             403 => "moteur web a refusé la requête".to_owned(),
             500..=599 => format!("moteur web indisponible: HTTP {status}"),
             _ => format!("moteur web indisponible: HTTP {status}"),
-        };
-        return Err(message);
+        });
     }
 
     if let Some(length) = response.content_length() {
@@ -266,13 +259,13 @@ fn extract_attribute(tag: &str, attribute: &str) -> Option<String> {
             .find(|c: char| c.is_whitespace() || c == '=')
             .unwrap_or(rest.len());
         let key = &rest[..key_end];
-        rest = &rest[key_end..].trim_start();
+        rest = rest[key_end..].trim_start();
         if !rest.starts_with('=') {
             let skip = rest.find(char::is_whitespace).unwrap_or(rest.len());
             rest = &rest[skip..];
             continue;
         }
-        rest = &rest[1..].trim_start();
+        rest = rest[1..].trim_start();
         let quote = rest.chars().next()?;
         if quote != '\'' && quote != '"' {
             let value_end = rest
@@ -321,7 +314,10 @@ fn normalize_result_url(url: &str) -> String {
         return url;
     };
 
-    if parsed.domain().is_some_and(|domain| domain.ends_with("duckduckgo.com")) {
+    if parsed
+        .domain()
+        .is_some_and(|domain| domain.ends_with("duckduckgo.com"))
+    {
         if let Some((_, target)) = parsed.query_pairs().find(|(key, _)| key == "uddg") {
             return target.into_owned();
         }
@@ -451,9 +447,7 @@ mod tests {
     fn parser_respects_result_limit() {
         let html = (0..4)
             .map(|i| {
-                format!(
-                    r#"<a class="result__a" href="https://example.com/{i}">Result {i}</a><a class="result__snippet">Snippet {i}</a>"#
-                )
+                format!(r#"<a class="result__a" href="https://example.com/{i}">Result {i}</a><a class="result__snippet">Snippet {i}</a>"#)
             })
             .collect::<String>();
         let results = parse_results(&html, 2);
@@ -462,7 +456,10 @@ mod tests {
 
     #[test]
     fn url_normalization_preserves_direct_urls() {
-        assert_eq!(normalize_result_url("https://example.com/a?q=1"), "https://example.com/a?q=1");
+        assert_eq!(
+            normalize_result_url("https://example.com/a?q=1"),
+            "https://example.com/a?q=1"
+        );
     }
 
     #[tokio::test]
@@ -476,7 +473,11 @@ mod tests {
     #[tokio::test]
     async fn overlong_query_is_rejected_without_network() {
         let result = WebSearchTool
-            .execute(&json!({"query":"x".repeat(MAX_QUERY_CHARS + 1)}), Path::new("."), &[])
+            .execute(
+                &json!({"query":"x".repeat(MAX_QUERY_CHARS + 1)}),
+                Path::new("."),
+                &[],
+            )
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("trop long")));
     }
@@ -500,7 +501,10 @@ mod tests {
             socket.write_all(&payload).await.unwrap();
         });
 
-        let client = Client::builder().timeout(Duration::from_secs(2)).build().unwrap();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
         let results = search_endpoint(
             &client,
             &format!("http://{address}/html/"),
@@ -532,7 +536,10 @@ mod tests {
             socket.write_all(headers.as_bytes()).await.unwrap();
         });
 
-        let client = Client::builder().timeout(Duration::from_secs(2)).build().unwrap();
+        let client = Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
         let error = search_endpoint(
             &client,
             &format!("http://{address}/html/"),
