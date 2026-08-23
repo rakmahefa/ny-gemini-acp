@@ -70,29 +70,22 @@ fn ui_kind(name: &str) -> ToolUiKind {
     }
 }
 
-fn terminal_id(name: &str, call_id: &str) -> Option<String> {
-    (name == "shell_exec" && !call_id.trim().is_empty())
-        .then(|| format!("terminal-{call_id}"))
-}
-
 fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
     values.iter().filter_map(|value| serde_json::to_value(value).ok()).collect()
 }
 
-fn presentation_info(call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
-    let terminal = terminal_id(name, call_id);
-    ToolInfo::build(name, arguments, cwd, terminal.as_deref())
+fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
+    ToolInfo::build(name, arguments, cwd, None)
 }
 
-fn pending_ui(call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
-    let info = presentation_info(call_id, name, arguments, cwd);
+fn pending_ui(_call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
+    let info = presentation_info(name, arguments, cwd);
     ToolUiModel::pending(ui_kind(name), info.title.clone(), info.title, bounded_raw_input(arguments))
         .with_content(rich_values(&info.content))
         .with_locations(rich_values(&info.locations))
 }
 
 fn completed_ui_from_info(
-    call_id: &str,
     name: &str,
     arguments: &Value,
     content: &str,
@@ -100,18 +93,18 @@ fn completed_ui_from_info(
     cwd: &Path,
     info: &ToolInfo,
 ) -> ToolUiModel {
-    let terminal = terminal_id(name, call_id);
-    let rendered = result_update(name, arguments, content, is_ok, cwd, terminal.as_deref());
+    let rendered = result_update(name, arguments, content, is_ok, cwd, None);
 
     // Contract visuel: l'Input appartient uniquement au ToolCall initial.
-    // Le Diff reste persistant au résultat; Terminal est réémis uniquement par ResultUpdate.
+    // Les résultats restent des ToolCallContent textuels/diff structurés; aucun
+    // terminal ACP n'est injecté par le shell_exec actuel.
     let mut rich_content = info
         .content
         .iter()
         .filter_map(|item| {
             let value = serde_json::to_value(item).ok()?;
             let kind = value.get("type").and_then(Value::as_str)?;
-            (kind != "content" && kind != "terminal").then_some(value)
+            (kind != "terminal").then_some(value)
         })
         .collect::<Vec<_>>();
     rich_content.extend(rich_values(&rendered.content));
@@ -194,7 +187,7 @@ impl ToolProvider for DefaultToolProvider {
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
         let cancellation = ToolCancellation::from_receiver(request.cancellation.clone());
         bind_session_cancellation(&request.session_id, cancellation);
-        let info = presentation_info(&request.call_id, &request.name, &request.arguments, &request.cwd);
+        let info = presentation_info(&request.name, &request.arguments, &request.cwd);
 
         let result = match self
             .registry
@@ -202,13 +195,13 @@ impl ToolProvider for DefaultToolProvider {
             .await
         {
             Some(crate::tools::registry::ToolResult::Ok(content)) => ToolCallResult {
-                ui: Some(completed_ui_from_info(&request.call_id, &request.name, &request.arguments, &content, true, &request.cwd, &info)),
+                ui: Some(completed_ui_from_info(&request.name, &request.arguments, &content, true, &request.cwd, &info)),
                 content,
                 is_ok: true,
                 executed: true,
             },
             Some(crate::tools::registry::ToolResult::Err(content)) => ToolCallResult {
-                ui: Some(completed_ui_from_info(&request.call_id, &request.name, &request.arguments, &content, false, &request.cwd, &info)),
+                ui: Some(completed_ui_from_info(&request.name, &request.arguments, &content, false, &request.cwd, &info)),
                 content,
                 is_ok: false,
                 executed: true,
@@ -216,7 +209,7 @@ impl ToolProvider for DefaultToolProvider {
             None => {
                 let content = format!("Outil inconnu : {}", request.name);
                 ToolCallResult {
-                    ui: Some(completed_ui_from_info(&request.call_id, &request.name, &request.arguments, &content, false, &request.cwd, &info)),
+                    ui: Some(completed_ui_from_info(&request.name, &request.arguments, &content, false, &request.cwd, &info)),
                     content,
                     is_ok: false,
                     executed: false,
