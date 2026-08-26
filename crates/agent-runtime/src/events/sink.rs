@@ -13,6 +13,7 @@ pub trait TurnEventSink: Send {
     fn assistant_started(&mut self) -> bool;
     fn assistant_delta(&mut self, delta: String) -> bool;
     fn assistant_completed(&mut self) -> bool;
+    fn assistant_yields_to_action(&mut self) -> bool;
     fn thinking_started(&mut self) -> bool;
     fn thinking_delta(&mut self, delta: String) -> bool;
     fn thinking_completed(&mut self) -> bool;
@@ -56,6 +57,9 @@ impl TurnEventSink for TurnEventEmitter {
     }
     fn assistant_completed(&mut self) -> bool {
         TurnEventEmitter::assistant_completed(self)
+    }
+    fn assistant_yields_to_action(&mut self) -> bool {
+        TurnEventEmitter::assistant_yields_to_action(self)
     }
     fn thinking_started(&mut self) -> bool {
         TurnEventEmitter::thinking_started(self)
