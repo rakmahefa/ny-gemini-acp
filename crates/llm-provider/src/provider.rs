@@ -3,9 +3,31 @@ use std::sync::Arc;
 
 use crate::client::{Client, Config, StreamItem};
 use crate::config::AgentConfig;
+use crate::core::GeminiError;
 use crate::semantic_stream::GeminiSemanticStream;
-use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest};
+use agent_runtime::{
+    LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
+};
 use tokio::sync::mpsc;
+
+fn map_gemini_error(error: GeminiError) -> LlmError {
+    match error {
+        GeminiError::CookiesExpired { code } => LlmError::Authentication {
+            message: format!("cookies expired or invalid (BardErrorInfo [{code}])"),
+        },
+        GeminiError::UnknownModel(model) => LlmError::Unavailable { message: model },
+        GeminiError::Network(message) => LlmError::Network { message },
+        GeminiError::Http { status, body } => LlmError::Provider {
+            message: format!("HTTP {status}: {body}"),
+        },
+        GeminiError::StreamDivergence => LlmError::StreamDivergence,
+        GeminiError::UploadFailed(message) => LlmError::Upload { message },
+        GeminiError::SafetyBlocked(message) => LlmError::Provider { message },
+        GeminiError::Other(error) => LlmError::Provider {
+            message: format!("{error:#}"),
+        },
+    }
+}
 
 #[derive(Clone)]
 pub struct GeminiProvider {
@@ -43,7 +65,7 @@ impl LlmProvider for GeminiProvider {
                 &request.references,
             )
             .await
-            .map_err(|error| LlmError::Provider(format!("{error:#}")))?;
+            .map_err(map_gemini_error)?;
 
         let (tx, rx) = mpsc::channel(16);
         let supports_reasoning = self.model_info(&request.model).supports_reasoning;
@@ -86,7 +108,7 @@ impl LlmProvider for GeminiProvider {
                         }
                     }
                     Err(error) => {
-                        let _ = tx.send(Err(LlmError::Provider(error))).await;
+                        let _ = tx.send(Err(LlmError::Provider { message: error })).await;
                         return;
                     }
                 }
@@ -104,7 +126,7 @@ impl LlmProvider for GeminiProvider {
         self.client
             .upload_image(base64, mime)
             .await
-            .map_err(|error| LlmError::Provider(format!("{error:#}")))
+            .map_err(map_gemini_error)
     }
 
     fn model_info(&self, model: &str) -> LlmModelInfo {
