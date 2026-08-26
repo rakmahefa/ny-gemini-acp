@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentActionError, AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
+use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -240,6 +240,7 @@ fn build_prompt_for_agent_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime::AgentActionError;
 
     #[test]
     fn only_protocol_level_terminations_map_to_stop_reasons() {
