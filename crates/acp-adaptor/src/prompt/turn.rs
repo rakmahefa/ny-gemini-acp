@@ -130,7 +130,7 @@ pub async fn run_turn(
             semantic: ctx.semantic,
             action_handler: Some(action_handler),
             permission_handler: Some(permission_handler),
-            build_prompt: crate::prompt::build::build_prompt,
+            build_prompt: build_prompt_for_agent_loop,
         })
         .await;
 
@@ -166,6 +166,13 @@ pub async fn run_turn(
             }
         }
     }
+}
+
+fn build_prompt_for_agent_loop(
+    session: &agent_runtime::state::Session,
+    provider: &dyn agent_runtime::ToolProvider,
+) -> String {
+    crate::prompt::build::build_prompt(session, Some(provider))
 }
 
 #[cfg(test)]
