@@ -187,6 +187,21 @@ impl TurnEventEmitter {
         self.publish(SemanticEvent::AssistantCompleted { context })
     }
 
+    /// Closes the assistant stream without emitting `AssistantCompleted`.
+    ///
+    /// This is a semantic handoff, not turn completion: the model has yielded to
+    /// an action that still has to execute. The next observable semantic event is
+    /// therefore the action/tool lifecycle itself.
+    pub fn assistant_yields_to_action(&mut self) -> bool {
+        if !self.transport_ready() {
+            return false;
+        }
+        match self.integrity.assistant_yields_to_action() {
+            Ok(()) => true,
+            Err(error) => self.reject(error),
+        }
+    }
+
     pub fn thinking_started(&mut self) -> bool {
         if !self.transport_ready() {
             return false;
