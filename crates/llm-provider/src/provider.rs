@@ -21,9 +21,14 @@ fn map_gemini_error(error: &anyhow::Error) -> LlmError {
         }
         GeminiError::UnknownModel(model) => LlmError::Unavailable(model.clone()),
         GeminiError::Network(message) => LlmError::Network(message.clone()),
-        GeminiError::Http { status, body } => {
-            LlmError::Provider(format!("HTTP {status}: {body}"))
-        }
+        GeminiError::Http { status, .. } => match status {
+            401 | 403 => LlmError::Authentication(format!("Gemini authentication rejected (HTTP {status})")),
+            408 => LlmError::Network("Gemini request timed out (HTTP 408)".into()),
+            429 => LlmError::Provider("Gemini request rate-limited (HTTP 429)".into()),
+            400 | 422 => LlmError::InvalidRequest(format!("Gemini rejected the request (HTTP {status})")),
+            500..=599 => LlmError::Provider(format!("Gemini upstream failure (HTTP {status})")),
+            _ => LlmError::Provider(format!("Gemini HTTP failure (HTTP {status})")),
+        },
         GeminiError::StreamDivergence => LlmError::StreamDivergence,
         GeminiError::UploadFailed(message) => LlmError::Upload(message.clone()),
         GeminiError::SafetyBlocked(message) => LlmError::Provider(message.clone()),
