@@ -28,11 +28,11 @@ pub enum GeminiError {
 
     /// Erreur HTTP (status non-2xx).
     ///
-    /// Le corps est conservé uniquement pour les diagnostics internes, mais n'est
-    /// jamais inclus dans le message d'erreur afin d'éviter la fuite de secrets,
-    /// tokens ou contenus retournés par un proxy/upstream.
+    /// Le body upstream n'est volontairement jamais stocké dans l'erreur :
+    /// une erreur `Debug`, un log structuré ou une remontée inter-couches ne
+    /// doit pas pouvoir divulguer des tokens, cookies ou contenu arbitraire.
     #[error("erreur HTTP {status}")]
-    Http { status: u16, body: String },
+    Http { status: u16 },
 
     /// Divergence de flux en cours de streaming — le texte cumulé a change
     /// de prefix après émission, retry impossible.
