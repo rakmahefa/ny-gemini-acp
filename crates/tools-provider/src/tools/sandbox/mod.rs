@@ -1,9 +1,5 @@
-//! Security sandbox module.
-//!
-//! The sandbox is split by responsibility: filesystem scope, risk analysis,
-//! and shell command policy.
-
 mod path;
+mod parser;
 mod risk;
 mod shell;
 
@@ -11,5 +7,6 @@ mod shell;
 mod tests;
 
 pub use path::{validate_path, SecurityError};
+pub use parser::{parse_shell, ParsedShellCommand, ShellOperator, ShellParseError, ShellSegment};
 pub use risk::{RiskLevel, ShellAnalysis};
 pub use shell::ShellSandbox;
