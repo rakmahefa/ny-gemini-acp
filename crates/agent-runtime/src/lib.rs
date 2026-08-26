@@ -28,10 +28,10 @@ pub use prompt::{
     format_tool_call, format_tool_result, TOOL_CALL_CLOSE, TOOL_CALL_OPEN, TOOL_RESULT_PREFIX,
 };
 pub use providers::{
-    GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
-    NullLlmProvider, NullToolProvider, SharedLlmProvider, SharedToolProvider, ToolCallRequest,
-    ToolCallResult, ToolProvider, ToolServerConfig, ToolTransportKind,
+    GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, NullLlmProvider,
+    NullToolProvider, SharedLlmProvider, SharedToolProvider, ToolCallRequest, ToolCallResult,
+    ToolConfigurationError, ToolProvider, ToolServerConfig, ToolTransportKind,
 };
 pub use runtime::{AgentRuntime, AppState, RuntimeConfig};
-pub use session::SessionManager;
+pub use session::{SessionManager, SessionToolConfigurationError};
 pub use tool_ui::{ToolUiKind, ToolUiModel, ToolUiStatus};
