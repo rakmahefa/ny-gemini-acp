@@ -4,8 +4,10 @@ use crate::events::TurnEventSink;
 use crate::state::Session;
 use crate::{AgentActionHandler, Cancellation, ToolPermissionHandler, ToolProvider};
 
+pub type TurnPromptBuilder = fn(&Session, &dyn ToolProvider) -> String;
+
 /// Inputs required to execute one already-acquired turn.
-pub struct TurnExecutionRequest<'a, F> {
+pub struct TurnExecutionRequest<'a> {
     pub session_id: String,
     pub session: Session,
     pub generation: u64,
@@ -14,5 +16,5 @@ pub struct TurnExecutionRequest<'a, F> {
     pub semantic: &'a mut dyn TurnEventSink,
     pub action_handler: Option<Arc<dyn AgentActionHandler>>,
     pub permission_handler: Option<Arc<dyn ToolPermissionHandler>>,
-    pub build_prompt: F,
+    pub build_prompt: TurnPromptBuilder,
 }
