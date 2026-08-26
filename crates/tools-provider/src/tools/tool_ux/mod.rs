@@ -1,14 +1,16 @@
 //! ACP-facing tool UX module.
 //!
-//! The implementation is exposed through this facade so the public tool UX
-//! contract remains stable while its formatting, locations, and lifecycle
-//! projections can be separated into focused submodules.
+//! Responsibilities are split into presentation types, card rendering,
+//! tool builders, and result/location projections.
 
-use super::{lifecycle, sandbox};
+mod builders;
+mod display;
+mod results;
+mod types;
 
-mod implementation;
+#[cfg(test)]
+mod tests;
 
-pub use implementation::{
-    bounded_raw_input, classify_risk, lifecycle_icon, lifecycle_label, result_update, ResultUpdate,
-    ToolInfo,
-};
+pub use display::bounded_raw_input;
+pub use results::{classify_risk, lifecycle_icon, lifecycle_label, result_update};
+pub use types::{ResultUpdate, ToolInfo};
