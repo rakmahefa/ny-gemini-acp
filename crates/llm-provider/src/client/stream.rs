@@ -120,16 +120,7 @@ impl Client {
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = if response.content_length().is_some_and(|len| len > 16 * 1024) {
-                "<response body omitted: too large>".to_string()
-            } else {
-                response
-                    .text()
-                    .await
-                    .map(|body| truncate_body(&body, 4 * 1024))
-                    .unwrap_or_else(|_| "<response body unavailable>".to_string())
-            };
-            return Err(GeminiError::Http { status, body }.into());
+            return Err(GeminiError::Http { status }.into());
         }
 
         let mut bytes_stream = response.bytes_stream();
@@ -141,6 +132,7 @@ impl Client {
                 chunk = bytes_stream.next() => {
                     let Some(chunk) = chunk else {
                         for frame in state.decoder.finish() {
+                            validate_frame_event(&frame)?;
                             emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
                         }
                         if let Some(reason) = frames::detect_safety_block(&raw_accumulator) {
@@ -339,18 +331,6 @@ fn validate_frame_event(frame: &GeminiFrameEvent) -> anyhow::Result<()> {
         _ => {}
     }
     Ok(())
-}
-
-fn truncate_body(body: &str, limit: usize) -> String {
-    let mut end = body.len().min(limit);
-    while end > 0 && !body.is_char_boundary(end) {
-        end -= 1;
-    }
-    let mut truncated = body[..end].to_string();
-    if body.len() > end {
-        truncated.push_str("…");
-    }
-    truncated
 }
 
 async fn emit_frame(
