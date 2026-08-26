@@ -29,7 +29,7 @@ async fn configure_mcp_reports_missing_session_structurally() {
     let manager = SessionManager::new(store);
 
     let error = manager
-        .configure_mcp("sess_missing", Vec::new())
+        .configure_mcp_typed("sess_missing", Vec::new())
         .await
         .unwrap_err();
 
