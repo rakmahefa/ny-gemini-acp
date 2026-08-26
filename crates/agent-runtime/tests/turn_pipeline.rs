@@ -13,14 +13,27 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 struct ScriptedLlm {
-    rounds: Mutex<VecDeque<Result<Vec<ModelEvent>, LlmError>>>,
+    rounds: Mutex<VecDeque<Result<Vec<Result<ModelEvent, LlmError>>, LlmError>>>,
 }
 
 impl ScriptedLlm {
-    fn new(rounds: Vec<Result<Vec<ModelEvent>, LlmError>>) -> Self {
+    fn new(rounds: Vec<Result<Vec<Result<ModelEvent, LlmError>>, LlmError>>) -> Self {
         Self {
             rounds: Mutex::new(rounds.into()),
         }
+    }
+
+    fn events(events: Vec<ModelEvent>) -> Result<Vec<Result<ModelEvent, LlmError>>, LlmError> {
+        Ok(events.into_iter().map(Ok).collect())
+    }
+
+    fn stream_error(
+        events: Vec<ModelEvent>,
+        error: LlmError,
+    ) -> Result<Vec<Result<ModelEvent, LlmError>>, LlmError> {
+        let mut items = events.into_iter().map(Ok).collect::<Vec<_>>();
+        items.push(Err(error));
+        Ok(items)
     }
 }
 
@@ -36,7 +49,7 @@ impl LlmProvider for ScriptedLlm {
         let events = next?;
         let (tx, rx) = mpsc::channel(events.len().max(1));
         for event in events {
-            tx.send(Ok(event)).await.expect("test receiver must stay alive");
+            tx.send(event).await.expect("test receiver must stay alive");
         }
         drop(tx);
         Ok(rx)
@@ -174,9 +187,9 @@ async fn success_crosses_model_runtime_events_and_persistence() {
     let (store, session_id, session, generation, service, mut semantic, bus, _transport, dir) =
         begin_test_turn(
             "success",
-            Arc::new(ScriptedLlm::new(vec![Ok(vec![ModelEvent::TextDelta(
-                "pipeline success".into(),
-            )])])),
+            Arc::new(ScriptedLlm::new(vec![ScriptedLlm::events(vec![
+                ModelEvent::TextDelta("pipeline success".into()),
+            ])])),
             Arc::new(agent_runtime::NullToolProvider),
         )
         .await;
@@ -218,12 +231,12 @@ async fn success_crosses_model_runtime_events_and_persistence() {
 async fn tool_round_crosses_execution_and_preserves_canonical_call_id() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let llm = Arc::new(ScriptedLlm::new(vec![
-        Ok(vec![ModelEvent::ToolCall {
+        ScriptedLlm::events(vec![ModelEvent::ToolCall {
             id: "upstream-42".into(),
             name: "record".into(),
             arguments: json!({"value": "alpha"}),
         }]),
-        Ok(vec![ModelEvent::TextDelta("tool result consumed".into())]),
+        ScriptedLlm::events(vec![ModelEvent::TextDelta("tool result consumed".into())]),
     ]));
     let tools = Arc::new(RecordingTool::new(calls.clone()));
     let (store, session_id, session, generation, service, mut semantic, bus, _transport, dir) =
@@ -274,9 +287,10 @@ async fn provider_failure_is_terminal_and_turn_is_finalized() {
     let (store, session_id, session, generation, service, mut semantic, bus, _transport, dir) =
         begin_test_turn(
             "provider-failure",
-            Arc::new(ScriptedLlm::new(vec![Err(LlmError::Network(
-                "simulated outage".into(),
-            ))])),
+            Arc::new(ScriptedLlm::new(vec![ScriptedLlm::stream_error(
+                vec![ModelEvent::ReasoningDelta("provider started".into())],
+                LlmError::Network("simulated outage".into()),
+            )])),
             Arc::new(agent_runtime::NullToolProvider),
         )
         .await;
