@@ -185,69 +185,13 @@ fn find_tag_end(input: &str) -> Option<usize> {
 fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
     let inner = tag.strip_prefix("<FollowUp")?.strip_suffix('>')?.trim();
     let inner = inner.strip_suffix('/').unwrap_or(inner).trim();
-    let attrs = parse_attributes(inner);
+    let attrs = agent_runtime::text::parse_tag_attributes(inner);
     let label = attrs.get("label")?.trim();
     let query = attrs.get("query")?.trim();
     if label.is_empty() || query.is_empty() {
         return None;
     }
     Some((decode_xml(label), decode_xml(query)))
-}
-fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
-    let mut attrs = std::collections::BTreeMap::new();
-    let bytes = input.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if index >= bytes.len() || bytes[index] == b'/' {
-            break;
-        }
-        let key_start = index;
-        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' {
-            index += 1;
-        }
-        if key_start == index {
-            index += 1;
-            continue;
-        }
-        let key = &input[key_start..index];
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if index >= bytes.len() || bytes[index] != b'=' {
-            break;
-        }
-        index += 1;
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
-            index += 1;
-        }
-        if index >= bytes.len() {
-            break;
-        }
-        let value = if bytes[index] == b'\'' || bytes[index] == b'"' {
-            let quote = bytes[index];
-            index += 1;
-            let value_start = index;
-            while index < bytes.len() && bytes[index] != quote {
-                index += 1;
-            }
-            let value = input[value_start..index].to_owned();
-            if index < bytes.len() {
-                index += 1;
-            }
-            value
-        } else {
-            let value_start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
-                index += 1;
-            }
-            input[value_start..index].to_owned()
-        };
-        attrs.insert(key.to_ascii_lowercase(), value);
-    }
-    attrs
 }
 fn decode_xml(input: &str) -> String {
     input

@@ -8,6 +8,7 @@ pub mod providers;
 pub mod runtime;
 pub mod session;
 pub mod state;
+pub mod text;
 pub mod time;
 pub mod tool_ui;
 
