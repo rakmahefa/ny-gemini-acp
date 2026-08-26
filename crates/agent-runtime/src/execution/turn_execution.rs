@@ -4,7 +4,7 @@ use crate::events::TurnEventSink;
 use crate::state::Session;
 use crate::{AgentActionHandler, Cancellation, ToolPermissionHandler, ToolProvider};
 
-pub type TurnPromptBuilder = fn(&Session, &dyn ToolProvider) -> String;
+pub type TurnPromptBuilder = for<'a, 'b> fn(&'a Session, Option<&'b dyn ToolProvider>) -> String;
 
 /// Inputs required to execute one already-acquired turn.
 pub struct TurnExecutionRequest<'a> {
