@@ -138,6 +138,7 @@ mod tests {
     use super::*;
     use crate::events::{EventBus, TurnEventEmitter};
     use crate::providers::{LlmError, ModelEvent, ModelRequest};
+    use crate::state::HistoryEntry;
     use tokio::sync::mpsc;
 
     struct TextProvider;
@@ -204,7 +205,7 @@ mod tests {
                 &mut semantic,
                 None,
                 None,
-                |session, _| session.messages.entries().first().map(|(_, text)| text.clone()).unwrap_or_default(),
+                |_session, _| String::new(),
             )
             .await
             .unwrap();
@@ -214,11 +215,12 @@ mod tests {
         assert!(semantic.is_terminal());
 
         let persisted = store.get(&session.id).await.unwrap();
-        assert!(persisted
-            .messages
-            .entries()
-            .iter()
-            .any(|(role, text)| *role == crate::Role::Assistant && text == "hello from runtime"));
+        assert!(persisted.messages.entries().iter().any(|entry| {
+            matches!(
+                entry,
+                HistoryEntry::Assistant { content } if content == "hello from runtime"
+            )
+        }));
 
         bus.close_turn("turn-test");
         std::fs::remove_dir_all(&dir).ok();
