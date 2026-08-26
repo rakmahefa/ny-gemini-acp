@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind};
 use serde_json::Value;
 
@@ -53,6 +51,3 @@ pub struct ResultUpdate {
     pub content: Vec<ToolCallContent>,
     pub locations: Vec<ToolCallLocation>,
 }
-
-#[allow(dead_code)]
-pub(crate) fn _assert_tool_info_path(_: &Path) {}
