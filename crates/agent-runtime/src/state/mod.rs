@@ -92,8 +92,10 @@ impl Store {
 
         if !final_session.messages.is_empty() {
             let snap_n = final_session.messages.len();
-            if let Ok(raw) = serde_json::to_string_pretty(&final_session) {
-                let _ = tokio::fs::write(self.snapshot_path(id, snap_n), &raw).await;
+            if let Ok(raw) = serde_json::to_vec_pretty(&final_session) {
+                if let Err(error) = self.persist_snapshot(id, snap_n, &raw).await {
+                    tracing::error!(session = %id, snapshot = snap_n, error = %error, "snapshot persist failed");
+                }
             }
             self.prune_snapshots(id, MAX_SNAPSHOTS).await;
         }

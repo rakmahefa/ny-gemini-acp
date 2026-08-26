@@ -16,6 +16,16 @@ impl Store {
         self.dir.join(format!("{id}.{n}.snap.json"))
     }
 
+    /// Écrit un snapshot via le même mécanisme atomique que les sessions.
+    pub(super) async fn persist_snapshot(
+        &self,
+        id: &str,
+        n: usize,
+        raw: &[u8],
+    ) -> Result<()> {
+        Self::write_atomic(&self.snapshot_path(id, n), raw).await
+    }
+
     /// Garde seulement les `keep` snapshots les plus récents (par n décroissant).
     pub(super) async fn prune_snapshots(&self, id: &str, keep: usize) {
         let snaps = self.list_snapshots(id).await;
@@ -47,15 +57,11 @@ impl Store {
                 }
             }
         }
-        snaps.sort_by(|a, b| b.cmp(a)); // décroissant
+        snaps.sort_by(|a, b| b.cmp(a));
         snaps
     }
 
     /// Restaure un snapshot par numéro de tour.
-    /// La session est remplacée par l'état du snapshot, puis persistée.
-    ///
-    /// Refuse de restaurer si un tour est en cours sur cette session
-    /// (sentinel `.busy` présent). Pour forcer, passer `force = true`.
     pub async fn restore_snapshot(&self, id: &str, turn: usize) -> Result<()> {
         self.restore_snapshot_impl(id, turn, false).await
     }

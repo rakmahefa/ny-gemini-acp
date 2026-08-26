@@ -3,6 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use tokio::io::AsyncWriteExt;
 
 use super::{Live, Session, Store};
 
@@ -26,12 +27,25 @@ impl Store {
         self.dir.join(format!("{id}.json"))
     }
 
+    /// Atomically replaces a file after fully writing and syncing its temporary payload.
+    /// Orphaned temporary files are cleaned on the next store open.
+    pub(crate) async fn write_atomic(path: &Path, raw: &[u8]) -> Result<()> {
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("chemin de persistance invalide: {}", path.display()))?;
+        let tmp = path.with_file_name(format!(".{file_name}.tmp"));
+        let mut file = tokio::fs::File::create(&tmp).await?;
+        file.write_all(raw).await?;
+        file.sync_all().await?;
+        drop(file);
+        tokio::fs::rename(&tmp, path).await?;
+        Ok(())
+    }
+
     pub(crate) async fn persist(&self, session: &Session) -> Result<()> {
         let raw = serde_json::to_vec_pretty(session)?;
-        let tmp = self.dir.join(format!(".{}.tmp", session.id));
-        tokio::fs::write(&tmp, raw).await?;
-        tokio::fs::rename(&tmp, self.path(&session.id)).await?;
-        Ok(())
+        Self::write_atomic(&self.path(&session.id), &raw).await
     }
 
     pub async fn create(
@@ -158,6 +172,22 @@ mod tests {
         let listed = store.list(None).await;
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, session.id);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn atomic_write_leaves_no_temporary_file_after_success() {
+        let dir = std::env::temp_dir().join(format!(
+            "acp-atomic-write-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let path = dir.join("session.json");
+        Store::write_atomic(&path, br#"{"ok":true}"#).await.unwrap();
+
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), br#"{"ok":true}"#);
+        assert!(!dir.join(".session.json.tmp").exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }
