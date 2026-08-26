@@ -130,6 +130,7 @@ async fn begin_test_turn(
     TurnService,
     TurnEventEmitter,
     EventBus,
+    mpsc::UnboundedReceiver<agent_runtime::SemanticEvent>,
     std::path::PathBuf,
 ) {
     let dir = std::env::temp_dir().join(format!(
@@ -147,7 +148,7 @@ async fn begin_test_turn(
         .expect("turn must begin");
 
     let bus = EventBus::new();
-    let _projection = bus.subscribe_turn("integration-turn");
+    let transport = bus.subscribe_turn("integration-turn");
     let semantic = TurnEventEmitter::new_with_required_transport(
         bus.clone(),
         session.id.clone(),
@@ -163,13 +164,14 @@ async fn begin_test_turn(
         service,
         semantic,
         bus,
+        transport,
         dir,
     )
 }
 
 #[tokio::test]
 async fn success_crosses_model_runtime_events_and_persistence() {
-    let (store, session_id, session, generation, service, mut semantic, bus, dir) =
+    let (store, session_id, session, generation, service, mut semantic, bus, _transport, dir) =
         begin_test_turn(
             "success",
             Arc::new(ScriptedLlm::new(vec![Ok(vec![ModelEvent::TextDelta(
@@ -224,7 +226,7 @@ async fn tool_round_crosses_execution_and_preserves_canonical_call_id() {
         Ok(vec![ModelEvent::TextDelta("tool result consumed".into())]),
     ]));
     let tools = Arc::new(RecordingTool::new(calls.clone()));
-    let (store, session_id, session, generation, service, mut semantic, bus, dir) =
+    let (store, session_id, session, generation, service, mut semantic, bus, _transport, dir) =
         begin_test_turn("tool", llm, tools).await;
 
     let result = service
@@ -269,7 +271,7 @@ async fn tool_round_crosses_execution_and_preserves_canonical_call_id() {
 
 #[tokio::test]
 async fn provider_failure_is_terminal_and_turn_is_finalized() {
-    let (store, session_id, session, generation, service, mut semantic, bus, dir) =
+    let (store, session_id, session, generation, service, mut semantic, bus, _transport, dir) =
         begin_test_turn(
             "provider-failure",
             Arc::new(ScriptedLlm::new(vec![Err(LlmError::Network(
