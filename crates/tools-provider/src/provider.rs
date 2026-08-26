@@ -12,8 +12,7 @@ use agent_runtime::{
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
-use crate::tools::mcp::{McpCatalog, McpServerConfig as ProviderMcpServerConfig};
-use crate::tools::mcp::config::McpError;
+use crate::tools::mcp::{McpCatalog, McpError, McpServerConfig as ProviderMcpServerConfig};
 use crate::tools::registry::ToolRegistry;
 use crate::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 
