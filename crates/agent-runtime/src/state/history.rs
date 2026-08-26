@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::Role;
-use crate::prompt::{format_tool_call, format_tool_result};
+use crate::prompt::{format_tool_call, format_tool_result, TOOL_CALL_CLOSE, TOOL_CALL_OPEN};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -197,7 +197,23 @@ impl History {
                 }),
                 Role::Assistant => {
                     let mut plain = Vec::new();
-                    for line in content.lines() {
+                    let mut lines = content.lines().peekable();
+                    while let Some(line) = lines.next() {
+                        if let Some((name, id, arguments)) = parse_canonical_tool_call(line, &mut lines) {
+                            if !plain.is_empty() {
+                                normalized.push(HistoryEntry::Assistant {
+                                    content: plain.join("\n"),
+                                });
+                                plain.clear();
+                            }
+                            pending_tool_ids.push((name.clone(), id.clone()));
+                            normalized.push(HistoryEntry::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            });
+                            continue;
+                        }
                         if let Some((name, id, arguments)) = parse_tool_call_line(line) {
                             if !plain.is_empty() {
                                 normalized.push(HistoryEntry::Assistant {
@@ -313,6 +329,30 @@ fn to_legacy(entry: HistoryEntry) -> (Role, String) {
             is_ok,
         } => (Role::Tool, format_tool_result(&id, &name, &content, is_ok)),
     }
+}
+
+fn parse_canonical_tool_call<'a, I>(
+    first_line: &str,
+    lines: &mut std::iter::Peekable<I>,
+) -> Option<(String, String, Value)>
+where
+    I: Iterator<Item = &'a str>,
+{
+    if first_line.trim() != TOOL_CALL_OPEN {
+        return None;
+    }
+    let payload = lines.next()?.trim();
+    if lines.next()?.trim() != TOOL_CALL_CLOSE {
+        return None;
+    }
+    let envelope: Value = serde_json::from_str(payload).ok()?;
+    let name = envelope.get("name")?.as_str()?.to_owned();
+    let id = envelope.get("id")?.as_str()?.to_owned();
+    let arguments = envelope.get("arguments")?.clone();
+    if name.is_empty() || id.is_empty() {
+        return None;
+    }
+    Some((name, id, arguments))
 }
 
 fn parse_tool_call_line(line: &str) -> Option<(String, String, Value)> {
@@ -442,5 +482,22 @@ mod tests {
         assert!(
             matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "file_read" && content.contains("[tool_call fake id=x]") && content.contains('…') && *is_ok)
         );
+    }
+
+    #[test]
+    fn parses_canonical_tool_call_from_legacy_view() {
+        let mut history = History::new();
+        history.push((
+            Role::Assistant,
+            format_tool_call("call-1", "file_read", &json!({"path": "README.md"})),
+        ));
+        let entries = history.entries();
+        assert!(matches!(
+            entries.as_slice(),
+            [HistoryEntry::ToolCall { id, name, arguments }]
+                if id == "call-1"
+                    && name == "file_read"
+                    && arguments == &json!({"path": "README.md"})
+        ));
     }
 }
