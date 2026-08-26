@@ -16,8 +16,8 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 |---|---|---|---|
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
-| P2 | Dette d'orchestration des turns | 🔜 Prochaine priorité | Prochain chantier |
-| P2 | Dette des erreurs structurées | À traiter progressivement | Après orchestration |
+| P2 | Dette d'orchestration des turns | ✅ Terminée | TurnService extrait, adaptateur découplé, tests et validations verts |
+| P2 | Dette des erreurs structurées | 🚧 Prochaine priorité | À traiter progressivement après orchestration |
 | P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
 | P3 | CI automatisée | Hors priorité | Tests CI manuels par le mainteneur |
@@ -48,6 +48,7 @@ La représentation sérialisée des identités reste compatible avec les valeurs
 cargo fmt --check   ✅
 cargo check --workspace   ✅
 cargo test --workspace    ✅
+cargo clippy --workspace --all-targets -- -D warnings   ✅
 ```
 
 ## Limite volontaire
@@ -105,46 +106,98 @@ cargo test --workspace    ✅
 
 ---
 
-# 4. Dette d'orchestration des turns — PRIORITÉ 2 🔜 PROCHAINE
+# 4. Dette d'orchestration des turns — PRIORITÉ 2 ✅ TERMINÉE
 
-## Constat
+## Constat initial
 
-Le `acp-adaptor` possède déjà des handlers séparés, mais le câblage du traitement d'un prompt reste concentré dans la composition ACP : création du turn, abonnement aux Semantic Events, projection ACP, contexte interactif, exécution, terminaison et conversion d'erreurs.
+Le `acp-adaptor` possédait un câblage important autour du traitement d'un prompt : prise de possession du turn, création du transport sémantique, projection ACP, contexte interactif et remise de la réponse.
 
-## Risque
+## Remboursement réalisé sur `debt/turn-orchestration`
 
-À mesure que les fonctionnalités augmentent, la composition ACP peut devenir trop fortement couplée au workflow interne d'un turn.
+Le chantier a été traité en conservant une frontière nette entre runtime et protocole :
 
-## Direction retenue
+- création de `agent_runtime::TurnService` ;
+- `TurnService` intégré à la composition root `AppState` ;
+- exécution provider-neutral déplacée de l'adaptateur vers `agent-runtime` ;
+- création et configuration de `AgentLoop` centralisées dans le service ;
+- terminalisation `SemanticEvent` regroupée dans le service ;
+- finalisation/persistance `Store::end_turn` regroupée dans le service ;
+- conservation des `AgentActionHandler` et `ToolPermissionHandler` comme dépendances injectées ;
+- suppression de l'ancien `TurnGuard` devenu redondant ;
+- extraction de l'orchestration ACP restante vers `prompt::handle_prompt` ;
+- `acp-adaptor/src/agent.rs` réduit au routage des requêtes/notifications et au délégateur de prompt ;
+- création du `turn_id` et du transport sémantique différée jusqu'à l'acceptation effective du turn ;
+- introduction de `TurnExecutionRequest` et d'un contrat explicite pour le prompt builder, sans contourner Clippy ;
+- ajout d'un test runtime couvrant `provider → AgentLoop → SemanticEvent lifecycle → Store persistence`.
 
-Faire évoluer progressivement cette orchestration vers un service de turn clairement identifiable, capable de centraliser :
+## Découpage final
 
 ```text
-création du turn
-→ lifecycle sémantique
-→ exécution provider
-→ projection
-→ terminalisation
+ACP request
+    ↓
+acp-adaptor
+    ├── routage ACP
+    └── prompt::handle_prompt
+            ├── turn ownership
+            ├── projection ACP
+            ├── interaction handlers
+            └── ACP response
+                    ↓
+             agent-runtime::TurnService
+                    ├── AgentLoop
+                    ├── SemanticEvent lifecycle
+                    ├── provider/tool execution
+                    └── Store::end_turn
 ```
 
-Le nouveau service ne doit pas absorber la responsabilité du protocole ACP. Il doit rester provider-neutral et runtime-centric, tandis que `acp-adaptor` demeure une couche de projection/protocole.
+Le runtime reste indépendant d'ACP. `TurnService` ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
 
-## Critères de réussite
+## Garanties de test
 
-- workflow interne de turn identifiable comme une unité cohérente ;
-- réduction du couplage entre `acp-adaptor` et orchestration runtime ;
-- lifecycle terminalisé en un point clairement défini ;
-- conservation des garanties actuelles des `SemanticEvent` ;
-- tests unitaires du service de turn ;
-- au moins un test d'intégration couvrant `provider → runtime → semantic events → projection → ACP`.
+La couverture est organisée autour de deux barrières complémentaires :
 
-## Priorité
+```text
+provider
+   ↓
+TurnService
+   ↓
+SemanticEvent lifecycle
+   ↓
+Store persistence
+```
 
-**P2 — prochain chantier.**
+et :
+
+```text
+SemanticEvent
+   ↓
+sequence / turn integrity
+   ↓
+ACP projection
+```
+
+Les tests de projection vérifient notamment les ruptures de séquence, les changements de turn inattendus et la conservation de l'identité des tool calls dans le modèle de présentation.
+
+## Validation finale
+
+Validation locale confirmée :
+
+```text
+cargo fmt --check   ✅
+cargo check --workspace   ✅
+cargo test --workspace    ✅
+cargo clippy --workspace --all-targets -- -D warnings   ✅
+```
+
+## Statut
+
+**✅ Terminé sur `debt/turn-orchestration`.**
+
+La branche peut maintenant être revue puis mergée dans `main`. La prochaine dette prioritaire est celle des erreurs structurées.
 
 ---
 
-# 5. Dette de gestion des erreurs — PRIORITÉ 2
+# 5. Dette de gestion des erreurs — PRIORITÉ 2 🚧 PROCHAINE PRIORITÉ
 
 ## Constat
 
@@ -177,7 +230,7 @@ Puis convertir explicitement ces erreurs aux frontières applicatives et ACP.
 
 ## Priorité
 
-**P2 — après stabilisation de l'orchestration.**
+**P2 — prochaine dette à rembourser.**
 
 ---
 
@@ -187,7 +240,7 @@ Puis convertir explicitement ces erreurs aux frontières applicatives et ACP.
 
 Le projet dispose désormais d'une base importante de tests unitaires, notamment pour la machine d'état Semantic Events et le cycle de vie des outils.
 
-Cependant, les tests de bout en bout de la chaîne complète restent plus importants à mesure que le système devient distribué entre plusieurs crates et couches :
+Cependant, des tests de bout en bout de la chaîne complète restent utiles à mesure que le système devient distribué entre plusieurs crates et couches :
 
 ```text
 provider
@@ -212,7 +265,7 @@ La validation locale et manuelle reste la méthode de validation principale du p
 
 ## Priorité
 
-**P2 — à renforcer après l'orchestration.**
+**P2 — à renforcer après la dette des erreurs structurées.**
 
 ---
 
@@ -232,6 +285,7 @@ La validation doit continuer à couvrir au minimum les vérifications pertinente
 cargo fmt --check
 cargo check --workspace
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ainsi que les audits spécifiques du dépôt lorsque nécessaire.
@@ -287,9 +341,9 @@ L'ordre de travail retenu est désormais :
         ↓
 ✅ 3. Dette de persistance
         ↓
-🔜 4. Orchestration des turns
+✅ 4. Orchestration des turns
         ↓
-5. Erreurs structurées
+🚧 5. Erreurs structurées
         ↓
 6. Tests d'intégration / système renforcés
         ↓
@@ -320,10 +374,4 @@ Les changements qui n'apportent aucun de ces bénéfices doivent être considér
 
 # 11. Point de reprise
 
-La prochaine session de travail doit repartir de `main` et ouvrir une nouvelle branche dédiée à :
-
-```text
-P2 — orchestration des turns
-```
-
-Le premier objectif sera d'identifier précisément la composition ACP actuelle du prompt/turn et d'extraire un service runtime de turn sans casser les contrats `SemanticEvent` déjà stabilisés.
+La prochaine étape est la dette des erreurs structurées. La branche `debt/turn-orchestration` peut être revue puis mergée dans `main` avant d'ouvrir le prochain chantier.

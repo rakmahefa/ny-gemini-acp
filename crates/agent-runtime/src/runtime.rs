@@ -1,6 +1,6 @@
 //! Provider-neutral runtime composition root.
 use crate::events::EventBus;
-use crate::execution::TurnManager;
+use crate::execution::{AgentLoopConfig, TurnManager, TurnService};
 use crate::session::SessionManager;
 use crate::{SharedLlmProvider, SharedToolProvider};
 use anyhow::{Context, Result};
@@ -18,6 +18,7 @@ pub struct AppState {
     pub store: Arc<crate::state::Store>,
     pub sessions: SessionManager,
     pub turns: TurnManager,
+    pub turn_service: TurnService,
     pub llm: SharedLlmProvider,
     pub tools: SharedToolProvider,
     pub config: Arc<RuntimeConfig>,
@@ -41,11 +42,18 @@ impl AgentRuntime {
                 .with_context(|| format!("ouverture du store {}", config.data_dir.display()))?,
         );
         let sessions = SessionManager::with_tool_provider(Arc::clone(&store), Arc::clone(&tools));
+        let turn_service = TurnService::new(
+            Arc::clone(&store),
+            Arc::clone(&llm),
+            Arc::clone(&tools),
+            AgentLoopConfig::default(),
+        );
         Ok(Self {
             state: AppState {
                 store,
                 sessions,
                 turns: TurnManager::new(),
+                turn_service,
                 llm,
                 tools,
                 config: Arc::new(config),
