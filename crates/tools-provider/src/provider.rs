@@ -6,7 +6,8 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use agent_runtime::{
-    ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiKind, ToolUiModel,
+    ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider, ToolServerConfig,
+    ToolUiKind, ToolUiModel,
 };
 
 use crate::tools::contracts::ToolCancellation;
@@ -159,7 +160,7 @@ impl ToolProvider for DefaultToolProvider {
         session_id: &str,
         cwd: PathBuf,
         servers: Vec<ToolServerConfig>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ToolConfigurationError> {
         if servers.is_empty() {
             self.state.sessions.write().await.insert(
                 session_id.to_owned(),
@@ -177,7 +178,7 @@ impl ToolProvider for DefaultToolProvider {
             .collect::<Vec<_>>();
         let catalog = McpCatalog::from_configs(configs)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| ToolConfigurationError::Provider(error.to_string()))?;
         let mut registry = ToolRegistry::builtin();
         registry.register_mcp(Arc::new(catalog));
         self.state.sessions.write().await.insert(
