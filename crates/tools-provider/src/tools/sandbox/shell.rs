@@ -37,6 +37,9 @@ impl ShellSandbox {
 
     pub fn analyze_command(&self, command: &str) -> Result<ShellAnalysis, SecurityError> {
         let parsed = parse_shell(command).map_err(|error| SecurityError(error.to_string()))?;
+        if self.is_permissive() {
+            return Ok(ShellAnalysis::from_parsed(command, &parsed));
+        }
         self.validate_structure(&parsed)?;
         let analysis = ShellAnalysis::from_parsed(command, &parsed);
         self.validate_programs(&parsed)?;
@@ -50,10 +53,17 @@ impl ShellSandbox {
 
     pub fn normalize(&self, command: &str) -> Result<String, SecurityError> {
         let parsed = parse_shell(command).map_err(|error| SecurityError(error.to_string()))?;
+        if self.is_permissive() {
+            return Ok(parsed.normalized());
+        }
         self.validate_structure(&parsed)?;
         self.validate_programs(&parsed)?;
         self.validate_arguments(&parsed)?;
         Ok(parsed.normalized())
+    }
+
+    fn is_permissive(&self) -> bool {
+        self.allowed_programs.is_empty() && self.blocked_programs.is_empty()
     }
 
     fn validate_structure(&self, parsed: &ParsedShellCommand) -> Result<(), SecurityError> {
@@ -78,7 +88,9 @@ impl ShellSandbox {
                     "commande bloquée par la politique sandbox : '{program}'"
                 )));
             }
-            if !self.allowed_programs.is_empty() && !self.allowed_programs.contains(program.as_str()) {
+            if !self.allowed_programs.is_empty()
+                && !self.allowed_programs.contains(program.as_str())
+            {
                 return Err(SecurityError(format!(
                     "commande non autorisée par la politique sandbox : '{program}'"
                 )));
@@ -98,15 +110,22 @@ impl ShellSandbox {
                 )));
             }
 
-            if matches!(program.as_str(), "python" | "python2" | "python3" | "perl" | "ruby" | "node")
-                && args.iter().any(|arg| matches!(arg.as_str(), "-c" | "-e" | "-E"))
+            if matches!(
+                program.as_str(),
+                "python" | "python2" | "python3" | "perl" | "ruby" | "node"
+            ) && args
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "-c" | "-e" | "-E"))
             {
                 return Err(SecurityError(format!(
                     "exécution de code inline interdite pour '{program}'"
                 )));
             }
 
-            if args.iter().any(|arg| matches!(arg.as_str(), "-exec" | "-execdir")) {
+            if args
+                .iter()
+                .any(|arg| matches!(arg.as_str(), "-exec" | "-execdir"))
+            {
                 return Err(SecurityError(
                     "find/xargs avec exécution dynamique interdits dans la sandbox".into(),
                 ));
@@ -114,18 +133,29 @@ impl ShellSandbox {
 
             if matches!(program.as_str(), "xargs")
                 && args.iter().any(|arg| {
-                    matches!(arg.as_str(), "sh" | "bash" | "zsh" | "dash" | "ksh" | "python" | "python3")
+                    matches!(
+                        arg.as_str(),
+                        "sh"
+                            | "bash"
+                            | "zsh"
+                            | "dash"
+                            | "ksh"
+                            | "python"
+                            | "python3"
+                    )
                 })
             {
                 return Err(SecurityError("xargs vers un interpréteur est interdit".into()));
             }
 
-            if matches!(program.as_str(), "rm" | "rmdir" | "chmod" | "chown") {
-                if args.iter().any(|arg| arg == "/" || is_absolute_path(arg) || arg.contains("../")) {
-                    return Err(SecurityError(format!(
-                        "cible absolue ou hors périmètre interdite pour '{program}'"
-                    )));
-                }
+            if matches!(program.as_str(), "rm" | "rmdir" | "chmod" | "chown")
+                && args
+                    .iter()
+                    .any(|arg| arg == "/" || is_absolute_path(arg) || arg.contains("../"))
+            {
+                return Err(SecurityError(format!(
+                    "cible absolue ou hors périmètre interdite pour '{program}'"
+                )));
             }
 
             if args.iter().any(|arg| arg == "--no-preserve-root") {
@@ -167,8 +197,8 @@ fn allowed_programs() -> HashSet<&'static str> {
         "yarn", "bun", "python", "python3", "pip", "pip3", "go", "gcc", "g++", "clang", "make",
         "cmake", "docker", "docker-compose", "podman", "jq", "yq", "wc", "sort", "uniq", "tr",
         "cut", "xargs", "date", "whoami", "id", "env", "printenv", "basename", "dirname",
-        "realpath", "readlink", "diff", "patch", "tar", "zip", "unzip", "gzip", "gunzip",
-        "which", "command", "type", "file", "stat", "sleep", "uv", "test", "true", "false",
+        "realpath", "readlink", "diff", "patch", "tar", "zip", "unzip", "gzip", "gunzip", "which",
+        "command", "type", "file", "stat", "sleep", "uv", "test", "true", "false",
     ]
     .into_iter()
     .collect()
