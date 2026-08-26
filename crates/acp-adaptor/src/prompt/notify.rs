@@ -16,20 +16,78 @@ pub fn usage_update(prompt: &str, assistant: &str) -> UsageUpdate {
     UsageUpdate::new(used, CONTEXT_TOKENS)
 }
 
+fn text_notification(
+    session_id: &SessionId,
+    message_id: &MessageId,
+    text: String,
+) -> SessionNotification {
+    SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AgentMessageChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+                .message_id(message_id.clone()),
+        ),
+    )
+}
+
+fn reasoning_notification(
+    session_id: &SessionId,
+    message_id: &MessageId,
+    text: String,
+) -> SessionNotification {
+    SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::AgentThoughtChunk(
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+                .message_id(message_id.clone()),
+        ),
+    )
+}
+
+fn tool_call_notification(
+    session_id: &SessionId,
+    tool_call_id: &str,
+    ui: &ToolUiModel,
+) -> SessionNotification {
+    SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::ToolCall(tool_call_from_ui(tool_call_id, ui)),
+    )
+}
+
+fn tool_call_update_notification(
+    session_id: &SessionId,
+    tool_call_id: &str,
+    ui: &ToolUiModel,
+) -> SessionNotification {
+    let update = ToolCallUpdate::from(tool_call_from_ui(tool_call_id, ui));
+    SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::ToolCallUpdate(update),
+    )
+}
+
+fn usage_notification(
+    session_id: &SessionId,
+    prompt: &str,
+    assistant: &str,
+) -> SessionNotification {
+    SessionNotification::new(
+        session_id.clone(),
+        SessionUpdate::UsageUpdate(usage_update(prompt, assistant)),
+    )
+}
+
 pub fn emit_error_chunk(
     cx: &ConnectionTo<Client>,
     session_id: &SessionId,
     message_id: &MessageId,
     error: &str,
 ) {
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
-                "\n\n[error] {error}"
-            ))))
-            .message_id(message_id.clone()),
-        ),
+    cx.send_notification(text_notification(
+        session_id,
+        message_id,
+        format!("\n\n[error] {error}"),
     ))
     .ok();
 }
@@ -44,13 +102,7 @@ pub fn notify_text(
         return Ok(());
     }
     record_partial_output(session_id.0.as_ref(), &text);
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
-                .message_id(message_id.clone()),
-        ),
-    ))
+    cx.send_notification(text_notification(session_id, message_id, text))
 }
 
 pub fn notify_reasoning(
@@ -62,13 +114,7 @@ pub fn notify_reasoning(
     if text.is_empty() {
         return Ok(());
     }
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::AgentThoughtChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
-                .message_id(message_id.clone()),
-        ),
-    ))
+    cx.send_notification(reasoning_notification(session_id, message_id, text))
 }
 
 fn tool_kind(kind: ToolUiKind) -> ToolKind {
@@ -161,10 +207,7 @@ pub fn notify_tool_call(
     tool_call_id: &str,
     ui: &ToolUiModel,
 ) -> Result<(), AcpError> {
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::ToolCall(tool_call_from_ui(tool_call_id, ui)),
-    ))
+    cx.send_notification(tool_call_notification(session_id, tool_call_id, ui))
 }
 
 pub fn notify_tool_call_update(
@@ -173,11 +216,7 @@ pub fn notify_tool_call_update(
     tool_call_id: &str,
     ui: &ToolUiModel,
 ) -> Result<(), AcpError> {
-    let update = ToolCallUpdate::from(tool_call_from_ui(tool_call_id, ui));
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::ToolCallUpdate(update),
-    ))
+    cx.send_notification(tool_call_update_notification(session_id, tool_call_id, ui))
 }
 
 pub fn notify_usage(
@@ -186,10 +225,7 @@ pub fn notify_usage(
     prompt: &str,
     assistant: &str,
 ) -> Result<(), AcpError> {
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::UsageUpdate(usage_update(prompt, assistant)),
-    ))
+    cx.send_notification(usage_notification(session_id, prompt, assistant))
 }
 
 #[cfg(test)]
