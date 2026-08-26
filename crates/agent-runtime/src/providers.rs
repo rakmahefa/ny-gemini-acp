@@ -38,20 +38,20 @@ pub enum LlmProviderErrorKind {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum LlmError {
-    #[error("invalid model request: {message}")]
-    InvalidRequest { message: String },
-    #[error("authentication failed: {message}")]
-    Authentication { message: String },
-    #[error("model is unavailable: {message}")]
-    Unavailable { message: String },
-    #[error("provider request failed: {message}")]
-    Provider { message: String },
-    #[error("provider network failure: {message}")]
-    Network { message: String },
+    #[error("invalid model request: {0}")]
+    InvalidRequest(String),
+    #[error("authentication failed: {0}")]
+    Authentication(String),
+    #[error("model is unavailable: {0}")]
+    Unavailable(String),
+    #[error("provider request failed: {0}")]
+    Provider(String),
+    #[error("provider network failure: {0}")]
+    Network(String),
     #[error("provider stream diverged")]
     StreamDivergence,
-    #[error("provider image upload failed: {message}")]
-    Upload { message: String },
+    #[error("provider image upload failed: {0}")]
+    Upload(String),
     #[error("request cancelled")]
     Cancelled,
 }
@@ -59,13 +59,13 @@ pub enum LlmError {
 impl LlmError {
     pub fn kind(&self) -> Option<LlmProviderErrorKind> {
         match self {
-            Self::InvalidRequest { .. } => Some(LlmProviderErrorKind::InvalidRequest),
-            Self::Authentication { .. } => Some(LlmProviderErrorKind::Authentication),
-            Self::Unavailable { .. } => Some(LlmProviderErrorKind::ModelUnavailable),
-            Self::Provider { .. } => Some(LlmProviderErrorKind::Upstream),
-            Self::Network { .. } => Some(LlmProviderErrorKind::Network),
+            Self::InvalidRequest(_) => Some(LlmProviderErrorKind::InvalidRequest),
+            Self::Authentication(_) => Some(LlmProviderErrorKind::Authentication),
+            Self::Unavailable(_) => Some(LlmProviderErrorKind::ModelUnavailable),
+            Self::Provider(_) => Some(LlmProviderErrorKind::Upstream),
+            Self::Network(_) => Some(LlmProviderErrorKind::Network),
             Self::StreamDivergence => Some(LlmProviderErrorKind::StreamDivergence),
-            Self::Upload { .. } => Some(LlmProviderErrorKind::Upload),
+            Self::Upload(_) => Some(LlmProviderErrorKind::Upload),
             Self::Cancelled => None,
         }
     }
@@ -256,9 +256,7 @@ impl LlmProvider for NullLlmProvider {
         Ok(rx)
     }
     async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> {
-        Err(LlmError::Unavailable {
-            message: "LLM provider indisponible".into(),
-        })
+        Err(LlmError::Unavailable("LLM provider indisponible".into()))
     }
     fn model_info(&self, _: &str) -> LlmModelInfo {
         LlmModelInfo::default()
