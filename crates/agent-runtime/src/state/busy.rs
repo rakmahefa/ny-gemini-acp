@@ -55,17 +55,32 @@ impl Store {
     }
 }
 
+/// Returns true only when a well-formed busy sentinel references a dead PID.
 pub(crate) async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
     let Ok(raw) = tokio::fs::read_to_string(path).await else {
         return false;
     };
-    let Some(pid) = raw
-        .lines()
-        .find_map(|line| line.strip_prefix("pid=")?.split_whitespace().next())
-        .and_then(|value| value.parse::<u32>().ok())
-    else {
+    let Some(pid) = parse_busy_pid(&raw) else {
         return false;
     };
 
     tokio::fs::metadata(format!("/proc/{pid}")).await.is_err()
+}
+
+/// Startup recovery may also remove malformed sentinels left by a crashed writer.
+pub(crate) async fn recoverable_busy_sentinel(path: &std::path::Path) -> bool {
+    let Ok(raw) = tokio::fs::read_to_string(path).await else {
+        return true;
+    };
+    let Some(pid) = parse_busy_pid(&raw) else {
+        return true;
+    };
+
+    tokio::fs::metadata(format!("/proc/{pid}")).await.is_err()
+}
+
+fn parse_busy_pid(raw: &str) -> Option<u32> {
+    raw.lines()
+        .find_map(|line| line.strip_prefix("pid=")?.split_whitespace().next())
+        .and_then(|value| value.parse::<u32>().ok())
 }
