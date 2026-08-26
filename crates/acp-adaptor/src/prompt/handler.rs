@@ -1,8 +1,8 @@
 use crate::prompt;
 use agent_client_protocol::schema::v1::{MessageId, PromptRequest, PromptResponse};
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
-use agent_runtime::{AppState, RuntimeError};
 use agent_runtime::events::TurnEventEmitter;
+use agent_runtime::{AppState, RuntimeError};
 use tools_provider::tools::interactive;
 
 /// Owns ACP-specific prompt orchestration: turn ownership, semantic projection,
@@ -16,17 +16,17 @@ pub async fn handle_prompt(
 ) -> Result<(), RuntimeError> {
     let session_id = req.session_id.clone();
     let sid = session_id.0.to_string();
-    let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
-    let projection_rx = state.events.subscribe_turn(&turn_id);
-    let projection_cx = cx.clone();
-    let projection_session_id = session_id.clone();
-    let projection_message_id = MessageId::from(format!("msg_{turn_id}"));
     let turn_service = state.turn_service.clone();
     let turn_manager = state.turns.clone();
     let events = state.events.clone();
 
     turn_manager
         .start(sid.clone(), move |cancellation| async move {
+            let turn_id = format!("turn_{}", uuid::Uuid::new_v4().simple());
+            let projection_rx = events.subscribe_turn(&turn_id);
+            let projection_cx = cx.clone();
+            let projection_session_id = session_id.clone();
+            let projection_message_id = MessageId::from(format!("msg_{turn_id}"));
             let projection_cancellation = cancellation.clone();
             let projection_turn_id = turn_id.clone();
             let projection = tokio::spawn(async move {
