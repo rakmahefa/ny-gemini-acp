@@ -4,7 +4,7 @@
 
 Ce document recense la dette technique identifiée sur la branche `chore/deep-audit-cleanup` et l'ordre de remboursement retenu.
 
-Les chantiers de typage sémantique, persistance et orchestration des turns sont stabilisés et présents dans `main`. La branche `debt/structured-errors` poursuit le remboursement de la dette de gestion des erreurs en conservant des contrats structurés dans le runtime et les conversions textuelles uniquement aux frontières qui l'exigent.
+Les chantiers de typage sémantique, persistance et orchestration des turns sont stabilisés et présents dans `main`. La branche `debt/structured-errors` a terminé le remboursement de la dette de gestion des erreurs structurées, sous réserve de la validation globale finale `fmt/check`.
 
 ---
 
@@ -15,8 +15,8 @@ Les chantiers de typage sémantique, persistance et orchestration des turns sont
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P2 | Dette d'orchestration des turns | ✅ Terminée | `TurnService` extrait, runtime découplé d'ACP |
-| P2 | Dette des erreurs structurées | 🚧 En cours | Tranches runtime traitées ; audit final des conversions en cours |
-| P2 | Dette de tests d'intégration/système | À renforcer | Après stabilisation des erreurs structurées |
+| P2 | Dette des erreurs structurées | ✅ Terminée | Contrats structurés + mappings ACP + audit des conversions terminés |
+| P2 | Dette de tests d'intégration/système | À renforcer | Prochaine dette prioritaire |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
 | P3 | CI automatisée | Hors priorité | Validation manuelle par le mainteneur |
 
@@ -83,11 +83,11 @@ Le runtime ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les typ
 
 ---
 
-# 5. Dette de gestion des erreurs — PRIORITÉ 2 🚧 EN COURS
+# 5. Dette de gestion des erreurs — PRIORITÉ 2 ✅ TERMINÉE
 
 ## Objectif
 
-Les erreurs métier/runtime doivent rester structurées jusqu'à la frontière applicative. Les conversions en `String` ou `AcpError` sont réservées aux façades protocolaires qui les nécessitent réellement.
+Les erreurs métier/runtime restent structurées jusqu'à la frontière applicative. Les conversions en `String` ou `AcpError` sont réservées aux façades protocolaires qui les nécessitent réellement.
 
 ## 5.1 Session / configuration ✅
 
@@ -105,11 +105,11 @@ SessionToolConfigurationError
 frontière applicative / ACP
 ```
 
-`configure_mcp_typed()` conserve l'erreur structurée. `configure_mcp()` reste une façade de compatibilité qui réalise volontairement la conversion textuelle au bord du système.
+`configure_mcp_typed()` conserve l'erreur structurée. `configure_mcp()` reste une façade de compatibilité ACP qui réalise volontairement la conversion textuelle au bord du système.
 
 ## 5.2 Persistance / finalisation ✅
 
-La finalisation d'un tour distingue désormais explicitement :
+La finalisation d'un tour distingue explicitement :
 
 ```text
 AgentLoopError
@@ -153,7 +153,7 @@ Le mapping `McpError → ToolConfigurationError` conserve le code JSON-RPC, la n
 
 ## 5.5 Actions interactives ACP ✅
 
-Les actions interactives sont maintenant structurées avec `AgentActionError` :
+Les actions interactives sont structurées avec `AgentActionError` :
 
 ```text
 InvalidInput
@@ -182,11 +182,9 @@ Les erreurs LLM exposent également `llm_kind`, et les combinaisons agent/persis
 
 Les terminaisons protocolaires (`Cancelled`, `MaxRounds`) sont séparées des erreurs internes qui doivent rester des erreurs ACP structurées plutôt que devenir silencieusement un `StopReason`.
 
-## 5.7 Audit systématique des `Result<T, String>` 🚧 EN COURS
+## 5.7 Audit systématique des `Result<T, String>` ✅ TERMINÉ
 
-L'audit final est en cours pour vérifier que chaque conversion textuelle est légitime et située à une frontière explicite.
-
-Règles retenues :
+L'audit a été réalisé avec la règle suivante :
 
 ```text
 runtime / métier
@@ -199,48 +197,51 @@ ACP / présentation
     → AcpError ou String uniquement lorsque le contrat l'impose
 ```
 
-Une occurrence textuelle n'est donc pas supprimée mécaniquement : elle doit être classifiée comme contrat runtime, erreur provider, compatibilité ou présentation.
+Une occurrence textuelle n'a pas été supprimée mécaniquement : elle a été classifiée selon son rôle.
 
-### Progression actuelle
+### Résultats
 
-Le premier échec découvert pendant `cargo test --workspace` provenait d'un ancien test qui construisait :
-
-```rust
-AgentLoopError::Action("boom".into())
-```
-
-Le contrat est maintenant correctement consommé avec :
+1. Le chemin actif `acp-adaptor/src/prompt/action_typed.rs` utilise désormais :
 
 ```rust
-AgentLoopError::Action(AgentActionError::Failed("boom".into()))
+Result<Option<String>, AgentActionError>
 ```
 
-Le correctif est poussé sur `debt/structured-errors`.
+2. L'ancien `acp-adaptor/src/prompt/action.rs`, qui conservait `Result<Option<String>, String>`, était devenu un fichier de code mort : `prompt/mod.rs` redirige explicitement le module `action` vers `action_typed.rs`. Le fichier obsolète a donc été supprimé au lieu de maintenir deux contrats concurrents.
 
-La recherche reste à poursuivre sur les autres chemins d'erreur avant de déclarer l'audit terminé.
+3. `SessionManager::configure_mcp()` reste volontairement en :
+
+```rust
+Result<(), String>
+```
+
+Cette occurrence est une façade de compatibilité ACP documentée. Le contrat runtime canonique est `configure_mcp_typed()`, qui expose `SessionToolConfigurationError`. La conversion vers `String` est effectuée uniquement au bord du système.
+
+Aucune conversion `Result<T, String>` supplémentaire n'est conservée dans les chemins runtime/provider concernés par ce chantier.
 
 ---
 
 ## Validation de la branche
 
-La dernière validation locale fournie avant le correctif a échoué pendant la compilation des tests de `acp-adaptor` sur ce cas typé.
+Validations confirmées après les corrections :
 
-Après le correctif :
+```text
+cargo test --workspace                                 ✅
+cargo clippy --workspace --all-targets -- -D warnings  ✅
+```
+
+La validation globale `fmt/check` reste à confirmer avant le merge final :
 
 ```text
 cargo fmt --check                                      ⏳
 cargo check --workspace                                ⏳
-cargo test --workspace                                 ⏳
-cargo clippy --workspace --all-targets -- -D warnings  ⏳
 ```
-
-Ces quatre validations doivent être rejouées avant de considérer la branche verte.
 
 La CI GitHub n'est pas actuellement active sur le dépôt ; la validation complète reste donc manuelle.
 
 ---
 
-## Limites restantes de la dette d'erreurs
+## Statut final de la dette d'erreurs
 
 ```text
 ✅ session / configuration
@@ -249,13 +250,14 @@ La CI GitHub n'est pas actuellement active sur le dépôt ; la validation compl�
 ✅ outillage / MCP
 ✅ actions interactives ACP
 ✅ mappings ACP finaux
-🚧 audit systématique des Result<T, String>
-🚧 validation globale fmt / check / test / clippy
+✅ audit Result<T, String>
+✅ cargo test --workspace
+✅ cargo clippy --workspace --all-targets -- -D warnings
+⏳ cargo fmt --check
+⏳ cargo check --workspace
 ```
 
-Une différenciation encore plus fine du contenu des erreurs LLM/MCP ne sera introduite que si elle apporte une valeur réelle pour le protocole, les diagnostics ou l'observabilité.
-
-Le cœur runtime doit rester indépendant d'ACP.
+La dette des erreurs structurées est donc **fonctionnellement remboursée**. Le chantier est considéré terminé après confirmation de `fmt` et `check`.
 
 ---
 
@@ -282,7 +284,7 @@ protocol tests
 end-to-end tests
 ```
 
-**Priorité : P2, après stabilisation complète des erreurs structurées.**
+**Priorité : P2, prochaine dette après stabilisation finale des erreurs structurées.**
 
 ---
 
@@ -332,14 +334,14 @@ commande brute
         ↓
 ✅ 4. Orchestration des turns
         ↓
-🚧 5. Erreurs structurées
+✅ 5. Erreurs structurées
         ├── ✅ session / configuration
         ├── ✅ persistance / finalisation
         ├── ✅ provider LLM
         ├── ✅ outillage / MCP
         ├── ✅ actions interactives ACP
         ├── ✅ mappings ACP finaux
-        └── 🚧 audit Result<T, String> + validation globale
+        └── ✅ audit Result<T, String>
         ↓
 6. Tests d'intégration / système renforcés
         ↓
