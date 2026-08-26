@@ -58,6 +58,36 @@ fn agent_error_response(session_id: &str, error: &AgentLoopError) -> AcpError {
     }))
 }
 
+fn turn_service_error_response(
+    session_id: &str,
+    error: &agent_runtime::TurnServiceError,
+) -> AcpError {
+    match error {
+        agent_runtime::TurnServiceError::Agent(agent_error) => {
+            agent_error_response(session_id, agent_error)
+        }
+        agent_runtime::TurnServiceError::Persistence(persistence) => {
+            AcpError::internal_error().data(serde_json::json!({
+                "error": "turn_finalization_failed",
+                "kind": "persistence",
+                "message": persistence.to_string(),
+                "session_id": session_id,
+            }))
+        }
+        agent_runtime::TurnServiceError::AgentAndPersistence {
+            agent,
+            persistence,
+        } => AcpError::internal_error().data(serde_json::json!({
+            "error": "turn_failed_and_finalization_failed",
+            "kind": "agent_and_persistence",
+            "agent_error_kind": agent_error_kind(agent),
+            "agent_message": agent.to_string(),
+            "persistence_message": persistence.to_string(),
+            "session_id": session_id,
+        })),
+    }
+}
+
 pub async fn run_turn(
     ctx: TurnContext<'_>,
     req: PromptRequest,
@@ -151,19 +181,26 @@ pub async fn run_turn(
             }
             Ok(PromptResponse::new(StopReason::EndTurn))
         }
-        Err(agent_runtime::TurnServiceError::Agent(agent_error)) => {
-            let kind = agent_error_kind(&agent_error);
-            span.record("agent_error_kind", kind);
-            span.record("outcome", kind);
-            if let AgentLoopError::MaxRounds(limit) = &agent_error {
-                tracing::error!(session=%session_id, error_kind=%kind, max_rounds=*limit, error=%agent_error, "agent loop exhausted its round limit");
-            } else {
-                tracing::error!(session=%session_id, error_kind=%kind, error=%agent_error, "agent loop failed");
+        Err(error) => {
+            let outcome = match &error {
+                agent_runtime::TurnServiceError::Agent(agent_error) => agent_error_kind(agent_error),
+                agent_runtime::TurnServiceError::Persistence(_) => "persistence",
+                agent_runtime::TurnServiceError::AgentAndPersistence { .. } => {
+                    "agent_and_persistence"
+                }
+            };
+            span.record("outcome", outcome);
+            if let agent_runtime::TurnServiceError::Agent(agent_error) = &error {
+                span.record("agent_error_kind", agent_error_kind(agent_error));
             }
-            match map_agent_error(&agent_error) {
-                Some(reason) => Ok(PromptResponse::new(reason)),
-                None => Err(agent_error_response(&session_id.to_string(), &agent_error)),
+            tracing::error!(session=%session_id, error=%error, "turn execution failed");
+
+            if let agent_runtime::TurnServiceError::Agent(agent_error) = &error {
+                if let Some(reason) = map_agent_error(agent_error) {
+                    return Ok(PromptResponse::new(reason));
+                }
             }
+            Err(turn_service_error_response(&session_id.to_string(), &error))
         }
     }
 }
