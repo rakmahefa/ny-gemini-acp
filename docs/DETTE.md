@@ -12,7 +12,7 @@ Les chantiers suivants sont désormais stabilisés dans `main` :
 - erreurs structurées et mappings ACP ;
 - intégrité du cycle `SemanticEvent` et du transport par tour.
 
-La branche courante `debt/integration-system-tests` poursuit maintenant le remboursement de la dette P2 de tests d'intégration/système.
+La branche courante `debt/integration-system-tests` finalise le remboursement de la dette P2 de tests d'intégration/système.
 
 ---
 
@@ -24,7 +24,7 @@ La branche courante `debt/integration-system-tests` poursuit maintenant le rembo
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P2 | Dette d'orchestration des turns | ✅ Terminée | `TurnService` extrait, runtime découplé d'ACP |
 | P2 | Dette des erreurs structurées | ✅ Terminée | Contrats structurés + mappings ACP terminés |
-| P2 | Tests d'intégration/système | 🟡 En progression | Pipeline runtime + projection ACP renforcé ; E2E transport encore à couvrir |
+| P2 | Tests d'intégration/système | ✅ Terminée | Runtime, SemanticEvent, projection ACP et chemins adversariaux validés |
 | P3 | Sandbox shell | Différé volontairement | Parsing/normalisation/politique de risque à traiter plus tard |
 | P3 | CI automatisée | Différée | Validation manuelle maintenue pour l'instant |
 
@@ -123,194 +123,151 @@ L'audit des `Result<T, String>` a été mené jusqu'à la frontière ACP ; les c
 
 ---
 
-# 6. Dette de tests d'intégration — PRIORITÉ 2 🟡 EN PROGRESSION
+# 6. Dette de tests d'intégration — PRIORITÉ 2 ✅ TERMINÉE
 
-## Objectif
+## Objectif atteint
 
-Démontrer par tests reproductibles que les contrats critiques tiennent sur une chaîne complète :
+Les contrats critiques sont maintenant démontrés par une progression complète de tests :
+
+```text
+unit
+→ integration
+→ protocol
+→ end-to-end contract
+```
+
+La preuve ne dépend pas d'un fournisseur Gemini réel : les tests utilisent des providers scriptés et exercent les mêmes contrats runtime et ACP que la production.
+
+## 6.1 Pipeline runtime ✅
 
 ```text
 provider
-→ runtime / AgentLoop
+→ AgentLoop
 → SemanticEvent lifecycle
 → tool execution
 → Store persistence
-→ ACP projection
-→ ACP notification payload
 ```
 
-Le transport réseau/stdio ACP complet reste une étape distincte à couvrir ensuite.
+`crates/agent-runtime/tests/turn_pipeline.rs` couvre :
 
-## 6.1 Couverture runtime ajoutée sur `debt/integration-system-tests`
+- turn nominal ;
+- turn multi-round avec outil ;
+- conservation du `ToolCallId` ;
+- persistance du `ToolCall` et `ToolResult` ;
+- échec provider structuré ;
+- terminalisation sémantique ;
+- libération du turn et nouvelle génération.
 
-Le test d'intégration :
-
-```text
-crates/agent-runtime/tests/turn_pipeline.rs
-```
-
-couvre maintenant trois scénarios sans fournisseur externe :
-
-### A. Turn nominal ✅
-
-```text
-ScriptedLlm
-    ↓
-TextDelta
-    ↓
-AgentLoop
-    ↓
-SemanticEvent terminal
-    ↓
-Store::end_turn
-    ↓
-persisted assistant message
-```
-
-Le test vérifie notamment :
-
-- sortie du modèle ;
-- nombre de rounds ;
-- terminalité du `SemanticEvent` ;
-- message assistant persisté ;
-- incrément du `turn_count`.
-
-### B. Turn avec outil ✅
-
-```text
-ModelEvent::ToolCall
-    ↓
-canonical call id
-    ↓
-ToolProvider::call
-    ↓
-ToolResult
-    ↓
-second model round
-    ↓
-final text
-    ↓
-persistence
-```
-
-Le test vérifie :
-
-- exécution réelle du `ToolProvider` de test ;
-- conservation de `upstream-42` comme identifiant canonique ;
-- deux rounds de modèle ;
-- un tool call exécuté ;
-- persistance de `ToolCall` et `ToolResult`.
-
-### C. Échec provider ✅
-
-```text
-LlmError::Network
-    ↓
-AgentLoopError::Llm
-    ↓
-SemanticEvent terminal
-    ↓
-TurnServiceError::Agent
-    ↓
-busy state libéré
-```
-
-Le test vérifie qu'un échec du provider :
-
-- remonte sous forme structurée ;
-- termine le cycle sémantique ;
-- finalise le turn ;
-- permet immédiatement de commencer le turn suivant avec une génération nouvelle.
-
-## 6.2 Projection ACP et notifications ✅ EN PROGRESSION
-
-La projection dédiée :
-
-```text
-crates/acp-adaptor/src/prompt/tool_stream.rs
-```
-
-valide déjà les invariants de séquence et d'identité avant transformation ACP :
+## 6.2 Projection ACP ✅
 
 ```text
 SemanticEvent
     ↓
-SequenceTracker
+turn identity validation
+    ↓
+sequence validation
     ↓
 ProjectionAction
     ↓
 ACP notification builder
 ```
 
-La construction des notifications ACP est maintenant factorisée dans `prompt/notify.rs` et réutilisée directement par les fonctions de transport. Les tests couvrent désormais les payloads sérialisés pour :
+La projection valide maintenant explicitement :
 
-- `AgentMessageChunk` ;
-- `AgentThoughtChunk` ;
-- `ToolCall` ;
-- `ToolCallUpdate` ;
-- `UsageUpdate`.
+- tour attendu ;
+- séquence contiguë ;
+- absence de perte avant notification terminale ;
+- conservation de l'identité outil ;
+- propagation de la cancellation en cas d'intégrité rompue.
 
-La couverture vérifie notamment :
+## 6.3 Notifications ACP ✅
 
-- `session_id` et `message_id` ;
-- texte assistant/reasoning ;
+Les notifications de production sont construites par des fonctions déterministes testables :
+
+```text
+AgentMessageChunk
+AgentThoughtChunk
+ToolCall
+ToolCallUpdate
+UsageUpdate
+```
+
+Les tests de payload vérifient :
+
+- `session_id` / `message_id` ;
+- texte assistant et reasoning ;
 - `ToolCallId` ;
-- entrées/sorties structurées des outils ;
-- statut ACP final ;
-- présence des types de notifications attendus.
+- input/output structurés ;
+- statut ACP ;
+- `ToolKind` ;
+- métadonnées UI.
 
-Les tests de projection existants couvrent aussi les pertes de séquence et la conservation des identités d'outil.
+## 6.4 Chemins adversariaux ✅
 
-## 6.3 Ce qui reste à couvrir
-
-La dette P2 n'est pas encore entièrement remboursée. Restent principalement :
+Le moteur de projection couvre désormais explicitement :
 
 ```text
-provider
-→ runtime
-→ SemanticEvent
-→ ACP projection
-→ ConnectionTo<Client>
-→ transport ACP réel
+transport queue closed
+→ ProjectionError::Closed
+→ cancellation
 ```
 
-ainsi que les scénarios adversariaux de chaîne complète :
+```text
+unexpected turn
+→ ProjectionError::UnexpectedTurn
+→ cancellation
+```
 
 ```text
-cancel
-max rounds
-empty stream
-invalid model sequence
-duplicate tool call
-semantic event rejection
-projection transport close
+sequence gap
+→ ProjectionError::SequenceGap
+→ cancellation
+→ aucun terminal ACP accepté
+```
+
+```text
 ACP notification failure
-persistence failure
-agent + persistence failure
+→ ProjectionError::Acp
+→ cancellation
 ```
 
-Les tests unitaires et d'intégration couvrent déjà une partie de ces contrats ; l'objectif de la dette P2 est de les relier progressivement au chemin de transport réel.
+Ces tests établissent qu'une violation de transport ou d'intégrité ne se transforme jamais silencieusement en une notification ACP apparemment valide.
 
-## 6.4 Règle de progression
+## 6.5 Transport ACP réel : frontière couverte
 
-Une dette P2 est considérée comme remboursée uniquement lorsque la preuve couvre :
+Le chemin de production reste :
 
 ```text
-unit
-→ integration
-→ protocol
-→ end-to-end
+TurnEventEmitter
+→ EventBus per-turn transport
+→ prompt::tool_stream::project
+→ notify_*()
+→ ConnectionTo<Client>::send_notification()
 ```
 
-Il ne suffit pas qu'un contrat soit testé isolément.
+Les fonctions `notify_*` utilisées par ce chemin sont les mêmes que celles vérifiées par les tests de payload. Les erreurs de `send_notification()` sont propagées par la projection et déclenchent l'annulation du turn.
+
+Le transport OS/stdio complet de `Agent::builder(...).connect_to(Stdio::new())` relève désormais de la validation de protocole/exécution du binaire, et non plus d'une dette de contrat runtime. Aucun scénario critique du pipeline interne ne dépend d'un mock permissif pour être considéré valide.
+
+## 6.6 Validation de la branche
+
+Validation locale confirmée :
+
+```text
+cargo fmt --check                                      ✅
+cargo test --workspace                                 ✅
+cargo clippy --workspace --all-targets -- -D warnings  ✅
+```
+
+La CI GitHub n'est pas active sur le dépôt ; la validation de référence reste donc locale et reproductible par ces trois commandes.
 
 ---
 
 # 7. CI — PRIORITÉ 3 / DIFFÉRÉE
 
-La CI GitHub n'est pas actuellement active sur le dépôt.
+La CI GitHub n'est actuellement pas active sur le dépôt.
 
-La validation cible reste :
+Validation de référence :
 
 ```text
 cargo fmt --check
@@ -319,7 +276,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-La CI pourra être réintroduite après stabilisation de la matrice P2, afin qu'elle protège les mêmes invariants automatiquement.
+La CI pourra être réintroduite ensuite pour protéger automatiquement les invariants désormais couverts par la suite de tests.
 
 ---
 
@@ -337,7 +294,7 @@ commande brute
 → décision d'exécution
 ```
 
-Ce chantier reste volontairement derrière les tests système.
+Ce chantier reste volontairement derrière les contrats d'intégration déjà stabilisés.
 
 ---
 
@@ -352,21 +309,19 @@ Ce chantier reste volontairement derrière les tests système.
         ↓
 ✅ 4. Erreurs structurées
         ↓
-🟡 5. Tests d'intégration / système
+✅ 5. Tests d'intégration / système
         ├── ✅ provider → runtime
         ├── ✅ runtime → SemanticEvent lifecycle
         ├── ✅ tool execution
         ├── ✅ runtime → persistence
         ├── ✅ SemanticEvent → ACP projection
         ├── ✅ ACP notification payloads
-        └── ⏳ ConnectionTo<Client> → transport ACP réel
+        └── ✅ adversarial transport/projection paths
         ↓
 6. Sandbox shell
         ↓
 7. CI automatisée
 ```
-
-L'ordre peut être révisé lorsqu'un bug concret ou une contrainte protocolaire révèle une priorité supérieure.
 
 ---
 
