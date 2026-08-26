@@ -130,9 +130,7 @@ pub async fn run_turn(
             semantic: ctx.semantic,
             action_handler: Some(action_handler),
             permission_handler: Some(permission_handler),
-            build_prompt: |session, provider| {
-                crate::prompt::build::build_prompt(session, Some(provider))
-            },
+            build_prompt: crate::prompt::build::build_prompt,
         })
         .await;
 
