@@ -312,14 +312,14 @@ mod tests {
     #[test]
     fn classify_shell_operators() {
         let parsed = parse_shell("git status && git diff").unwrap();
-        assert!(matches!(parsed.operators, [ShellOperator::And]));
+        assert!(matches!(parsed.operators[..], [ShellOperator::And]));
         assert!(parsed.has_non_pipe_operator());
     }
 
     #[test]
     fn preserve_multiple_lines_as_sequence() {
         let parsed = parse_shell("echo one\ngit status").unwrap();
-        assert!(matches!(parsed.operators, [ShellOperator::Sequence]));
+        assert!(matches!(parsed.operators[..], [ShellOperator::Sequence]));
     }
 
     #[test]
