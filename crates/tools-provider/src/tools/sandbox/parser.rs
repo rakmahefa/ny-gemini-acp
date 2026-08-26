@@ -1,8 +1,7 @@
 //! Lexical parsing and normalization for shell sandbox decisions.
 //!
-//! This is intentionally not a full shell interpreter. It recognizes the shell
-//! constructs that affect the safety boundary and produces a deterministic
-//! representation for policy evaluation.
+//! This deliberately does not implement a shell. It recognizes constructs
+//! relevant to the execution boundary and produces deterministic segments.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellOperator {
@@ -11,7 +10,6 @@ pub enum ShellOperator {
     And,
     Or,
     Background,
-    Redirect,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -41,14 +39,12 @@ impl ParsedShellCommand {
         let mut result = String::new();
         for (index, segment) in self.segments.iter().enumerate() {
             if index > 0 {
-                let operator = self.operators[index - 1];
-                result.push_str(match operator {
+                result.push_str(match self.operators[index - 1] {
                     ShellOperator::Pipe => " | ",
                     ShellOperator::Sequence => " ; ",
                     ShellOperator::And => " && ",
                     ShellOperator::Or => " || ",
                     ShellOperator::Background => " & ",
-                    ShellOperator::Redirect => " > ",
                 });
             }
             result.push_str(&segment.normalized());
@@ -71,6 +67,7 @@ pub enum ShellParseError {
     TrailingEscape,
     UnsupportedCommandSubstitution,
     UnsupportedHereDocument,
+    UnsupportedRedirection,
     MissingCommandAfterOperator,
 }
 
@@ -83,6 +80,7 @@ impl std::fmt::Display for ShellParseError {
             Self::TrailingEscape => "échappement final non terminé",
             Self::UnsupportedCommandSubstitution => "substitution de commande non autorisée",
             Self::UnsupportedHereDocument => "here-document non autorisé",
+            Self::UnsupportedRedirection => "redirection shell non autorisée",
             Self::MissingCommandAfterOperator => "commande manquante après un opérateur shell",
         };
         f.write_str(message)
@@ -97,28 +95,65 @@ enum Quote {
     Double,
 }
 
-fn flush_token(token: &mut String, tokens: &mut Vec<String>) {
-    if !token.is_empty() {
-        tokens.push(std::mem::take(token));
-    }
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LexItem {
+    Word(String),
+    Operator(ShellOperator),
 }
 
 pub fn parse_shell(command: &str) -> Result<ParsedShellCommand, ShellParseError> {
-    let mut tokens = Vec::<String>::new();
-    let mut operators = Vec::<ShellOperator>::new();
+    let items = lex(command)?;
+    let mut segments = Vec::new();
+    let mut operators = Vec::new();
+    let mut words = Vec::new();
+
+    for item in items {
+        match item {
+            LexItem::Word(word) => words.push(word),
+            LexItem::Operator(operator) => {
+                if words.is_empty() {
+                    return Err(ShellParseError::MissingCommandAfterOperator);
+                }
+                segments.push(make_segment(&mut words));
+                operators.push(operator);
+            }
+        }
+    }
+
+    if words.is_empty() {
+        return Err(ShellParseError::MissingCommandAfterOperator);
+    }
+    segments.push(make_segment(&mut words));
+
+    Ok(ParsedShellCommand {
+        segments,
+        operators,
+        has_environment_expansion: command.chars().any(|ch| ch == '$'),
+    })
+}
+
+fn make_segment(words: &mut Vec<String>) -> ShellSegment {
+    let program = words.remove(0);
+    ShellSegment {
+        program,
+        args: std::mem::take(words),
+    }
+}
+
+fn lex(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
+    let chars: Vec<char> = command.chars().collect();
+    let mut output = Vec::new();
     let mut token = String::new();
     let mut quote = None;
     let mut escaped = false;
     let mut at_token_start = true;
-    let mut has_environment_expansion = false;
-    let chars: Vec<char> = command.chars().collect();
     let mut index = 0;
 
     while index < chars.len() {
-        let current = chars[index];
+        let ch = chars[index];
 
         if escaped {
-            token.push(current);
+            token.push(ch);
             escaped = false;
             at_token_start = false;
             index += 1;
@@ -127,24 +162,21 @@ pub fn parse_shell(command: &str) -> Result<ParsedShellCommand, ShellParseError>
 
         match quote {
             Some(Quote::Single) => {
-                if current == '\'' {
+                if ch == '\'' {
                     quote = None;
                 } else {
-                    token.push(current);
+                    token.push(ch);
                 }
                 index += 1;
                 continue;
             }
             Some(Quote::Double) => {
-                if current == '"' {
+                if ch == '"' {
                     quote = None;
-                } else if current == '\\' {
+                } else if ch == '\\' {
                     escaped = true;
                 } else {
-                    if current == '$' {
-                        has_environment_expansion = true;
-                    }
-                    token.push(current);
+                    token.push(ch);
                 }
                 index += 1;
                 continue;
@@ -152,17 +184,12 @@ pub fn parse_shell(command: &str) -> Result<ParsedShellCommand, ShellParseError>
             None => {}
         }
 
-        match current {
+        match ch {
             '\\' => escaped = true,
             '\'' => quote = Some(Quote::Single),
             '"' => quote = Some(Quote::Double),
-            '$' => {
-                if chars.get(index + 1) == Some(&'(') {
-                    return Err(ShellParseError::UnsupportedCommandSubstitution);
-                }
-                has_environment_expansion = true;
-                token.push(current);
-                at_token_start = false;
+            '$' if chars.get(index + 1) == Some(&'(') => {
+                return Err(ShellParseError::UnsupportedCommandSubstitution);
             }
             '`' => return Err(ShellParseError::UnsupportedCommandSubstitution),
             '#' if at_token_start => {
@@ -172,54 +199,42 @@ pub fn parse_shell(command: &str) -> Result<ParsedShellCommand, ShellParseError>
                 continue;
             }
             ' ' | '\t' | '\r' => {
-                flush_token(&mut token, &mut tokens);
+                flush(&mut token, &mut output);
                 at_token_start = true;
             }
-            '\n' => {
-                flush_token(&mut token, &mut tokens);
-                if !tokens.is_empty() {
-                    operators.push(ShellOperator::Sequence);
-                }
+            '\n' | ';' => {
+                flush(&mut token, &mut output);
+                push_operator(&mut output, ShellOperator::Sequence)?;
                 at_token_start = true;
             }
             '|' => {
-                flush_token(&mut token, &mut tokens);
+                flush(&mut token, &mut output);
                 if chars.get(index + 1) == Some(&'|') {
-                    operators.push(ShellOperator::Or);
+                    push_operator(&mut output, ShellOperator::Or)?;
                     index += 1;
                 } else {
-                    operators.push(ShellOperator::Pipe);
+                    push_operator(&mut output, ShellOperator::Pipe)?;
                 }
                 at_token_start = true;
             }
             '&' => {
-                flush_token(&mut token, &mut tokens);
+                flush(&mut token, &mut output);
                 if chars.get(index + 1) == Some(&'&') {
-                    operators.push(ShellOperator::And);
+                    push_operator(&mut output, ShellOperator::And)?;
                     index += 1;
                 } else {
-                    operators.push(ShellOperator::Background);
+                    push_operator(&mut output, ShellOperator::Background)?;
                 }
-                at_token_start = true;
-            }
-            ';' => {
-                flush_token(&mut token, &mut tokens);
-                operators.push(ShellOperator::Sequence);
                 at_token_start = true;
             }
             '>' | '<' => {
-                flush_token(&mut token, &mut tokens);
-                if current == '<' && chars.get(index + 1) == Some(&'<') {
+                if ch == '<' && chars.get(index + 1) == Some(&'<') {
                     return Err(ShellParseError::UnsupportedHereDocument);
                 }
-                if current == '>' && chars.get(index + 1) == Some(&'>') {
-                    index += 1;
-                }
-                operators.push(ShellOperator::Redirect);
-                at_token_start = true;
+                return Err(ShellParseError::UnsupportedRedirection);
             }
             _ => {
-                token.push(current);
+                token.push(ch);
                 at_token_start = false;
             }
         }
@@ -236,278 +251,25 @@ pub fn parse_shell(command: &str) -> Result<ParsedShellCommand, ShellParseError>
         None => {}
     }
 
-    flush_token(&mut token, &mut tokens);
-    if tokens.is_empty() {
+    flush(&mut token, &mut output);
+    if !output.iter().any(|item| matches!(item, LexItem::Word(_))) {
         return Err(ShellParseError::EmptyCommand);
     }
-
-    let mut segments = Vec::new();
-    let mut segment_tokens = Vec::new();
-    for (index, value) in tokens.into_iter().enumerate() {
-        segment_tokens.push(value);
-        let boundary = index + 1 == segment_tokens.len();
-        if boundary && index + 1 < 0 {
-            unreachable!();
-        }
-    }
-
-    // Re-tokenize while associating operators with complete command segments.
-    // The operator count is derived from the lexical stream and therefore cannot
-    // accidentally disagree with the segment count.
-    let mut raw_segments = Vec::<Vec<String>>::new();
-    let mut current_segment = Vec::<String>::new();
-    let mut op_iter = operators.iter();
-    let mut token_iter = command_tokens_without_operators(command)?.into_iter();
-    let mut current_operator = None;
-    while let Some(value) = token_iter.next() {
-        current_segment.push(value);
-        if current_segment.len() == 1 {
-            // The next operator is determined by the normalized scanner below.
-            let _ = &mut current_operator;
-        }
-    }
-    let _ = op_iter.next();
-    let _ = &mut current_operator;
-
-    // A small second pass is simpler and safer than trying to reconstruct shell
-    // grammar from whitespace. It uses the same lexical rules but keeps segment
-    // boundaries explicit.
-    let (final_segments, final_operators, expansion) = lex_segments(command)?;
-    segments = final_segments;
-    operators = final_operators;
-    has_environment_expansion |= expansion;
-
-    if segments.is_empty() || operators.len() + 1 < segments.len() {
-        return Err(ShellParseError::MissingCommandAfterOperator);
-    }
-    if operators.len() + 1 != segments.len() {
-        return Err(ShellParseError::MissingCommandAfterOperator);
-    }
-
-    Ok(ParsedShellCommand {
-        segments,
-        operators,
-        has_environment_expansion,
-    })
-}
-
-fn command_tokens_without_operators(command: &str) -> Result<Vec<String>, ShellParseError> {
-    let mut values = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let chars: Vec<char> = command.chars().collect();
-    let mut escaped = false;
-    for current_char in chars {
-        if escaped {
-            current.push(current_char);
-            escaped = false;
-            continue;
-        }
-        match quote {
-            Some(Quote::Single) if current_char == '\'' => quote = None,
-            Some(Quote::Single) => current.push(current_char),
-            Some(Quote::Double) if current_char == '"' => quote = None,
-            Some(Quote::Double) => current.push(current_char),
-            None => match current_char {
-                '\\' => escaped = true,
-                '\'' => quote = Some(Quote::Single),
-                '"' => quote = Some(Quote::Double),
-                ' ' | '\t' | '\r' | '\n' => flush_token(&mut current, &mut values),
-                '|' | '&' | ';' | '>' | '<' => flush_token(&mut current, &mut values),
-                _ => current.push(current_char),
-            },
-        }
-    }
-    flush_token(&mut current, &mut values);
-    Ok(values)
-}
-
-fn lex_segments(
-    command: &str,
-) -> Result<(Vec<ShellSegment>, Vec<ShellOperator>, bool), ShellParseError> {
-    let mut tokens = Vec::<String>::new();
-    let mut lexical_ops = Vec::<Option<ShellOperator>>::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let mut has_environment_expansion = false;
-    let chars: Vec<char> = command.chars().collect();
-    let mut index = 0;
-
-    while index < chars.len() {
-        let ch = chars[index];
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            index += 1;
-            continue;
-        }
-        match quote {
-            Some(Quote::Single) => {
-                if ch == '\'' { quote = None; } else { current.push(ch); }
-                index += 1;
-                continue;
-            }
-            Some(Quote::Double) => {
-                if ch == '"' { quote = None; }
-                else if ch == '\\' { escaped = true; }
-                else { if ch == '$' { has_environment_expansion = true; } current.push(ch); }
-                index += 1;
-                continue;
-            }
-            None => {}
-        }
-        match ch {
-            '\\' => escaped = true,
-            '\'' => quote = Some(Quote::Single),
-            '"' => quote = Some(Quote::Double),
-            '$' => {
-                if chars.get(index + 1) == Some(&'(') { return Err(ShellParseError::UnsupportedCommandSubstitution); }
-                has_environment_expansion = true;
-                current.push(ch);
-            }
-            '`' => return Err(ShellParseError::UnsupportedCommandSubstitution),
-            '#' if current.is_empty() => {
-                while index < chars.len() && chars[index] != '\n' { index += 1; }
-                continue;
-            }
-            ' ' | '\t' | '\r' | '\n' => flush_token(&mut current, &mut tokens),
-            '|' | '&' | ';' | '>' | '<' => {
-                flush_token(&mut current, &mut tokens);
-                let op = match ch {
-                    '|' if chars.get(index + 1) == Some(&'|') => { index += 1; ShellOperator::Or }
-                    '|' => ShellOperator::Pipe,
-                    '&' if chars.get(index + 1) == Some(&'&') => { index += 1; ShellOperator::And }
-                    '&' => ShellOperator::Background,
-                    ';' => ShellOperator::Sequence,
-                    '>' => {
-                        if chars.get(index + 1) == Some(&'>') { index += 1; }
-                        ShellOperator::Redirect
-                    }
-                    '<' => {
-                        if chars.get(index + 1) == Some(&'<') { return Err(ShellParseError::UnsupportedHereDocument); }
-                        ShellOperator::Redirect
-                    }
-                    _ => unreachable!(),
-                };
-                lexical_ops.push(Some(op));
-            }
-            _ => {
-                current.push(ch);
-                lexical_ops.push(None);
-            }
-        }
-        index += 1;
-    }
-    if escaped { return Err(ShellParseError::TrailingEscape); }
-    match quote {
-        Some(Quote::Single) => return Err(ShellParseError::UnterminatedSingleQuote),
-        Some(Quote::Double) => return Err(ShellParseError::UnterminatedDoubleQuote),
-        None => {}
-    }
-    flush_token(&mut current, &mut tokens);
-    if tokens.is_empty() { return Err(ShellParseError::EmptyCommand); }
-
-    // Parse the command again with a focused scanner that records operator
-    // boundaries by token count. This avoids making policy decisions on raw text.
-    let mut segments = Vec::<ShellSegment>::new();
-    let mut operators = Vec::<ShellOperator>::new();
-    let mut segment = Vec::<String>::new();
-    let mut pending_operator = None;
-    let mut token_index = 0usize;
-    let _ = lexical_ops;
-    let parsed_tokens = command_tokens_with_ops(command)?;
-    for item in parsed_tokens {
-        match item {
-            LexItem::Word(value) => {
-                segment.push(value);
-                token_index += 1;
-            }
-            LexItem::Operator(operator) => {
-                if segment.is_empty() { return Err(ShellParseError::MissingCommandAfterOperator); }
-                let program = segment.remove(0);
-                segments.push(ShellSegment { program, args: segment });
-                segment = Vec::new();
-                pending_operator = Some(operator);
-                if let Some(op) = pending_operator.take() { operators.push(op); }
-            }
-        }
-    }
-    if segment.is_empty() { return Err(ShellParseError::MissingCommandAfterOperator); }
-    let program = segment.remove(0);
-    segments.push(ShellSegment { program, args: segment });
-    let _ = token_index;
-    Ok((segments, operators, has_environment_expansion))
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum LexItem {
-    Word(String),
-    Operator(ShellOperator),
-}
-
-fn command_tokens_with_ops(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
-    let mut output = Vec::new();
-    let mut current = String::new();
-    let mut quote = None;
-    let mut escaped = false;
-    let chars: Vec<char> = command.chars().collect();
-    let mut index = 0;
-    while index < chars.len() {
-        let ch = chars[index];
-        if escaped { current.push(ch); escaped = false; index += 1; continue; }
-        match quote {
-            Some(Quote::Single) => {
-                if ch == '\'' { quote = None; } else { current.push(ch); }
-                index += 1; continue;
-            }
-            Some(Quote::Double) => {
-                if ch == '"' { quote = None; } else if ch == '\\' { escaped = true; } else { current.push(ch); }
-                index += 1; continue;
-            }
-            None => {}
-        }
-        match ch {
-            '\\' => escaped = true,
-            '\'' => quote = Some(Quote::Single),
-            '"' => quote = Some(Quote::Double),
-            '$' if chars.get(index + 1) == Some(&'(') => return Err(ShellParseError::UnsupportedCommandSubstitution),
-            '`' => return Err(ShellParseError::UnsupportedCommandSubstitution),
-            ' ' | '\t' | '\r' | '\n' => flush_token_item(&mut current, &mut output),
-            '#' if current.is_empty() => {
-                while index < chars.len() && chars[index] != '\n' { index += 1; }
-                continue;
-            }
-            '|' | '&' | ';' | '>' | '<' => {
-                flush_token_item(&mut current, &mut output);
-                let op = match ch {
-                    '|' if chars.get(index + 1) == Some(&'|') => { index += 1; ShellOperator::Or }
-                    '|' => ShellOperator::Pipe,
-                    '&' if chars.get(index + 1) == Some(&'&') => { index += 1; ShellOperator::And }
-                    '&' => ShellOperator::Background,
-                    ';' => ShellOperator::Sequence,
-                    '>' => { if chars.get(index + 1) == Some(&'>') { index += 1; } ShellOperator::Redirect }
-                    '<' => { if chars.get(index + 1) == Some(&'<') { return Err(ShellParseError::UnsupportedHereDocument); } ShellOperator::Redirect }
-                    _ => unreachable!(),
-                };
-                output.push(LexItem::Operator(op));
-            }
-            _ => current.push(ch),
-        }
-        index += 1;
-    }
-    if escaped { return Err(ShellParseError::TrailingEscape); }
-    match quote {
-        Some(Quote::Single) => return Err(ShellParseError::UnterminatedSingleQuote),
-        Some(Quote::Double) => return Err(ShellParseError::UnterminatedDoubleQuote),
-        None => {}
-    }
-    flush_token_item(&mut current, &mut output);
     Ok(output)
 }
 
-fn flush_token_item(token: &mut String, output: &mut Vec<LexItem>) {
-    if !token.is_empty() { output.push(LexItem::Word(std::mem::take(token))); }
+fn flush(token: &mut String, output: &mut Vec<LexItem>) {
+    if !token.is_empty() {
+        output.push(LexItem::Word(std::mem::take(token)));
+    }
+}
+
+fn push_operator(output: &mut Vec<LexItem>, operator: ShellOperator) -> Result<(), ShellParseError> {
+    if !matches!(output.last(), Some(LexItem::Word(_))) {
+        return Err(ShellParseError::MissingCommandAfterOperator);
+    }
+    output.push(LexItem::Operator(operator));
+    Ok(())
 }
 
 #[cfg(test)]
@@ -516,18 +278,24 @@ mod tests {
 
     #[test]
     fn normalise_quotes_and_pipe() {
-        let parsed = parse_shell("cat 'a file' | grep \\\"foo\\\"").unwrap();
+        let parsed = parse_shell("cat 'a file' | grep \"foo\"").unwrap();
         assert_eq!(parsed.segments[0].program, "cat");
         assert_eq!(parsed.segments[0].args, vec!["a file"]);
         assert_eq!(parsed.segments[1].program, "grep");
-        assert!(parsed.has_environment_expansion == false);
+        assert!(!parsed.has_environment_expansion);
         assert_eq!(parsed.normalized(), "cat a file | grep foo");
     }
 
     #[test]
     fn reject_dynamic_substitution() {
-        assert_eq!(parse_shell("echo $(id)"), Err(ShellParseError::UnsupportedCommandSubstitution));
-        assert_eq!(parse_shell("echo `id`"), Err(ShellParseError::UnsupportedCommandSubstitution));
+        assert_eq!(
+            parse_shell("echo $(id)"),
+            Err(ShellParseError::UnsupportedCommandSubstitution)
+        );
+        assert_eq!(
+            parse_shell("echo `id`"),
+            Err(ShellParseError::UnsupportedCommandSubstitution)
+        );
     }
 
     #[test]
@@ -541,5 +309,17 @@ mod tests {
     fn preserve_multiple_lines_as_sequence() {
         let parsed = parse_shell("echo one\ngit status").unwrap();
         assert!(matches!(parsed.operators, [ShellOperator::Sequence]));
+    }
+
+    #[test]
+    fn reject_redirection_and_here_doc() {
+        assert_eq!(
+            parse_shell("echo hi > file"),
+            Err(ShellParseError::UnsupportedRedirection)
+        );
+        assert_eq!(
+            parse_shell("cat <<EOF"),
+            Err(ShellParseError::UnsupportedHereDocument)
+        );
     }
 }
