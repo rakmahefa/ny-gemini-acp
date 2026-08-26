@@ -1,12 +1,8 @@
 use std::sync::Arc;
 
-use crate::events::TurnEventSink;
-use crate::state::{Session, Store};
-use crate::{
-    AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, LlmProvider,
-    ToolPermissionHandler, ToolProvider,
-};
 use super::TurnExecutionRequest;
+use crate::state::{Session, Store};
+use crate::{AgentLoop, AgentLoopConfig, AgentLoopError, LlmProvider, ToolProvider};
 
 /// Result of one provider-neutral turn execution.
 #[derive(Debug)]
@@ -47,13 +43,10 @@ impl TurnService {
     }
 
     /// Executes one already-acquired turn.
-    pub async fn run_started<'a, F>(
+    pub async fn run_started<'a>(
         &self,
-        request: TurnExecutionRequest<'a, F>,
-    ) -> Result<TurnExecutionResult, TurnServiceError>
-    where
-        F: Fn(&Session, &dyn ToolProvider) -> String + Send + Sync,
-    {
+        request: TurnExecutionRequest<'a>,
+    ) -> Result<TurnExecutionResult, TurnServiceError> {
         let TurnExecutionRequest {
             session_id,
             session,
@@ -158,6 +151,10 @@ mod tests {
         }
     }
 
+    fn build_prompt_empty(_: &Session, _: &dyn ToolProvider) -> String {
+        String::new()
+    }
+
     #[test]
     fn service_is_provider_neutral() {
         fn assert_send_sync<T: Send + Sync>() {}
@@ -197,7 +194,7 @@ mod tests {
                 semantic: &mut semantic,
                 action_handler: None,
                 permission_handler: None,
-                build_prompt: |_session, _| String::new(),
+                build_prompt: build_prompt_empty,
             })
             .await
             .unwrap();
