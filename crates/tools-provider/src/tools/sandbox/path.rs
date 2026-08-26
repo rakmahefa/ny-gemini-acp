@@ -69,7 +69,7 @@ fn normalize_path(path: &Path) -> PathBuf {
     normalized.iter().collect()
 }
 
-fn path_starts_with(child: &Path, parent: &Path) -> bool {
+pub(super) fn path_starts_with(child: &Path, parent: &Path) -> bool {
     let mut child_components = child.components();
     let mut parent_components = parent.components();
     loop {
