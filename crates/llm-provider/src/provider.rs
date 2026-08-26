@@ -12,20 +12,16 @@ use tokio::sync::mpsc;
 
 fn map_gemini_error(error: GeminiError) -> LlmError {
     match error {
-        GeminiError::CookiesExpired { code } => LlmError::Authentication {
-            message: format!("cookies expired or invalid (BardErrorInfo [{code}])"),
-        },
-        GeminiError::UnknownModel(model) => LlmError::Unavailable { message: model },
-        GeminiError::Network(message) => LlmError::Network { message },
-        GeminiError::Http { status, body } => LlmError::Provider {
-            message: format!("HTTP {status}: {body}"),
-        },
+        GeminiError::CookiesExpired { code } => {
+            LlmError::Authentication(format!("cookies expired or invalid (BardErrorInfo [{code}])"))
+        }
+        GeminiError::UnknownModel(model) => LlmError::Unavailable(model),
+        GeminiError::Network(message) => LlmError::Network(message),
+        GeminiError::Http { status, body } => LlmError::Provider(format!("HTTP {status}: {body}")),
         GeminiError::StreamDivergence => LlmError::StreamDivergence,
-        GeminiError::UploadFailed(message) => LlmError::Upload { message },
-        GeminiError::SafetyBlocked(message) => LlmError::Provider { message },
-        GeminiError::Other(error) => LlmError::Provider {
-            message: format!("{error:#}"),
-        },
+        GeminiError::UploadFailed(message) => LlmError::Upload(message),
+        GeminiError::SafetyBlocked(message) => LlmError::Provider(message),
+        GeminiError::Other(error) => LlmError::Provider(format!("{error:#}")),
     }
 }
 
@@ -108,7 +104,7 @@ impl LlmProvider for GeminiProvider {
                         }
                     }
                     Err(error) => {
-                        let _ = tx.send(Err(LlmError::Provider { message: error })).await;
+                        let _ = tx.send(Err(LlmError::Provider(error))).await;
                         return;
                     }
                 }
