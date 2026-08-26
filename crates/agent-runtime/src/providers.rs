@@ -102,6 +102,16 @@ pub trait LlmProvider: Send + Sync {
 pub enum ToolConfigurationError {
     #[error("tool configuration is invalid: {0}")]
     InvalidConfiguration(String),
+    #[error("tool transport '{transport}' failed: {message}")]
+    Transport { transport: String, message: String },
+    #[error("tool protocol error: {0}")]
+    Protocol(String),
+    #[error("tool provider rejected request: code={code}, message={message}")]
+    Remote { code: i64, message: String },
+    #[error("tool response exceeded the configured message limit")]
+    MessageTooLarge,
+    #[error("tool pagination exceeded the configured page limit")]
+    PaginationLimit,
     #[error("tool provider configuration failed: {0}")]
     Provider(String),
 }
