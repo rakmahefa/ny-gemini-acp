@@ -289,7 +289,8 @@ mod tests {
 
     #[tokio::test]
     async fn projection_rejects_transport_close_and_cancels_turn() {
-        let (_tx, receiver) = mpsc::unbounded_channel();
+        let (tx, receiver) = mpsc::unbounded_channel();
+        drop(tx);
         let cancellation = Cancellation::new();
         let error = project_events(receiver, "turn-close", &cancellation, |_| Ok(()))
             .await
@@ -338,7 +339,13 @@ mod tests {
         let notified_clone = notified.clone();
 
         let error = project_events(receiver, "turn", &cancellation, move |action| {
-            if !matches!(action, ProjectionAction::Terminal) {
+            if matches!(
+                action,
+                ProjectionAction::Text(_)
+                    | ProjectionAction::Reasoning(_)
+                    | ProjectionAction::ToolCall { .. }
+                    | ProjectionAction::ToolUpdate { .. }
+            ) {
                 notified_clone.fetch_add(1, Ordering::Relaxed);
             }
             Ok(())
