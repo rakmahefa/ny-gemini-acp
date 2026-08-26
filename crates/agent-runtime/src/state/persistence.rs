@@ -166,7 +166,7 @@ async fn cleanup_stale_busy_files(dir: &Path) {
         if !is_busy {
             continue;
         }
-        if super::busy::stale_busy_sentinel(&path).await {
+        if super::busy::recoverable_busy_sentinel(&path).await {
             let _ = tokio::fs::remove_file(path).await;
         }
     }
