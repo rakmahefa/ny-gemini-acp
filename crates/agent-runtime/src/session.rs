@@ -45,7 +45,8 @@ impl SessionManager {
         self.tools.clear_session(id).await;
     }
 
-    pub async fn configure_mcp(
+    /// Canonical typed MCP/session configuration contract for runtime callers.
+    pub async fn configure_mcp_typed(
         &self,
         id: &str,
         servers: Vec<ToolServerConfig>,
@@ -59,6 +60,18 @@ impl SessionManager {
             .configure_session(id, session.cwd, servers)
             .await
             .map_err(SessionToolConfigurationError::from)
+    }
+
+    /// ACP compatibility boundary: protocol callers receive a presentation string,
+    /// while the runtime keeps the canonical typed error above.
+    pub async fn configure_mcp(
+        &self,
+        id: &str,
+        servers: Vec<ToolServerConfig>,
+    ) -> Result<(), String> {
+        self.configure_mcp_typed(id, servers)
+            .await
+            .map_err(|error| error.to_string())
     }
 
     pub fn validate_id(id: &str) -> Result<()> {
