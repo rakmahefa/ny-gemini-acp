@@ -19,9 +19,12 @@ fn map_gemini_error(error: &anyhow::Error) -> LlmError {
         GeminiError::CookiesExpired { code } => {
             LlmError::Authentication(format!("cookies expired or invalid (BardErrorInfo [{code}])"))
         }
+        GeminiError::UpstreamRejected { code } => {
+            LlmError::Provider(format!("Gemini upstream rejected request (BardErrorInfo [{code}])"))
+        }
         GeminiError::UnknownModel(model) => LlmError::Unavailable(model.clone()),
         GeminiError::Network(message) => LlmError::Network(message.clone()),
-        GeminiError::Http { status, .. } => match status {
+        GeminiError::Http { status } => match status {
             401 | 403 => LlmError::Authentication(format!("Gemini authentication rejected (HTTP {status})")),
             408 => LlmError::Network("Gemini request timed out (HTTP 408)".into()),
             429 => LlmError::Provider("Gemini request rate-limited (HTTP 429)".into()),
