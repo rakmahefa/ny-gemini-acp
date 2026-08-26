@@ -10,17 +10,23 @@ use agent_runtime::{
 };
 use tokio::sync::mpsc;
 
-fn map_gemini_error(error: GeminiError) -> LlmError {
+fn map_gemini_error(error: &anyhow::Error) -> LlmError {
+    let Some(error) = error.downcast_ref::<GeminiError>() else {
+        return LlmError::Provider(format!("{error:#}"));
+    };
+
     match error {
         GeminiError::CookiesExpired { code } => {
             LlmError::Authentication(format!("cookies expired or invalid (BardErrorInfo [{code}])"))
         }
-        GeminiError::UnknownModel(model) => LlmError::Unavailable(model),
-        GeminiError::Network(message) => LlmError::Network(message),
-        GeminiError::Http { status, body } => LlmError::Provider(format!("HTTP {status}: {body}")),
+        GeminiError::UnknownModel(model) => LlmError::Unavailable(model.clone()),
+        GeminiError::Network(message) => LlmError::Network(message.clone()),
+        GeminiError::Http { status, body } => {
+            LlmError::Provider(format!("HTTP {status}: {body}"))
+        }
         GeminiError::StreamDivergence => LlmError::StreamDivergence,
-        GeminiError::UploadFailed(message) => LlmError::Upload(message),
-        GeminiError::SafetyBlocked(message) => LlmError::Provider(message),
+        GeminiError::UploadFailed(message) => LlmError::Upload(message.clone()),
+        GeminiError::SafetyBlocked(message) => LlmError::Provider(message.clone()),
         GeminiError::Other(error) => LlmError::Provider(format!("{error:#}")),
     }
 }
@@ -61,7 +67,7 @@ impl LlmProvider for GeminiProvider {
                 &request.references,
             )
             .await
-            .map_err(map_gemini_error)?;
+            .map_err(|error| map_gemini_error(&error))?;
 
         let (tx, rx) = mpsc::channel(16);
         let supports_reasoning = self.model_info(&request.model).supports_reasoning;
@@ -122,7 +128,7 @@ impl LlmProvider for GeminiProvider {
         self.client
             .upload_image(base64, mime)
             .await
-            .map_err(map_gemini_error)
+            .map_err(|error| map_gemini_error(&error))
     }
 
     fn model_info(&self, model: &str) -> LlmModelInfo {
