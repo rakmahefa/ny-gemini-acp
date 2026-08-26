@@ -12,25 +12,27 @@ use agent_runtime::{
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
+type ScriptedEvent = Result<ModelEvent, LlmError>;
+type ScriptedEvents = Vec<ScriptedEvent>;
+type ScriptedRound = Result<ScriptedEvents, LlmError>;
+type ScriptedRounds = Mutex<VecDeque<ScriptedRound>>;
+
 struct ScriptedLlm {
-    rounds: Mutex<VecDeque<Result<Vec<Result<ModelEvent, LlmError>>, LlmError>>>,
+    rounds: ScriptedRounds,
 }
 
 impl ScriptedLlm {
-    fn new(rounds: Vec<Result<Vec<Result<ModelEvent, LlmError>>, LlmError>>) -> Self {
+    fn new(rounds: Vec<ScriptedRound>) -> Self {
         Self {
             rounds: Mutex::new(rounds.into()),
         }
     }
 
-    fn events(events: Vec<ModelEvent>) -> Result<Vec<Result<ModelEvent, LlmError>>, LlmError> {
+    fn events(events: Vec<ModelEvent>) -> ScriptedRound {
         Ok(events.into_iter().map(Ok).collect())
     }
 
-    fn stream_error(
-        events: Vec<ModelEvent>,
-        error: LlmError,
-    ) -> Result<Vec<Result<ModelEvent, LlmError>>, LlmError> {
+    fn stream_error(events: Vec<ModelEvent>, error: LlmError) -> ScriptedRound {
         let mut items = events.into_iter().map(Ok).collect::<Vec<_>>();
         items.push(Err(error));
         Ok(items)
