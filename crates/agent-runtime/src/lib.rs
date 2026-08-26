@@ -20,8 +20,8 @@ pub use events::{
 pub use execution::{
     AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome,
     AgentTurn, AgentTurnHandle, Cancellation, RuntimeError, ToolPermissionDecision,
-    ToolPermissionHandler, ToolPermissionRequest, TurnExecutionResult, TurnManager, TurnService,
-    TurnServiceError, TurnState,
+    ToolPermissionHandler, ToolPermissionRequest, TurnExecutionRequest, TurnExecutionResult,
+    TurnManager, TurnService, TurnServiceError, TurnState,
 };
 pub use identity::{SessionId, ToolCallId, TurnId};
 pub use prompt::{
