@@ -6,4 +6,7 @@
 
 mod implementation;
 
-pub use implementation::{ResultUpdate, ToolInfo};
+pub use implementation::{
+    bounded_raw_input, classify_risk, lifecycle_icon, lifecycle_label, result_update, ResultUpdate,
+    ToolInfo,
+};
