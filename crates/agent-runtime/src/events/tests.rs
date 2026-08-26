@@ -28,7 +28,7 @@ fn keeps_tool_call_context_and_ui() {
             context,
             ui: Some(actual),
         } => {
-            assert_eq!(context.tool_call_id, "tool-a");
+            assert_eq!(context.tool_call_id, "tool-a".into());
             assert_eq!(actual.kind, ToolUiKind::Generic);
             assert_eq!(actual.status, ToolUiStatus::Pending);
         }
