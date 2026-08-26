@@ -3,9 +3,10 @@ use std::sync::Arc;
 use crate::events::TurnEventSink;
 use crate::state::{Session, Store};
 use crate::{
-    AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, Cancellation,
-    LlmProvider, ToolPermissionHandler, ToolProvider,
+    AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, LlmProvider,
+    ToolPermissionHandler, ToolProvider,
 };
+use super::TurnExecutionRequest;
 
 /// Result of one provider-neutral turn execution.
 #[derive(Debug)]
@@ -22,11 +23,6 @@ pub enum TurnServiceError {
 }
 
 /// Owns the runtime portion of a turn once the session has been acquired.
-///
-/// ACP and other hosts remain responsible for request parsing, host-specific
-/// preparation, interaction handlers, and presentation. This service owns the
-/// provider-neutral execution boundary and guarantees that the acquired
-/// session is finalized on every execution path.
 #[derive(Clone)]
 pub struct TurnService {
     store: Arc<Store>,
@@ -50,23 +46,26 @@ impl TurnService {
         }
     }
 
-    /// Executes a turn for a session that has already been acquired with
-    /// `Store::begin_turn`.
-    pub async fn run_started<F>(
+    /// Executes one already-acquired turn.
+    pub async fn run_started<'a, F>(
         &self,
-        session_id: &str,
-        session: Session,
-        generation: u64,
-        references: &[String],
-        cancellation: Cancellation,
-        semantic: &mut dyn TurnEventSink,
-        action_handler: Option<Arc<dyn AgentActionHandler>>,
-        permission_handler: Option<Arc<dyn ToolPermissionHandler>>,
-        build_prompt: F,
+        request: TurnExecutionRequest<'a, F>,
     ) -> Result<TurnExecutionResult, TurnServiceError>
     where
         F: Fn(&Session, &dyn ToolProvider) -> String + Send + Sync,
     {
+        let TurnExecutionRequest {
+            session_id,
+            session,
+            generation,
+            references,
+            cancellation,
+            semantic,
+            action_handler,
+            permission_handler,
+            build_prompt,
+        } = request;
+
         let mut session = session;
         let agent_loop = match AgentLoop::new(self.llm.clone(), self.tools.clone(), self.config) {
             Ok(agent_loop) => {
@@ -80,7 +79,7 @@ impl TurnService {
                 }
             }
             Err(error) => {
-                self.finish(session_id, session, generation).await;
+                self.finish(&session_id, session, generation).await;
                 if !semantic.is_terminal() {
                     let _ = semantic.turn_started();
                     let _ = semantic.turn_failed();
@@ -92,7 +91,7 @@ impl TurnService {
         let result = agent_loop
             .run(
                 &mut session,
-                references,
+                &references,
                 cancellation,
                 semantic,
                 build_prompt,
@@ -105,7 +104,7 @@ impl TurnService {
                     outcome,
                     session: session.clone(),
                 };
-                self.finish(session_id, session, generation).await;
+                self.finish(&session_id, session, generation).await;
                 Ok(result)
             }
             Err(error) => {
@@ -116,18 +115,14 @@ impl TurnService {
                         let _ = semantic.turn_failed();
                     }
                 }
-                self.finish(session_id, session, generation).await;
+                self.finish(&session_id, session, generation).await;
                 Err(error.into())
             }
         }
     }
 
     async fn finish(&self, session_id: &str, session: Session, generation: u64) {
-        if let Err(error) = self
-            .store
-            .end_turn(session_id, session, generation)
-            .await
-        {
+        if let Err(error) = self.store.end_turn(session_id, session, generation).await {
             tracing::warn!(session=%session_id, error=%error, "turn finalization failed");
         }
     }
@@ -176,10 +171,7 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let store = Arc::new(Store::open(&dir).await.unwrap());
-        let session = store
-            .create("/tmp".into(), vec![], "test-model")
-            .await
-            .unwrap();
+        let session = store.create("/tmp".into(), vec![], "test-model").await.unwrap();
         let (started, generation) = store.begin_turn(&session.id).await.unwrap();
         let bus = EventBus::new();
         let _projection = bus.subscribe_turn("turn-test");
@@ -196,17 +188,17 @@ mod tests {
         );
 
         let result = service
-            .run_started(
-                &session.id,
-                started,
+            .run_started(TurnExecutionRequest {
+                session_id: session.id.clone(),
+                session: started,
                 generation,
-                &[],
-                Cancellation::new(),
-                &mut semantic,
-                None,
-                None,
-                |_session, _| String::new(),
-            )
+                references: Vec::new(),
+                cancellation: crate::Cancellation::new(),
+                semantic: &mut semantic,
+                action_handler: None,
+                permission_handler: None,
+                build_prompt: |_session, _| String::new(),
+            })
             .await
             .unwrap();
 
@@ -216,10 +208,7 @@ mod tests {
 
         let persisted = store.get(&session.id).await.unwrap();
         assert!(persisted.messages.entries().iter().any(|entry| {
-            matches!(
-                entry,
-                HistoryEntry::Assistant { content } if content == "hello from runtime"
-            )
+            matches!(entry, HistoryEntry::Assistant { content } if content == "hello from runtime")
         }));
 
         bus.close_turn("turn-test");
