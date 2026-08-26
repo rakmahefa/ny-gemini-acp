@@ -163,7 +163,10 @@ impl Client {
                     let combined = format!("{}{}", state.decoder.pending(), text);
                     if combined.contains("BardErrorInfo") {
                         let code = frames::bard_error(&combined).unwrap_or(0);
-                        return Err(GeminiError::CookiesExpired { code }.into());
+                        if code == 401 {
+                            return Err(GeminiError::CookiesExpired { code }.into());
+                        }
+                        return Err(GeminiError::UpstreamRejected { code }.into());
                     }
                     if let Some(reason) = frames::detect_safety_block(&combined) {
                         let _ = state.tx.send(Err(reason)).await;
