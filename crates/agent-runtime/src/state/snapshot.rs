@@ -84,6 +84,6 @@ impl Store {
             .with_context(|| format!("snapshot introuvable: {}", snap_path.display()))?;
         let session: super::types::Session = serde_json::from_str(&raw)
             .with_context(|| format!("snapshot invalide: {}", snap_path.display()))?;
-        self.end_turn(id, session, 0).await
+        self.end_turn(id, session, 0).await.map_err(anyhow::Error::new)
     }
 }
