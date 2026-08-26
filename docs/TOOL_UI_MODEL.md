@@ -34,10 +34,28 @@ ToolCard
 2. **No text parsing.** Tool names, statuses, file paths, commands, matches, and counts are structured fields.
 3. **Small primary surface.** The title and summary must be readable in a compact card. Large stdout, file contents, and diffs belong in expandable details.
 4. **Mutation clarity.** `file_write`, `file_edit`, and `replace_in_file` must communicate what changed, not only that execution succeeded.
-5. **Execution clarity.** `shell_exec` must distinguish command, running state, exit status, timeout, and output.
+5. **Execution clarity.** `shell_exec` must distinguish command, running state, exit status, timeout, policy denial, and output.
 6. **Search clarity.** `search`, `glob`, and `list_directory` should expose counts and paths without forcing the host to parse lines.
-7. **Safety clarity.** A blocked or denied action must have a distinct failure state; it must not look like an ordinary provider error.
+7. **Safety clarity.** A blocked or denied action must have a distinct failure state and a structured reason; it must not look like an ordinary provider error.
 8. **Privacy by construction.** Large replacement strings, raw prompts, and verbose outputs should not be duplicated into primary UI metadata.
+
+## Shell safety semantics
+
+The shell policy is a semantic execution gate, not an OS isolation mechanism.
+
+The UI may distinguish these outcomes:
+
+```text
+Allowed
+Running
+Succeeded
+Failed
+Cancelled
+PolicyDenied
+ConfinementUnavailable
+```
+
+`PolicyDenied` means the command was rejected before execution by the application policy. `ConfinementUnavailable` is reserved for a future execution backend when OS-level confinement is required but unavailable. The current shell policy does **not** claim host isolation.
 
 ## Builtin mapping
 
@@ -51,7 +69,7 @@ ToolCard
 | `list_directory` | `DirectoryList` | directory + entry count | entries |
 | `search` | `Search` | pattern + match count | matches |
 | `search_and_read` | `SearchAndRead` | pattern + excerpts | excerpts |
-| `shell_exec` | `Shell` | command + lifecycle | stdout/stderr/exit status |
+| `shell_exec` | `Shell` | command + lifecycle + safety outcome | stdout/stderr/exit status/reason |
 | `AskUserQuestion` | `AskUserQuestion` | question state | response form |
 
 ## UX target
