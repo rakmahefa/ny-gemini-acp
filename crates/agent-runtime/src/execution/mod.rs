@@ -8,7 +8,8 @@ mod turn_manager;
 mod turn_service;
 
 pub use agent_loop::{
-    AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome,
+    AgentActionError, AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError,
+    AgentLoopOutcome,
 };
 pub use cancellation::Cancellation;
 pub use error::RuntimeError;
