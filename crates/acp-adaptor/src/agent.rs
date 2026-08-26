@@ -10,6 +10,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
     let h_tools = state.tools.clone();
     let h_llm = state.llm.clone();
     let h_events = state.events.clone();
+    let h_turn_service = state.turn_service.clone();
     let turn_manager = state.turns.clone();
 
     Agent::builder(Agent)
@@ -33,12 +34,14 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                 let store = h_store.clone();
                 let tools = h_tools.clone();
                 let llm = h_llm.clone();
+                let turn_service = h_turn_service.clone();
                 let events = h_events.clone();
                 let turn_manager = turn_manager.clone();
                 async move |req: PromptRequest, responder, cx| {
                     let store = store.clone();
                     let tools = tools.clone();
                     let llm = llm.clone();
+                    let turn_service = turn_service.clone();
                     let events = events.clone();
                     let turn_manager = turn_manager.clone();
                     let turn_cx = cx.clone();
@@ -82,6 +85,7 @@ pub async fn run_agent(state: AppState) -> Result<(), AcpError> {
                                     store,
                                     tools,
                                     llm,
+                                    turn_service,
                                     cx: turn_cx,
                                     semantic: &mut semantic,
                                     cancellation,
