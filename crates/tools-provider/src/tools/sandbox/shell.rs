@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::parser::{parse_shell, ParsedShellCommand};
 use super::path::SecurityError;
-use super::risk::{RiskLevel, ShellAnalysis};
+use super::risk::ShellAnalysis;
 
 #[derive(Clone, Debug)]
 pub struct ShellSandbox {
@@ -135,13 +135,7 @@ impl ShellSandbox {
                 && args.iter().any(|arg| {
                     matches!(
                         arg.as_str(),
-                        "sh"
-                            | "bash"
-                            | "zsh"
-                            | "dash"
-                            | "ksh"
-                            | "python"
-                            | "python3"
+                        "sh" | "bash" | "zsh" | "dash" | "ksh" | "python" | "python3"
                     )
                 })
             {
@@ -212,8 +206,4 @@ fn blocked_programs() -> HashSet<&'static str> {
     ]
     .into_iter()
     .collect()
-}
-
-pub(crate) fn risk_for_command(command: &str) -> RiskLevel {
-    ShellAnalysis::analyze(command).risk
 }
