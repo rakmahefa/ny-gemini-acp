@@ -27,7 +27,11 @@ pub enum GeminiError {
     Network(String),
 
     /// Erreur HTTP (status non-2xx).
-    #[error("erreur HTTP {status}: {body}")]
+    ///
+    /// Le corps est conservé uniquement pour les diagnostics internes, mais n'est
+    /// jamais inclus dans le message d'erreur afin d'éviter la fuite de secrets,
+    /// tokens ou contenus retournés par un proxy/upstream.
+    #[error("erreur HTTP {status}")]
     Http { status: u16, body: String },
 
     /// Divergence de flux en cours de streaming — le texte cumulé a change
