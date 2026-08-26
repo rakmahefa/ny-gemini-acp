@@ -16,7 +16,7 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 |---|---|---|---|
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
-| P2 | Dette d'orchestration des turns | 🚧 En cours | TurnService extrait, câblage ACP réduit, tests runtime ajoutés |
+| P2 | Dette d'orchestration des turns | 🚧 En cours | TurnService extrait, câblage ACP réduit, couverture runtime renforcée |
 | P2 | Dette des erreurs structurées | À traiter progressivement | Après orchestration |
 | P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
@@ -124,7 +124,7 @@ Le remboursement a progressé sur deux niveaux :
 - conservation des `AgentActionHandler` et `ToolPermissionHandler` comme dépendances injectées ;
 - suppression de l'ancien `TurnGuard` de l'adaptateur devenu redondant ;
 - extraction de l'orchestration ACP restante vers `prompt::handle_prompt` ;
-- `acp-adaptor/src/agent.rs` réduit à l'enregistrement des handlers et au délégateur de prompt ;
+- `acp-adaptor/src/agent.rs` réduit au routage des requêtes/notifications et à un délégateur de prompt ;
 - création du transport sémantique et du `turn_id` différée jusqu'à l'acceptation effective du turn ;
 - ajout d'un test runtime vérifiant `provider → AgentLoop → SemanticEvent lifecycle → Store persistence`.
 
@@ -149,21 +149,39 @@ acp-adaptor
 
 Le runtime reste indépendant d'ACP et le `TurnService` ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
 
-## Garanties supplémentaires
+## Garanties de test disponibles
 
-Le test runtime ajouté couvre le chemin provider → runtime et vérifie que :
+La branche dispose maintenant de deux niveaux de couverture complémentaires :
 
-- la sortie du provider devient le résultat du turn ;
-- le lifecycle sémantique atteint un état terminal ;
-- la session finale est persistée avec le message assistant produit par le runtime.
+```text
+provider
+   ↓
+TurnService
+   ↓
+SemanticEvent lifecycle
+   ↓
+Store persistence
+```
+
+et, côté adaptateur :
+
+```text
+SemanticEvent
+   ↓
+sequence / turn integrity
+   ↓
+ACP projection
+```
+
+Les tests de projection existants vérifient notamment les ruptures de séquence, les changements de turn inattendus et la conservation de l'identité des tool calls dans le modèle de présentation.
 
 ## Ce qui reste à faire
 
 Le chantier n'est pas encore considéré comme terminé. Il reste à :
 
-- ajouter au moins un test de frontière couvrant `SemanticEvent → projection ACP` ;
-- valider localement les nouveaux changements avec `cargo fmt --check`, `cargo check --workspace` et `cargo test --workspace` ;
-- effectuer une dernière revue du contrat `TurnService` avant merge.
+- exécuter la validation complète après les derniers changements (`cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace`) ;
+- effectuer une dernière revue du contrat et des responsabilités de `TurnService` ;
+- confirmer qu'aucun couplage ACP/runtime inutile ne reste dans le workflow de prompt avant merge.
 
 ## Critères de réussite
 
@@ -172,7 +190,7 @@ Le chantier n'est pas encore considéré comme terminé. Il reste à :
 - lifecycle terminalisé en un point clairement défini ;
 - conservation des garanties actuelles des `SemanticEvent` ;
 - tests unitaires du service de turn ;
-- au moins un test d'intégration couvrant `provider → runtime → semantic events → projection → ACP`.
+- couverture du chemin runtime et de la frontière de projection ACP.
 
 ## Priorité
 
@@ -359,13 +377,11 @@ Les changements qui n'apportent aucun de ces bénéfices doivent être considér
 La prochaine étape doit rester sur `debt/turn-orchestration` et terminer ce chantier avant d'ouvrir la dette des erreurs structurées en parallèle.
 
 ```text
-1. ajouter le test SemanticEvent → projection ACP
+1. cargo fmt --check
+2. cargo check --workspace
+3. cargo test --workspace
         ↓
-2. cargo fmt --check
-3. cargo check --workspace
-4. cargo test --workspace
+4. dernière revue du TurnService
         ↓
-5. dernière revue du TurnService
-        ↓
-6. merge dans main
+5. merge dans main
 ```
