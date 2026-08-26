@@ -56,10 +56,13 @@ impl Store {
     {
         let mut live = self.live.write().await;
         if let Some(entry) = live.get_mut(id) {
-            f(&mut entry.session);
-            self.persist(&entry.session).await?;
+            let mut updated = entry.session.clone();
+            f(&mut updated);
+            self.persist(&updated).await?;
+            entry.session = updated;
             return Ok(());
         }
+
         let mut session = self
             .read(id)
             .await
