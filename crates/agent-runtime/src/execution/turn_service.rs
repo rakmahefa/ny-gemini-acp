@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::events::TurnEventSink;
-use crate::state::{Session, Store, TurnError};
+use crate::state::{Session, Store};
 use crate::{
     AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, Cancellation,
     LlmProvider, ToolPermissionHandler, ToolProvider,
@@ -17,8 +17,6 @@ pub struct TurnExecutionResult {
 /// Error returned by the runtime turn execution service.
 #[derive(Debug, thiserror::Error)]
 pub enum TurnServiceError {
-    #[error("cannot acquire turn: {0}")]
-    Acquire(#[from] TurnError),
     #[error("agent loop failed: {0}")]
     Agent(#[from] AgentLoopError),
 }
@@ -138,40 +136,10 @@ impl TurnService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::TurnEventEmitter;
-    use crate::providers::{NullLlmProvider, NullToolProvider};
-    use std::path::PathBuf;
 
     #[test]
     fn service_is_provider_neutral() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TurnService>();
-    }
-
-    #[test]
-    fn execution_result_keeps_runtime_session_state() {
-        let _ = TurnExecutionResult {
-            outcome: crate::AgentLoopOutcome {
-                output: "ok".into(),
-                rounds: 1,
-                tool_calls: 0,
-            },
-            session: Session::new(
-                "sess_test".into(),
-                PathBuf::from("."),
-                vec![],
-                "test-model".into(),
-            ),
-        };
-    }
-
-    #[allow(dead_code)]
-    fn _construct_service(store: Arc<Store>) -> TurnService {
-        TurnService::new(
-            store,
-            Arc::new(NullLlmProvider),
-            Arc::new(NullToolProvider),
-            AgentLoopConfig::default(),
-        )
     }
 }
