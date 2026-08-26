@@ -202,7 +202,17 @@ fn lex(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
                 flush(&mut token, &mut output);
                 at_token_start = true;
             }
-            '\n' | ';' => {
+            '\n' => {
+                flush(&mut token, &mut output);
+                let next_non_space = chars[index + 1..]
+                    .iter()
+                    .any(|next| !next.is_whitespace());
+                if next_non_space {
+                    push_operator(&mut output, ShellOperator::Sequence)?;
+                }
+                at_token_start = true;
+            }
+            ';' => {
                 flush(&mut token, &mut output);
                 push_operator(&mut output, ShellOperator::Sequence)?;
                 at_token_start = true;
@@ -309,6 +319,13 @@ mod tests {
     fn preserve_multiple_lines_as_sequence() {
         let parsed = parse_shell("echo one\ngit status").unwrap();
         assert!(matches!(parsed.operators, [ShellOperator::Sequence]));
+    }
+
+    #[test]
+    fn tolerate_trailing_newline() {
+        let parsed = parse_shell("git status\n").unwrap();
+        assert_eq!(parsed.segments[0].program, "git");
+        assert!(parsed.operators.is_empty());
     }
 
     #[test]
