@@ -17,7 +17,7 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P2 | Dette d'orchestration des turns | ✅ Terminée | TurnService extrait, adaptateur découplé, tests et validations verts |
-| P2 | Dette des erreurs structurées | 🚧 Prochaine priorité | À traiter progressivement après orchestration |
+| P2 | Dette des erreurs structurées | 🚧 En cours | Première tranche traitée sur `debt/structured-errors` |
 | P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
 | P3 | CI automatisée | Hors priorité | Tests CI manuels par le mainteneur |
@@ -193,44 +193,91 @@ cargo clippy --workspace --all-targets -- -D warnings   ✅
 
 **✅ Terminé sur `debt/turn-orchestration`.**
 
-La branche peut maintenant être revue puis mergée dans `main`. La prochaine dette prioritaire est celle des erreurs structurées.
+La branche peut maintenant être revue puis mergée dans `main`. La dette prioritaire suivante est celle des erreurs structurées.
 
 ---
 
-# 5. Dette de gestion des erreurs — PRIORITÉ 2 🚧 PROCHAINE PRIORITÉ
+# 5. Dette de gestion des erreurs — PRIORITÉ 2 🚧 EN COURS
 
 ## Constat
 
-Plusieurs modèles d'erreur coexistent :
+Plusieurs modèles d'erreur coexistent encore :
 
 - `anyhow` pour certaines couches d'application ;
-- `thiserror` pour certains contrats ;
-- `Result<T, String>` pour certaines interfaces ;
-- erreurs ACP aux frontières protocolaire ;
+- `thiserror` pour les contrats métier ;
+- quelques erreurs historiques sous forme de `String` ;
+- erreurs ACP aux frontières protocolaires ;
 - erreurs provider spécifiques.
 
-## Risque
+## Première tranche remboursée sur `debt/structured-errors`
 
-Les `String` utilisés comme erreurs perdent de l'information structurée et rendent plus difficiles le traitement programmatique, les tests précis et le mapping vers les couches supérieures.
+Le contrat runtime des outils n'utilise plus `Result<(), String>` pour la configuration de session :
 
-## Direction retenue
+- introduction de `ToolConfigurationError` dans `agent-runtime` ;
+- propagation de cette erreur structurée vers `DefaultToolProvider` ;
+- introduction de `SessionToolConfigurationError` pour distinguer l'absence de session d'un échec provider ;
+- export explicite des nouveaux contrats d'erreur par `agent-runtime` ;
+- test de régression couvrant une configuration MCP sur une session inexistante.
 
-Introduire progressivement des erreurs métier typées, notamment autour de :
+La finalisation d'un tour a également cessé d'absorber silencieusement certaines erreurs de persistance :
+
+- introduction de `StoreError` pour la finalisation de tour ;
+- erreur explicite de génération obsolète ;
+- erreur explicite de persistance ;
+- propagation de l'échec de finalisation par `TurnService` ;
+- conservation de l'erreur d'exécution lorsqu'une erreur de persistance survient simultanément grâce à `AgentAndPersistence`.
+
+## Contrat retenu
 
 ```text
-Session
-Persistence
 Tool configuration
-Tool execution
-Provider
-Turn lifecycle
+    ↓
+ToolConfigurationError
+    ↓
+SessionToolConfigurationError
+    ↓
+frontière applicative / ACP
 ```
 
-Puis convertir explicitement ces erreurs aux frontières applicatives et ACP.
+et :
 
-## Priorité
+```text
+AgentLoop
+    ↓
+TurnService
+    ↓
+Store::end_turn
+    ↓
+StoreError
+```
 
-**P2 — prochaine dette à rembourser.**
+Le runtime n'a pas vocation à exposer directement les détails ACP. Les conversions vers les erreurs protocolaires restent du ressort des adaptateurs.
+
+## Limites restantes
+
+Cette tranche ne prétend pas avoir éliminé tous les `String` d'erreur du workspace. Les prochaines zones à traiter sont notamment :
+
+- erreurs provider/outillage encore aplaties en chaînes à certaines frontières ;
+- erreurs de session et de persistance hors du chemin de finalisation d'un turn ;
+- mappings ACP finaux et tests associés ;
+- vérification systématique des `Result<T, String>` restants.
+
+## Validation
+
+La branche a été structurée pour les validations suivantes :
+
+```text
+cargo fmt --check
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+La CI GitHub n'est pas actuellement active sur le dépôt ; la validation automatique complète devra donc être exécutée par le mainteneur avant merge.
+
+## Statut
+
+**🚧 En cours — première tranche structurée réalisée.**
 
 ---
 
@@ -343,7 +390,7 @@ L'ordre de travail retenu est désormais :
         ↓
 ✅ 4. Orchestration des turns
         ↓
-🚧 5. Erreurs structurées
+🚧 5. Erreurs structurées — première tranche réalisée
         ↓
 6. Tests d'intégration / système renforcés
         ↓
@@ -374,4 +421,4 @@ Les changements qui n'apportent aucun de ces bénéfices doivent être considér
 
 # 11. Point de reprise
 
-La prochaine étape est la dette des erreurs structurées. La branche `debt/turn-orchestration` peut être revue puis mergée dans `main` avant d'ouvrir le prochain chantier.
+La branche `debt/structured-errors` constitue maintenant le point de reprise de la dette des erreurs structurées. La prochaine tranche devra poursuivre le même principe en ciblant les frontières provider/session/persistance restantes et leurs mappings ACP, sans réintroduire de primitives dans le cœur du runtime.
