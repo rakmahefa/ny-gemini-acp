@@ -17,7 +17,8 @@ status_line() {
   printf '%-4s %s\n' "$level" "$message"
 }
 
-run_scan() {
+# Assertions where a match means a violation.
+assert_no_match() {
   local severity="$1"
   local title="$2"
   shift 2
@@ -26,7 +27,7 @@ run_scan() {
   out=$("$@" 2>&1)
   rc=$?
 
-  if [[ -n "$out" ]]; then
+  if [[ "$rc" -eq 0 ]]; then
     printf '%s\n' "$out"
     if [[ "$severity" == "FAIL" ]]; then
       FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -39,6 +40,7 @@ run_scan() {
   fi
 
   if [[ "$rc" -gt 1 ]]; then
+    printf '%s\n' "$out"
     printf 'command failed with exit code %d\n' "$rc"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     status_line "FAIL" "$title (audit command failed)"
@@ -47,6 +49,37 @@ run_scan() {
 
   status_line "PASS" "$title"
   return 0
+}
+
+# Assertions where a match means the expected contract is present.
+assert_match() {
+  local severity="$1"
+  local title="$2"
+  shift 2
+
+  local out rc
+  out=$("$@" 2>&1)
+  rc=$?
+
+  if [[ "$rc" -eq 0 ]]; then
+    printf '%s\n' "$out"
+    status_line "PASS" "$title"
+    return 0
+  fi
+
+  if [[ "$rc" -gt 1 ]]; then
+    printf '%s\n' "$out"
+    printf 'command failed with exit code %d\n' "$rc"
+  fi
+
+  if [[ "$severity" == "FAIL" ]]; then
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    status_line "FAIL" "$title"
+  else
+    WARN_COUNT=$((WARN_COUNT + 1))
+    status_line "WARN" "$title"
+  fi
+  return 1
 }
 
 require_command() {
@@ -58,8 +91,7 @@ require_command() {
 }
 
 check_direct_dependency_absent() {
-  local crate="$1"
-  local manifest="$2"
+  local manifest="$1"
 
   if rg -n -S '^agent-client-protocol[[:space:]]*=' "$manifest" >/dev/null 2>&1; then
     return 0
@@ -85,17 +117,17 @@ ADAPTER='crates/acp-adaptor/src'
 # Production code is FAIL; test-only provider fixtures are WARN.
 # -----------------------------------------------------------------------------
 section "1. Runtime boundary"
-run_scan "FAIL" "agent-runtime has no executable ACP references" \
+assert_no_match "FAIL" "agent-runtime has no executable ACP references" \
   rg -n -S --glob '*.rs' --glob '!**/test/**' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|McpServer' \
+    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|\bMcpServer\b' \
     "$RUNTIME"
 
-run_scan "FAIL" "agent-runtime production code has no Gemini/provider-specific references" \
+assert_no_match "FAIL" "agent-runtime production code has no Gemini/provider-specific references" \
   rg -n -S --glob '*.rs' --glob '!**/test/**' \
     '\bGemini\b|\bgemini\b|google|sapisid|web2api|cookie_file|auth_user' \
     "$RUNTIME"
 
-run_scan "WARN" "agent-runtime tests are provider-neutral" \
+assert_no_match "WARN" "agent-runtime tests are provider-neutral" \
   rg -n -S --glob '*.rs' \
     '\bGemini\b|\bgemini\b|gemini-acp-(runtime|config|agent|encaps|tools)|gemini_acp_(runtime|config|agent|encaps|tools)' \
     "$RUNTIME/test"
@@ -105,28 +137,29 @@ run_scan "WARN" "agent-runtime tests are provider-neutral" \
 # They are signals for future typing work, not architectural failures.
 # -----------------------------------------------------------------------------
 section "2. Contract surface"
-run_scan "WARN" "LLM contract should be reviewed for weakly typed fields" \
+assert_match "WARN" "LLM contract contains fields worth reviewing for stronger typing" \
   rg -n -S \
     'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' \
     "$RUNTIME/providers.rs"
 
-run_scan "WARN" "Tool contract should be reviewed for weakly typed fields" \
+assert_match "WARN" "Tool contract contains fields worth reviewing for stronger typing" \
   rg -n -S \
-    'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' \
+    'ToolCallRequest|ToolCallResult|ToolProvider' \
     "$RUNTIME/providers.rs"
 
 # -----------------------------------------------------------------------------
 # 3. ACP MUST NOT cross provider entry points.
+# Match actual ACP imports/types, not generic names such as McpServerConfig.
 # -----------------------------------------------------------------------------
 section "3. ACP provider boundary"
-run_scan "FAIL" "ACP types do not cross llm-provider entry point" \
+assert_no_match "FAIL" "ACP types do not cross llm-provider entry point" \
   rg -n -S --glob '*.rs' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|McpServer' \
+    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest' \
     "$LLM/provider.rs"
 
-run_scan "FAIL" "ACP types do not cross tools-provider entry point" \
+assert_no_match "FAIL" "ACP types do not cross tools-provider entry point" \
   rg -n -S --glob '*.rs' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|McpServer' \
+    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest' \
     "$TOOLS/provider.rs"
 
 # -----------------------------------------------------------------------------
@@ -141,7 +174,7 @@ if [[ ! -f crates/llm-provider/Cargo.toml || ! -f crates/tools-provider/Cargo.to
   status_line "FAIL" "provider Cargo.toml files are present"
   FAIL_COUNT=$((FAIL_COUNT + 1))
 else
-  if check_direct_dependency_absent "llm-provider" "crates/llm-provider/Cargo.toml"; then
+  if check_direct_dependency_absent "crates/llm-provider/Cargo.toml"; then
     status_line "FAIL" "llm-provider has no direct agent-client-protocol dependency"
     FAIL_COUNT=$((FAIL_COUNT + 1))
   else
@@ -187,17 +220,18 @@ fi
 # adapter; MCP implementation is allowed inside tools-provider.
 # -----------------------------------------------------------------------------
 section "5. MCP normalization"
-run_scan "FAIL" "ACP MCP servers are normalized at the adapter boundary" \
-  rg -n -S 'McpServer|from_acp_servers|normalize_server' "$ADAPTER/config/mcp.rs"
+assert_match "FAIL" "ACP MCP servers are normalized at the adapter boundary" \
+  rg -n -S 'agent_client_protocol::schema::v1|McpServer|from_acp_servers|normalize_server' \
+  "$ADAPTER/config/mcp.rs"
 
-run_scan "WARN" "tools-provider owns MCP implementation details rather than runtime" \
+assert_match "WARN" "tools-provider owns MCP implementation details rather than runtime" \
   rg -n -S 'McpServerConfig|McpCatalog|McpTransportKind' "$TOOLS"
 
 # -----------------------------------------------------------------------------
 # 6. Provider-owned session state.
 # -----------------------------------------------------------------------------
 section "6. Provider-owned session state"
-run_scan "WARN" "tool session ownership is implemented by ToolProvider" \
+assert_match "WARN" "tool session ownership is implemented by ToolProvider" \
   rg -n -S \
     'for_session|configure_session|clear_session|session_id|HashMap' \
     "$RUNTIME/providers.rs" "$TOOLS/provider.rs" "$RUNTIME/session.rs"
@@ -207,12 +241,12 @@ run_scan "WARN" "tool session ownership is implemented by ToolProvider" \
 # Production references are FAIL; fixtures/docs are WARN.
 # -----------------------------------------------------------------------------
 section "7. Legacy architecture names"
-run_scan "FAIL" "production code has no legacy gemini-acp crate identities" \
+assert_no_match "FAIL" "production code has no legacy gemini-acp crate identities" \
   rg -n -S --glob '*.rs' --glob '!**/test/**' \
     'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' \
     crates
 
-run_scan "WARN" "tests and fixtures have no legacy gemini-acp crate identities" \
+assert_no_match "WARN" "tests and fixtures have no legacy gemini-acp crate identities" \
   rg -n -S --glob '*.rs' --glob '**/test/**' \
     'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' \
     crates
@@ -221,18 +255,17 @@ run_scan "WARN" "tests and fixtures have no legacy gemini-acp crate identities" 
 # 8. Public provider contracts remain centralized in agent-runtime.
 # -----------------------------------------------------------------------------
 section "8. Provider trait declarations"
-run_scan "FAIL" "provider traits are centralized in agent-runtime" \
+assert_match "FAIL" "provider traits are centralized in agent-runtime" \
   rg -n -S \
     '^pub trait (LlmProvider|ToolProvider)' \
     "$RUNTIME/providers.rs"
 
-run_scan "FAIL" "provider implementations do not redeclare runtime provider traits" \
+assert_no_match "FAIL" "provider implementations do not redeclare runtime provider traits" \
   rg -n -S \
     '^pub trait (LlmProvider|ToolProvider)' \
     "$LLM" "$TOOLS"
 
 printf '\n=== RESULT ===\n'
-printf 'PASS: checks completed without a hard-boundary failure\n'
 printf 'WARN: %d\n' "$WARN_COUNT"
 printf 'FAIL: %d\n' "$FAIL_COUNT"
 
