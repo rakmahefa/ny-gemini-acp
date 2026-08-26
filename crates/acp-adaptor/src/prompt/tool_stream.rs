@@ -114,10 +114,10 @@ fn project_event(
     turn_id: &str,
 ) -> Result<ProjectionAction, ProjectionError> {
     let context = event_context(&event);
-    if context.turn_id != turn_id {
+    if context.turn_id.as_str() != turn_id {
         return Err(ProjectionError::UnexpectedTurn {
             expected: turn_id.to_owned(),
-            actual: context.turn_id.clone(),
+            actual: context.turn_id.to_string(),
         });
     }
     sequence.observe(context)?;
@@ -130,7 +130,7 @@ fn project_event(
             ui: Some(ui),
             ..
         } => ProjectionAction::ToolCall {
-            id: context.tool_call_id,
+            id: context.tool_call_id.to_string(),
             ui,
         },
         SemanticEvent::ToolExecutionStarted {
@@ -142,7 +142,7 @@ fn project_event(
             ui: Some(ui),
             ..
         } => ProjectionAction::ToolUpdate {
-            id: context.tool_call_id,
+            id: context.tool_call_id.to_string(),
             ui,
         },
         SemanticEvent::TurnCancelled { .. }
