@@ -116,6 +116,7 @@ Le `acp-adaptor` possède déjà des handlers séparés, mais le câblage du tra
 Le premier niveau d'extraction a été réalisé :
 
 - création de `agent_runtime::TurnService` ;
+- `TurnService` intégré à la composition root `AppState` ;
 - exécution provider-neutral déplacée de l'adaptateur vers `agent-runtime` ;
 - création et configuration de `AgentLoop` centralisées dans le service ;
 - gestion du terminal lifecycle regroupée dans le service ;
@@ -149,7 +150,6 @@ Le runtime reste indépendant d'ACP et le service ne connaît ni `PromptRequest`
 Le chantier n'est pas encore considéré comme terminé. Il reste à :
 
 - réduire davantage le câblage de turn dans `acp-adaptor/src/agent.rs` ;
-- déterminer si `TurnService` doit devenir une dépendance explicite de `AppState` plutôt que d'être construit au niveau du prompt handler ;
 - ajouter un test d'intégration runtime couvrant `provider → runtime → SemanticEvent` ;
 - ajouter au moins un test de frontière couvrant `SemanticEvent → projection ACP` ;
 - valider localement `cargo fmt --check`, `cargo check --workspace` et `cargo test --workspace` avant merge.
@@ -350,15 +350,13 @@ La prochaine étape doit rester sur `debt/turn-orchestration` et poursuivre l'ex
 ```text
 1. stabiliser TurnService
         ↓
-2. intégrer TurnService au runtime composition root
+2. alléger acp-adaptor/src/agent.rs
         ↓
-3. alléger acp-adaptor/src/agent.rs
+3. ajouter tests runtime + projection
         ↓
-4. ajouter tests runtime + projection
+4. cargo fmt --check
+5. cargo check --workspace
+6. cargo test --workspace
         ↓
-5. cargo fmt --check
-6. cargo check --workspace
-7. cargo test --workspace
-        ↓
-8. merge dans main
+7. merge dans main
 ```
