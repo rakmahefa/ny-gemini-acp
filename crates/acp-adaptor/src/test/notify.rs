@@ -1,4 +1,5 @@
 use super::*;
+use agent_client_protocol::schema::v1::{MessageId, SessionId};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
 
 #[test]
@@ -31,6 +32,78 @@ fn maps_ui_status_to_native_acp_status() {
     );
     assert_eq!(tool_status(ToolUiStatus::Failed), ToolCallStatus::Failed);
     assert_eq!(tool_status(ToolUiStatus::Cancelled), ToolCallStatus::Failed);
+}
+
+#[test]
+fn text_notification_contains_session_message_id_and_text() {
+    let notification = text_notification(
+        &SessionId::from("sess-1"),
+        &MessageId::from("msg-1"),
+        "hello".into(),
+    );
+    let json = serde_json::to_string(&notification).unwrap();
+    assert!(json.contains("sess-1"));
+    assert!(json.contains("msg-1"));
+    assert!(json.contains("hello"));
+    assert!(json.contains("agent_message_chunk"));
+}
+
+#[test]
+fn reasoning_notification_uses_agent_thought_chunk() {
+    let notification = reasoning_notification(
+        &SessionId::from("sess-1"),
+        &MessageId::from("msg-1"),
+        "thinking".into(),
+    );
+    let json = serde_json::to_string(&notification).unwrap();
+    assert!(json.contains("agent_thought_chunk"));
+    assert!(json.contains("thinking"));
+}
+
+#[test]
+fn tool_call_notification_preserves_id_input_output_and_status() {
+    let ui = ToolUiModel::pending(
+        ToolUiKind::FileRead,
+        "Read file",
+        "src/main.rs",
+        serde_json::json!({"path":"src/main.rs"}),
+    )
+    .completed(true, Some(serde_json::json!({"text":"fn main() {}"})));
+
+    let notification = tool_call_notification(&SessionId::from("sess-1"), "call-7", &ui);
+    let json = serde_json::to_string(&notification).unwrap();
+    assert!(json.contains("call-7"));
+    assert!(json.contains("src/main.rs"));
+    assert!(json.contains("fn main() {}"));
+    assert!(json.contains("completed"));
+    assert!(json.contains("tool_call"));
+}
+
+#[test]
+fn tool_call_update_notification_preserves_terminal_tool_status() {
+    let ui = ToolUiModel::pending(
+        ToolUiKind::Shell,
+        "Run command",
+        "pwd",
+        serde_json::json!({"command":"pwd"}),
+    )
+    .completed(true, Some(serde_json::json!({"text":"/tmp"})));
+
+    let notification = tool_call_update_notification(&SessionId::from("sess-1"), "call-8", &ui);
+    let json = serde_json::to_string(&notification).unwrap();
+    assert!(json.contains("call-8"));
+    assert!(json.contains("/tmp"));
+    assert!(json.contains("completed"));
+    assert!(json.contains("tool_call_update"));
+}
+
+#[test]
+fn usage_notification_preserves_usage_contract() {
+    let notification = usage_notification(&SessionId::from("sess-1"), "hello", "world");
+    let json = serde_json::to_string(&notification).unwrap();
+    assert!(json.contains("usage_update"));
+    assert!(json.contains("size"));
+    assert!(json.contains("1000000"));
 }
 
 #[test]
