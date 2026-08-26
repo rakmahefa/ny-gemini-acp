@@ -8,6 +8,7 @@ use crate::core::auth::sapisid_hash;
 use crate::core::cookies::CookieJar;
 use crate::core::frames::{self, GeminiFrameDecoder, GeminiFrameEvent};
 use crate::core::models;
+use crate::core::GeminiError;
 use anyhow::{bail, Context};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, ORIGIN, REFERER};
@@ -17,6 +18,13 @@ use tracing::{debug, trace, warn};
 use super::config::{StreamItem, StreamResult, ENDPOINT, TOKEN_TTL};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
+
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TEXT_EVENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TOOL_ID_BYTES: usize = 1024;
+const MAX_TOOL_NAME_BYTES: usize = 1024;
+const MAX_TOOL_ARGUMENTS_BYTES: usize = 1024 * 1024;
+const MAX_RAW_ACCUMULATOR: usize = 64 * 1024;
 
 struct AttemptState<'a> {
     decoder: &'a mut GeminiFrameDecoder,
@@ -39,6 +47,9 @@ impl Client {
         let mut decoder = GeminiFrameDecoder::new();
 
         for attempt in 1..=attempts {
+            if tx.is_closed() {
+                return Ok(());
+            }
             let mut state = AttemptState {
                 decoder: &mut decoder,
                 emitted: &mut emitted,
@@ -76,7 +87,10 @@ impl Client {
                             effective
                         );
                         decoder.clear();
-                        tokio::time::sleep(Duration::from_millis(effective)).await;
+                        tokio::select! {
+                            _ = tx.closed() => return Ok(()),
+                            _ = tokio::time::sleep(Duration::from_millis(effective)) => {}
+                        }
                         continue;
                     }
                     return Err(e);
@@ -103,10 +117,23 @@ impl Client {
             .send()
             .await
             .context("envoi requête Gemini")?;
-        let response = response.error_for_status().context("HTTP Gemini")?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = if response.content_length().is_some_and(|len| len > 16 * 1024) {
+                "<response body omitted: too large>".to_string()
+            } else {
+                response
+                    .text()
+                    .await
+                    .map(|body| truncate_body(&body, 4 * 1024))
+                    .unwrap_or_else(|_| "<response body unavailable>".to_string())
+            };
+            return Err(GeminiError::Http { status, body }.into());
+        }
+
         let mut bytes_stream = response.bytes_stream();
         let mut raw_accumulator = String::new();
-        const MAX_RAW_ACCUMULATOR: usize = 64 * 1024;
 
         loop {
             tokio::select! {
@@ -128,6 +155,11 @@ impl Client {
                     };
                     let bytes = chunk.context("lecture flux Gemini")?;
                     let text = String::from_utf8_lossy(&bytes);
+                    if state.decoder.pending().len().saturating_add(text.len()) > MAX_FRAME_BYTES {
+                        return Err(GeminiError::Other(anyhow::anyhow!(
+                            "Gemini frame exceeded the configured safety limit ({MAX_FRAME_BYTES} bytes)"
+                        )).into());
+                    }
                     trace!("chunk {} octets, queue ligne {}", text.len(), state.decoder.pending().len());
                     if raw_accumulator.len() < MAX_RAW_ACCUMULATOR {
                         raw_accumulator.push_str(&text);
@@ -139,13 +171,14 @@ impl Client {
                     let combined = format!("{}{}", state.decoder.pending(), text);
                     if combined.contains("BardErrorInfo") {
                         let code = frames::bard_error(&combined).unwrap_or(0);
-                        bail!("Gemini upstream rejected request: BardErrorInfo [{code}]");
+                        return Err(GeminiError::CookiesExpired { code }.into());
                     }
                     if let Some(reason) = frames::detect_safety_block(&combined) {
                         let _ = state.tx.send(Err(reason)).await;
                         return Ok(Some(()));
                     }
                     for frame in state.decoder.feed(&text) {
+                        validate_frame_event(&frame)?;
                         emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
                     }
                 }
@@ -271,6 +304,53 @@ impl Client {
             }
         }
     }
+}
+
+fn validate_frame_event(frame: &GeminiFrameEvent) -> anyhow::Result<()> {
+    match frame {
+        GeminiFrameEvent::Text(text) if text.len() > MAX_TEXT_EVENT_BYTES => {
+            bail!("Gemini text frame exceeded {} bytes", MAX_TEXT_EVENT_BYTES);
+        }
+        GeminiFrameEvent::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
+            if id.len() > MAX_TOOL_ID_BYTES {
+                bail!("Gemini tool call id exceeded {} bytes", MAX_TOOL_ID_BYTES);
+            }
+            if name.len() > MAX_TOOL_NAME_BYTES {
+                bail!("Gemini tool name exceeded {} bytes", MAX_TOOL_NAME_BYTES);
+            }
+            let argument_bytes = serde_json::to_vec(arguments)?.len();
+            if argument_bytes > MAX_TOOL_ARGUMENTS_BYTES {
+                bail!(
+                    "Gemini tool arguments exceeded {} bytes",
+                    MAX_TOOL_ARGUMENTS_BYTES
+                );
+            }
+        }
+        GeminiFrameEvent::Metadata { value, .. } => {
+            let metadata_bytes = serde_json::to_vec(value)?.len();
+            if metadata_bytes > 64 * 1024 {
+                bail!("Gemini metadata exceeded 65536 bytes");
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn truncate_body(body: &str, limit: usize) -> String {
+    let mut end = body.len().min(limit);
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut truncated = body[..end].to_string();
+    if body.len() > end {
+        truncated.push_str("…");
+    }
+    truncated
 }
 
 async fn emit_frame(
