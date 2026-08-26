@@ -12,11 +12,16 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum GeminiError {
     /// Cookies expirés ou invalides — `BardErrorInfo [<code>]` dans le corps.
-    /// Code 401 = cookies expirés, autres codes = erreur amont Google.
+    /// Code 401 = cookies expirés.
     #[error(
         "cookies expires ou invalides (BardErrorInfo [{code}]) — reexportez vendor/cookie.json"
     )]
     CookiesExpired { code: i64 },
+
+    /// Rejet explicite du backend Gemini ne permettant pas d'être classé comme
+    /// une simple expiration de session.
+    #[error("Gemini upstream rejected request: BardErrorInfo [{code}]")]
+    UpstreamRejected { code: i64 },
 
     /// Modèle inconnu — la clé n'est pas dans la table `gemini_core::models`.
     #[error("modele inconnu: {0}")]
