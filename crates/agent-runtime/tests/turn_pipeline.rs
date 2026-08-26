@@ -19,7 +19,7 @@ struct ScriptedLlm {
 impl ScriptedLlm {
     fn new(rounds: Vec<Result<Vec<ModelEvent>, LlmError>>) -> Self {
         Self {
-            rounds: rounds.into(),
+            rounds: Mutex::new(rounds.into()),
         }
     }
 }
