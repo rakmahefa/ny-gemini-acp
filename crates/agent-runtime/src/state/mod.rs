@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use tokio::sync::RwLock;
 
 mod busy;
@@ -72,12 +72,7 @@ impl Store {
         Ok(())
     }
 
-    pub async fn end_turn(
-        &self,
-        id: &str,
-        session: Session,
-        expected_gen: u64,
-    ) -> std::result::Result<(), StoreError> {
+    pub async fn end_turn(&self, id: &str, session: Session, expected_gen: u64) -> Result<(), StoreError> {
         let current_gen = {
             let live = self.live.read().await;
             live.get(id).map(|entry| entry.generation)
@@ -109,14 +104,16 @@ impl Store {
             self.prune_snapshots(id, MAX_SNAPSHOTS).await;
         }
 
-        let persist_result = self.persist(&final_session).await;
+        let persist_result = self.persist(&final_session).await.map_err(|error| {
+            StoreError::Persistence(error.to_string())
+        });
         if persist_result.is_ok() {
             if let Some(entry) = self.live.write().await.get_mut(id) {
                 entry.session = final_session;
             }
         }
         self.release_busy(id).await;
-        persist_result.map_err(|error| StoreError::Persistence(error.to_string()))
+        persist_result
     }
 
     pub async fn close(&self, id: &str) -> bool {
