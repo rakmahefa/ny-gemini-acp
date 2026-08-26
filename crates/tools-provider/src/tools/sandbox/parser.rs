@@ -207,7 +207,8 @@ fn lex(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
                 let next_non_space = chars[index + 1..]
                     .iter()
                     .any(|next| !next.is_whitespace());
-                if next_non_space {
+                let previous_is_word = matches!(output.last(), Some(LexItem::Word(_)));
+                if next_non_space && previous_is_word {
                     push_operator(&mut output, ShellOperator::Sequence)?;
                 }
                 at_token_start = true;
@@ -324,6 +325,13 @@ mod tests {
     #[test]
     fn tolerate_trailing_newline() {
         let parsed = parse_shell("git status\n").unwrap();
+        assert_eq!(parsed.segments[0].program, "git");
+        assert!(parsed.operators.is_empty());
+    }
+
+    #[test]
+    fn ignore_leading_comments_and_blank_lines() {
+        let parsed = parse_shell("# comment\n\ngit status\n# trailing comment\n").unwrap();
         assert_eq!(parsed.segments[0].program, "git");
         assert!(parsed.operators.is_empty());
     }
