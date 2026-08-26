@@ -4,7 +4,7 @@
 
 Ce document recense la dette technique identifiée sur la branche `chore/deep-audit-cleanup` et l'ordre de remboursement retenu.
 
-Les chantiers de typage sémantique, persistance et orchestration des turns sont stabilisés et présents dans `main`. La branche `debt/structured-errors` a terminé le remboursement de la dette de gestion des erreurs structurées, sous réserve de la validation globale finale `fmt/check`.
+Les chantiers de typage sémantique, persistance et orchestration des turns sont stabilisés et présents dans `main`. La branche `debt/structured-errors` a terminé le remboursement de la dette de gestion des erreurs structurées, avec validation complète locale.
 
 ---
 
@@ -223,18 +223,13 @@ Aucune conversion `Result<T, String>` supplémentaire n'est conservée dans les 
 
 ## Validation de la branche
 
-Validations confirmées après les corrections :
+Validation locale complète confirmée :
 
 ```text
+cargo fmt --check                                      ✅
+cargo check --workspace                                ✅
 cargo test --workspace                                 ✅
 cargo clippy --workspace --all-targets -- -D warnings  ✅
-```
-
-La validation globale `fmt/check` reste à confirmer avant le merge final :
-
-```text
-cargo fmt --check                                      ⏳
-cargo check --workspace                                ⏳
 ```
 
 La CI GitHub n'est pas actuellement active sur le dépôt ; la validation complète reste donc manuelle.
@@ -251,13 +246,13 @@ La CI GitHub n'est pas actuellement active sur le dépôt ; la validation compl�
 ✅ actions interactives ACP
 ✅ mappings ACP finaux
 ✅ audit Result<T, String>
+✅ cargo fmt --check
+✅ cargo check --workspace
 ✅ cargo test --workspace
 ✅ cargo clippy --workspace --all-targets -- -D warnings
-⏳ cargo fmt --check
-⏳ cargo check --workspace
 ```
 
-La dette des erreurs structurées est donc **fonctionnellement remboursée**. Le chantier est considéré terminé après confirmation de `fmt` et `check`.
+**La dette des erreurs structurées est entièrement remboursée et validée localement.**
 
 ---
 
@@ -284,7 +279,7 @@ protocol tests
 end-to-end tests
 ```
 
-**Priorité : P2, prochaine dette après stabilisation finale des erreurs structurées.**
+**Priorité : P2, prochaine dette à rembourser.**
 
 ---
 
