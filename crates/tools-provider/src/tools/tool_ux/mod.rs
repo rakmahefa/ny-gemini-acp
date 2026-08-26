@@ -4,6 +4,8 @@
 //! contract remains stable while its formatting, locations, and lifecycle
 //! projections can be separated into focused submodules.
 
+use super::{lifecycle, sandbox};
+
 mod implementation;
 
 pub use implementation::{
