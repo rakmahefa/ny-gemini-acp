@@ -45,7 +45,7 @@ fn validate_path_allowed_dir() {
 
 #[test]
 fn path_starts_with_ok() {
-    assert!(super::path::path_starts_with_for_test(
+    assert!(super::path::path_starts_with(
         std::path::Path::new("/home/user/project/src/main.rs"),
         std::path::Path::new("/home/user/project")
     ));
@@ -53,7 +53,7 @@ fn path_starts_with_ok() {
 
 #[test]
 fn path_starts_with_reject_partial() {
-    assert!(!super::path::path_starts_with_for_test(
+    assert!(!super::path::path_starts_with(
         std::path::Path::new("/home/user/projectB/file.rs"),
         std::path::Path::new("/home/user/project")
     ));
