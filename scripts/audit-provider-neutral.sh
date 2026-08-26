@@ -119,17 +119,17 @@ ADAPTER='crates/acp-adaptor/src'
 section "1. Runtime boundary"
 assert_no_match "FAIL" "agent-runtime has no executable ACP references" \
   rg -n -S --glob '*.rs' --glob '!**/test/**' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|\\bMcpServer\\b' \
+    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|\bMcpServer\b' \
     "$RUNTIME"
 
 assert_no_match "FAIL" "agent-runtime production code has no Gemini/provider-specific references" \
   rg -n -S --glob '*.rs' --glob '!**/test/**' \
-    '\\bGemini\\b|\\bgemini\\b|google|sapisid|web2api|cookie_file|auth_user' \
+    '\bGemini\b|\bgemini\b|google|sapisid|web2api|cookie_file|auth_user' \
     "$RUNTIME"
 
 assert_no_match "WARN" "agent-runtime tests are provider-neutral" \
   rg -n -S --glob '*.rs' \
-    '\\bGemini\\b|\\bgemini\\b|gemini-acp-(runtime|config|agent|encaps|tools)|gemini_acp_(runtime|config|agent|encaps|tools)' \
+    '\bGemini\b|\bgemini\b|gemini-acp-(runtime|config|agent|encaps|tools)|gemini_acp_(runtime|config|agent|encaps|tools)' \
     "$RUNTIME/test"
 
 # -----------------------------------------------------------------------------
@@ -139,7 +139,7 @@ assert_no_match "WARN" "agent-runtime tests are provider-neutral" \
 section "2. Contract surface"
 assert_match "WARN" "LLM contract contains fields worth reviewing for stronger typing" \
   rg -n -S \
-    'serde_json::Value|Vec<Value>|Result<[^>]+,\\s*String>|pub .*String' \
+    'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' \
     "$RUNTIME/providers.rs"
 
 assert_match "WARN" "Tool contract contains fields worth reviewing for stronger typing" \
