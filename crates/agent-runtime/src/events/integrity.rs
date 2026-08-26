@@ -138,6 +138,22 @@ impl TurnIntegrity {
         Ok(())
     }
 
+    pub(super) fn assistant_yields_to_action(&mut self) -> Result<(), IntegrityError> {
+        self.ensure_active("assistant_yields_to_action")?;
+        if self.assistant != StreamPhase::Active {
+            return Err(IntegrityError::new(
+                "assistant_yields_to_action requires an active assistant stream",
+            ));
+        }
+        if self.thinking == StreamPhase::Active {
+            return Err(IntegrityError::new(
+                "thinking must complete before assistant yields to an action",
+            ));
+        }
+        self.assistant = StreamPhase::Idle;
+        Ok(())
+    }
+
     pub(super) fn thinking_started(&mut self) -> Result<(), IntegrityError> {
         self.ensure_active("thinking_started")?;
         if self.assistant != StreamPhase::Active {
@@ -230,11 +246,23 @@ impl TurnIntegrity {
     pub(super) fn tool_result_received(&mut self, id: &str) -> Result<(), IntegrityError> {
         self.ensure_active("tool_result_received")?;
         match self.tools.get_mut(id) {
-            Some(s @ ToolPhase::Executing) => { *s = ToolPhase::Terminal(ToolTerminalReason::Result); Ok(()) }
-            Some(s @ ToolPhase::Permission) => { *s = ToolPhase::Terminal(ToolTerminalReason::PermissionDenied); Ok(()) }
-            Some(ToolPhase::Requested) => Err(IntegrityError::new(format!("tool_result_received for tool {id} requires execution or an explicit permission decision"))),
-            Some(s) => Err(IntegrityError::new(format!("tool_result_received for tool {id} is invalid from state {s:?}"))),
-            None => Err(IntegrityError::new(format!("tool_result_received references unknown tool {id}"))),
+            Some(s @ ToolPhase::Executing) => {
+                *s = ToolPhase::Terminal(ToolTerminalReason::Result);
+                Ok(())
+            }
+            Some(s @ ToolPhase::Permission) => {
+                *s = ToolPhase::Terminal(ToolTerminalReason::PermissionDenied);
+                Ok(())
+            }
+            Some(ToolPhase::Requested) => Err(IntegrityError::new(format!(
+                "tool_result_received for tool {id} requires execution or an explicit permission decision"
+            ))),
+            Some(s) => Err(IntegrityError::new(format!(
+                "tool_result_received for tool {id} is invalid from state {s:?}"
+            ))),
+            None => Err(IntegrityError::new(format!(
+                "tool_result_received references unknown tool {id}"
+            ))),
         }
     }
 
@@ -314,6 +342,18 @@ mod tests {
         s.assistant_completed().unwrap();
         s.finish_terminal_after_scopes("turn_completed").unwrap();
         assert_eq!(s.phase, TurnPhase::Terminal);
+    }
+
+    #[test]
+    fn assistant_can_yield_without_declaring_turn_completion() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.assistant_started().unwrap();
+        s.assistant_delta().unwrap();
+        s.assistant_yields_to_action().unwrap();
+        assert!(!s.assistant_active());
+        s.tool_call_requested("c").unwrap();
+        assert!(!s.open_tool_ids().is_empty());
     }
 
     #[test]

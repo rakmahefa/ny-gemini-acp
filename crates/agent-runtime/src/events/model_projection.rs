@@ -132,8 +132,19 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
     if thinking_active && !sink.thinking_completed() {
         return Err(ModelProjectionError::SemanticEventRejected);
     }
-    if assistant_active && !sink.assistant_completed() {
-        return Err(ModelProjectionError::SemanticEventRejected);
+
+    if tool_calls.is_empty() {
+        if assistant_active && !sink.assistant_completed() {
+            return Err(ModelProjectionError::SemanticEventRejected);
+        }
+    } else if assistant_active {
+        // A tool/action is still pending, so `AssistantCompleted` would be a
+        // misleading observable terminal signal. Close the internal assistant
+        // scope without publishing a completion event; the pending action will
+        // be the next semantic lifecycle event.
+        if !sink.assistant_yields_to_action() {
+            return Err(ModelProjectionError::SemanticEventRejected);
+        }
     }
 
     Ok(ModelRound {
@@ -181,7 +192,7 @@ mod tests {
 
     struct TestEmitter {
         emitter: TurnEventEmitter,
-        _receiver: mpsc::UnboundedReceiver<crate::events::SemanticEvent>,
+        receiver: mpsc::UnboundedReceiver<crate::events::SemanticEvent>,
     }
 
     fn emitter() -> TestEmitter {
@@ -189,10 +200,7 @@ mod tests {
         let receiver = bus.subscribe_turn("turn_test");
         let emitter =
             TurnEventEmitter::new(bus, "sess_0123456789abcdef0123456789abcdef", "turn_test");
-        TestEmitter {
-            emitter,
-            _receiver: receiver,
-        }
+        TestEmitter { emitter, receiver }
     }
 
     #[tokio::test]
@@ -215,6 +223,41 @@ mod tests {
 
     #[tokio::test]
     async fn captures_tool_calls_without_projecting_them_as_assistant_text() {
+        let (tx, rx) = mpsc::channel(4);
+        tx.send(Ok(ModelEvent::TextDelta("je vais chercher".into())))
+            .await
+            .unwrap();
+        tx.send(Ok(ModelEvent::ToolCall {
+            id: "call-1".into(),
+            name: "search".into(),
+            arguments: serde_json::json!({"q": "rust"}),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+        let mut harness = emitter();
+        let round = consume_model_stream(rx, &Cancellation::new(), &mut harness.emitter)
+            .await
+            .unwrap();
+        assert_eq!(round.event_count, 2);
+        assert_eq!(round.text, "je vais chercher");
+        assert_eq!(round.tool_calls.len(), 1);
+        assert_eq!(round.tool_calls[0].id, "call-1");
+        assert_eq!(round.tool_calls[0].name, "search");
+
+        // The assistant scope is handed off to the pending action, not exposed as
+        // an `AssistantCompleted` event before that action executes.
+        assert!(harness
+            .emitter
+            .tool_call_requested("call-1", "search"));
+        let events: Vec<_> = std::iter::from_fn(|| harness.receiver.try_recv().ok()).collect();
+        assert!(!events
+            .iter()
+            .any(|event| matches!(event, crate::events::SemanticEvent::AssistantCompleted { .. })));
+    }
+
+    #[tokio::test]
+    async fn captures_tool_calls_without_text() {
         let (tx, rx) = mpsc::channel(4);
         tx.send(Ok(ModelEvent::ToolCall {
             id: "call-1".into(),
