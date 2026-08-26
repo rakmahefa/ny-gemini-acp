@@ -24,7 +24,7 @@ La branche courante `debt/integration-system-tests` poursuit maintenant le rembo
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P2 | Dette d'orchestration des turns | ✅ Terminée | `TurnService` extrait, runtime découplé d'ACP |
 | P2 | Dette des erreurs structurées | ✅ Terminée | Contrats structurés + mappings ACP terminés |
-| P2 | Tests d'intégration/système | 🟡 En progression | Couverture provider → runtime → SemanticEvent → persistance renforcée |
+| P2 | Tests d'intégration/système | 🟡 En progression | Pipeline runtime + projection ACP renforcé ; E2E transport encore à couvrir |
 | P3 | Sandbox shell | Différé volontairement | Parsing/normalisation/politique de risque à traiter plus tard |
 | P3 | CI automatisée | Différée | Validation manuelle maintenue pour l'instant |
 
@@ -127,7 +127,7 @@ L'audit des `Result<T, String>` a été mené jusqu'à la frontière ACP ; les c
 
 ## Objectif
 
-Démontrer par tests reproductibles que les contrats internes tiennent sur une chaîne complète :
+Démontrer par tests reproductibles que les contrats critiques tiennent sur une chaîne complète :
 
 ```text
 provider
@@ -135,13 +135,15 @@ provider
 → SemanticEvent lifecycle
 → tool execution
 → Store persistence
+→ ACP projection
+→ ACP notification payload
 ```
 
-La projection ACP complète reste une étape distincte à couvrir après cette première couche.
+Le transport réseau/stdio ACP complet reste une étape distincte à couvrir ensuite.
 
-## 6.1 Couverture ajoutée sur `debt/integration-system-tests`
+## 6.1 Couverture runtime ajoutée sur `debt/integration-system-tests`
 
-Le nouveau test d'intégration :
+Le test d'intégration :
 
 ```text
 crates/agent-runtime/tests/turn_pipeline.rs
@@ -220,19 +222,59 @@ Le test vérifie qu'un échec du provider :
 - finalise le turn ;
 - permet immédiatement de commencer le turn suivant avec une génération nouvelle.
 
-## 6.2 Ce qui reste à couvrir
+## 6.2 Projection ACP et notifications ✅ EN PROGRESSION
 
-La dette P2 n'est pas encore entièrement remboursée. Restent notamment :
+La projection dédiée :
+
+```text
+crates/acp-adaptor/src/prompt/tool_stream.rs
+```
+
+valide déjà les invariants de séquence et d'identité avant transformation ACP :
+
+```text
+SemanticEvent
+    ↓
+SequenceTracker
+    ↓
+ProjectionAction
+    ↓
+ACP notification builder
+```
+
+La construction des notifications ACP est maintenant factorisée dans `prompt/notify.rs` et réutilisée directement par les fonctions de transport. Les tests couvrent désormais les payloads sérialisés pour :
+
+- `AgentMessageChunk` ;
+- `AgentThoughtChunk` ;
+- `ToolCall` ;
+- `ToolCallUpdate` ;
+- `UsageUpdate`.
+
+La couverture vérifie notamment :
+
+- `session_id` et `message_id` ;
+- texte assistant/reasoning ;
+- `ToolCallId` ;
+- entrées/sorties structurées des outils ;
+- statut ACP final ;
+- présence des types de notifications attendus.
+
+Les tests de projection existants couvrent aussi les pertes de séquence et la conservation des identités d'outil.
+
+## 6.3 Ce qui reste à couvrir
+
+La dette P2 n'est pas encore entièrement remboursée. Restent principalement :
 
 ```text
 provider
 → runtime
 → SemanticEvent
 → ACP projection
-→ notifications ACP
+→ ConnectionTo<Client>
+→ transport ACP réel
 ```
 
-et les scénarios adversariaux de chaîne complète :
+ainsi que les scénarios adversariaux de chaîne complète :
 
 ```text
 cancel
@@ -241,13 +283,15 @@ empty stream
 invalid model sequence
 duplicate tool call
 semantic event rejection
+projection transport close
+ACP notification failure
 persistence failure
 agent + persistence failure
 ```
 
-Les tests unitaires existants couvrent déjà une partie de ces contrats ; l'objectif de la dette P2 est de les relier progressivement au chemin d'intégration.
+Les tests unitaires et d'intégration couvrent déjà une partie de ces contrats ; l'objectif de la dette P2 est de les relier progressivement au chemin de transport réel.
 
-## 6.3 Règle de progression
+## 6.4 Règle de progression
 
 Une dette P2 est considérée comme remboursée uniquement lorsque la preuve couvre :
 
@@ -274,8 +318,6 @@ cargo check --workspace
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
-
-Important : les tests ajoutés sur `debt/integration-system-tests` n'ont pas été déclarés « verts » dans ce document tant qu'ils n'ont pas été exécutés dans un environnement Rust correspondant au workspace.
 
 La CI pourra être réintroduite après stabilisation de la matrice P2, afin qu'elle protège les mêmes invariants automatiquement.
 
@@ -315,7 +357,9 @@ Ce chantier reste volontairement derrière les tests système.
         ├── ✅ runtime → SemanticEvent lifecycle
         ├── ✅ tool execution
         ├── ✅ runtime → persistence
-        └── ⏳ runtime → ACP projection → notifications
+        ├── ✅ SemanticEvent → ACP projection
+        ├── ✅ ACP notification payloads
+        └── ⏳ ConnectionTo<Client> → transport ACP réel
         ↓
 6. Sandbox shell
         ↓
