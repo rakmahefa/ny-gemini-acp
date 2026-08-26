@@ -204,11 +204,7 @@ fn lex(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
             }
             '\n' => {
                 flush(&mut token, &mut output);
-                let next_non_space = chars[index + 1..]
-                    .iter()
-                    .any(|next| !next.is_whitespace());
-                let previous_is_word = matches!(output.last(), Some(LexItem::Word(_)));
-                if next_non_space && previous_is_word {
+                if has_command_after(&chars, index + 1) && matches!(output.last(), Some(LexItem::Word(_))) {
                     push_operator(&mut output, ShellOperator::Sequence)?;
                 }
                 at_token_start = true;
@@ -267,6 +263,26 @@ fn lex(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
         return Err(ShellParseError::EmptyCommand);
     }
     Ok(output)
+}
+
+fn has_command_after(chars: &[char], start: usize) -> bool {
+    let mut index = start;
+    while index < chars.len() {
+        while index < chars.len() && chars[index].is_whitespace() {
+            index += 1;
+        }
+        if index >= chars.len() {
+            return false;
+        }
+        if chars[index] == '#' {
+            while index < chars.len() && chars[index] != '\n' {
+                index += 1;
+            }
+            continue;
+        }
+        return true;
+    }
+    false
 }
 
 fn flush(token: &mut String, output: &mut Vec<LexItem>) {
