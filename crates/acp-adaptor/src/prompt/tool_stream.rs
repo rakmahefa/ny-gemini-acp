@@ -152,19 +152,15 @@ fn project_event(
     })
 }
 
-/// Projects validated semantic runtime events into ACP.
-///
-/// The dedicated per-turn queue is lossless. Sequence validation remains in place as
-/// a second integrity barrier, so a producer bug that reorders, duplicates, or mutates
-/// event sequencing is still detected rather than rendered as an apparently valid ACP turn.
-pub async fn project(
+async fn project_events<F>(
     mut events: mpsc::UnboundedReceiver<SemanticEvent>,
-    cx: &ConnectionTo<Client>,
-    session_id: &SessionId,
-    message_id: &MessageId,
     turn_id: &str,
-    cancellation: Cancellation,
-) -> Result<(), ProjectionError> {
+    cancellation: &Cancellation,
+    mut notify: F,
+) -> Result<(), ProjectionError>
+where
+    F: FnMut(ProjectionAction) -> Result<(), AcpError>,
+{
     let metrics = projection_metrics();
     let mut sequence = SequenceTracker::default();
 
@@ -196,23 +192,44 @@ pub async fn project(
             }
         };
 
-        let notification = match action {
-            ProjectionAction::Text(text) => notify_text(cx, session_id, message_id, text),
-            ProjectionAction::Reasoning(text) => notify_reasoning(cx, session_id, message_id, text),
-            ProjectionAction::ToolCall { id, ui } => notify_tool_call(cx, session_id, &id, &ui),
-            ProjectionAction::ToolUpdate { id, ui } => {
-                notify_tool_call_update(cx, session_id, &id, &ui)
-            }
-            ProjectionAction::Terminal => return Ok(()),
-            ProjectionAction::Ignore => Ok(()),
-        };
+        if matches!(action, ProjectionAction::Terminal) {
+            return Ok(());
+        }
 
-        if let Err(error) = notification {
+        if let Err(error) = notify(action) {
             metrics.acp_failures.fetch_add(1, Ordering::Relaxed);
             cancellation.cancel();
             return Err(ProjectionError::Acp(error));
         }
     }
+}
+
+/// Projects validated semantic runtime events into ACP.
+///
+/// The dedicated per-turn queue is lossless. Sequence validation remains in place as
+/// a second integrity barrier, so a producer bug that reorders, duplicates, or mutates
+/// event sequencing is still detected rather than rendered as an apparently valid ACP turn.
+pub async fn project(
+    events: mpsc::UnboundedReceiver<SemanticEvent>,
+    cx: &ConnectionTo<Client>,
+    session_id: &SessionId,
+    message_id: &MessageId,
+    turn_id: &str,
+    cancellation: Cancellation,
+) -> Result<(), ProjectionError> {
+    let session_id = session_id.clone();
+    let message_id = message_id.clone();
+    project_events(events, turn_id, &cancellation, |action| match action {
+        ProjectionAction::Text(text) => notify_text(cx, &session_id, &message_id, text),
+        ProjectionAction::Reasoning(text) => notify_reasoning(cx, &session_id, &message_id, text),
+        ProjectionAction::ToolCall { id, ui } => notify_tool_call(cx, &session_id, &id, &ui),
+        ProjectionAction::ToolUpdate { id, ui } => {
+            notify_tool_call_update(cx, &session_id, &id, &ui)
+        }
+        ProjectionAction::Ignore => Ok(()),
+        ProjectionAction::Terminal => Ok(()),
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -268,6 +285,106 @@ mod tests {
         let snapshot = metrics.snapshot();
         assert_eq!(snapshot.sequence_gaps, 2);
         assert_eq!(snapshot.acp_failures, 3);
+    }
+
+    #[tokio::test]
+    async fn projection_rejects_transport_close_and_cancels_turn() {
+        let (_tx, receiver) = mpsc::unbounded_channel();
+        let cancellation = Cancellation::new();
+        let error = project_events(receiver, "turn-close", &cancellation, |_| Ok(()))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ProjectionError::Closed));
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn projection_rejects_unexpected_turn_and_cancels_turn() {
+        let (tx, receiver) = mpsc::unbounded_channel();
+        tx.send(SemanticEvent::TurnStarted {
+            context: EventContext::new("session", "wrong-turn", 0),
+        })
+        .unwrap();
+        drop(tx);
+        let cancellation = Cancellation::new();
+
+        let error = project_events(receiver, "expected-turn", &cancellation, |_| Ok(()))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectionError::UnexpectedTurn { expected, actual }
+                if expected == "expected-turn" && actual == "wrong-turn"
+        ));
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn projection_rejects_sequence_gap_before_terminal_notification() {
+        let (tx, receiver) = mpsc::unbounded_channel();
+        tx.send(SemanticEvent::TurnStarted {
+            context: context(0),
+        })
+        .unwrap();
+        tx.send(SemanticEvent::AssistantStarted {
+            context: context(2),
+        })
+        .unwrap();
+        drop(tx);
+        let cancellation = Cancellation::new();
+        let notified = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let notified_clone = notified.clone();
+
+        let error = project_events(receiver, "turn", &cancellation, move |action| {
+            if !matches!(action, ProjectionAction::Terminal) {
+                notified_clone.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ProjectionError::SequenceGap {
+                expected: 1,
+                actual: 2
+            }
+        ));
+        assert_eq!(notified.load(Ordering::Relaxed), 0);
+        assert!(cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn projection_propagates_acp_notification_failure_and_cancels_turn() {
+        let (tx, receiver) = mpsc::unbounded_channel();
+        tx.send(SemanticEvent::TurnStarted {
+            context: context(0),
+        })
+        .unwrap();
+        tx.send(SemanticEvent::AssistantStarted {
+            context: context(1),
+        })
+        .unwrap();
+        tx.send(SemanticEvent::AssistantDelta {
+            context: context(2),
+            delta: "hello".into(),
+        })
+        .unwrap();
+        drop(tx);
+        let cancellation = Cancellation::new();
+
+        let error = project_events(receiver, "turn", &cancellation, |action| match action {
+            ProjectionAction::Text(_) => Err(AcpError::internal_error()),
+            _ => Ok(()),
+        })
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, ProjectionError::Acp(_)));
+        assert!(cancellation.is_cancelled());
     }
 
     #[tokio::test]
