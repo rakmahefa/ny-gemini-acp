@@ -13,7 +13,7 @@ mod types;
 
 pub use history::{History, HistoryEntry};
 pub(crate) use types::MAX_SNAPSHOTS;
-pub use types::{Live, Role, Session, SessionMode, TurnError};
+pub use types::{Live, Role, Session, SessionMode, StoreError, TurnError};
 
 #[derive(Clone)]
 pub struct Store {
@@ -72,7 +72,12 @@ impl Store {
         Ok(())
     }
 
-    pub async fn end_turn(&self, id: &str, session: Session, expected_gen: u64) -> Result<()> {
+    pub async fn end_turn(
+        &self,
+        id: &str,
+        session: Session,
+        expected_gen: u64,
+    ) -> std::result::Result<(), StoreError> {
         let current_gen = {
             let live = self.live.read().await;
             live.get(id).map(|entry| entry.generation)
@@ -81,9 +86,10 @@ impl Store {
             if let Some(current_gen) = current_gen {
                 if current_gen != expected_gen {
                     tracing::warn!(session = %id, expected_gen, current_gen, "end_turn: tour obsolète ignoré");
-                    bail!(
-                        "tour obsolète: génération attendue {expected_gen}, courante {current_gen}"
-                    );
+                    return Err(StoreError::StaleGeneration {
+                        expected: expected_gen,
+                        current: current_gen,
+                    });
                 }
             }
         }
@@ -110,7 +116,7 @@ impl Store {
             }
         }
         self.release_busy(id).await;
-        persist_result
+        persist_result.map_err(|error| StoreError::Persistence(error.to_string()))
     }
 
     pub async fn close(&self, id: &str) -> bool {
