@@ -65,8 +65,8 @@ impl ShellAnalysis {
             Err(error) => Self {
                 risk: RiskLevel::Critical,
                 commands: Vec::new(),
-                has_pipes: false,
-                has_env_injection: command.contains('$'),
+                has_pipes: command.contains('|'),
+                has_env_injection: command.contains('$') || command.contains('`'),
                 has_dangerous_pipe_chain: true,
                 risk_description: format!("commande non analysable : {error}"),
                 line_count: command.lines().filter(|line| !line.trim().is_empty()).count(),
