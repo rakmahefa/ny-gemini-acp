@@ -24,7 +24,10 @@ fn keeps_tool_call_context_and_ui() {
     };
 
     match event {
-        SemanticEvent::ToolExecutionStarted { context, ui: Some(actual) } => {
+        SemanticEvent::ToolExecutionStarted {
+            context,
+            ui: Some(actual),
+        } => {
             assert_eq!(context.tool_call_id, "tool-a");
             assert_eq!(actual.kind, ToolUiKind::Generic);
             assert_eq!(actual.status, ToolUiStatus::Pending);

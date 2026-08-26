@@ -7,9 +7,7 @@ use agent_runtime::events::{EventContext, SemanticEvent};
 use agent_runtime::Cancellation;
 use tokio::sync::mpsc;
 
-use super::notify::{
-    notify_reasoning, notify_text, notify_tool_call, notify_tool_call_update,
-};
+use super::notify::{notify_reasoning, notify_text, notify_tool_call, notify_tool_call_update};
 
 #[derive(Debug, Default)]
 pub struct ProjectionMetrics {
@@ -79,8 +77,14 @@ impl SequenceTracker {
 enum ProjectionAction {
     Text(String),
     Reasoning(String),
-    ToolCall { id: String, ui: agent_runtime::ToolUiModel },
-    ToolUpdate { id: String, ui: agent_runtime::ToolUiModel },
+    ToolCall {
+        id: String,
+        ui: agent_runtime::ToolUiModel,
+    },
+    ToolUpdate {
+        id: String,
+        ui: agent_runtime::ToolUiModel,
+    },
     Terminal,
     Ignore,
 }
@@ -121,13 +125,26 @@ fn project_event(
     Ok(match event {
         SemanticEvent::AssistantDelta { delta, .. } => ProjectionAction::Text(delta),
         SemanticEvent::ThinkingDelta { delta, .. } => ProjectionAction::Reasoning(delta),
-        SemanticEvent::ToolCallRequested { context, ui: Some(ui), .. } => {
-            ProjectionAction::ToolCall { id: context.tool_call_id, ui }
+        SemanticEvent::ToolCallRequested {
+            context,
+            ui: Some(ui),
+            ..
+        } => ProjectionAction::ToolCall {
+            id: context.tool_call_id,
+            ui,
+        },
+        SemanticEvent::ToolExecutionStarted {
+            context,
+            ui: Some(ui),
         }
-        SemanticEvent::ToolExecutionStarted { context, ui: Some(ui) }
-        | SemanticEvent::ToolResultReceived { context, ui: Some(ui), .. } => {
-            ProjectionAction::ToolUpdate { id: context.tool_call_id, ui }
-        }
+        | SemanticEvent::ToolResultReceived {
+            context,
+            ui: Some(ui),
+            ..
+        } => ProjectionAction::ToolUpdate {
+            id: context.tool_call_id,
+            ui,
+        },
         SemanticEvent::TurnCancelled { .. }
         | SemanticEvent::TurnFailed { .. }
         | SemanticEvent::TurnCompleted { .. } => ProjectionAction::Terminal,
@@ -183,7 +200,9 @@ pub async fn project(
             ProjectionAction::Text(text) => notify_text(cx, session_id, message_id, text),
             ProjectionAction::Reasoning(text) => notify_reasoning(cx, session_id, message_id, text),
             ProjectionAction::ToolCall { id, ui } => notify_tool_call(cx, session_id, &id, &ui),
-            ProjectionAction::ToolUpdate { id, ui } => notify_tool_call_update(cx, session_id, &id, &ui),
+            ProjectionAction::ToolUpdate { id, ui } => {
+                notify_tool_call_update(cx, session_id, &id, &ui)
+            }
             ProjectionAction::Terminal => return Ok(()),
             ProjectionAction::Ignore => Ok(()),
         };
@@ -284,9 +303,14 @@ mod tests {
                 Err(error) => {
                     assert!(matches!(
                         error,
-                        ProjectionError::SequenceGap { expected: 2, actual: 3 }
+                        ProjectionError::SequenceGap {
+                            expected: 2,
+                            actual: 3
+                        }
                     ));
-                    assert!(actions.iter().all(|action| !matches!(action, ProjectionAction::Terminal)));
+                    assert!(actions
+                        .iter()
+                        .all(|action| !matches!(action, ProjectionAction::Terminal)));
                     return;
                 }
             }
@@ -301,9 +325,19 @@ mod tests {
         let mut emitter = TurnEventEmitter::new(bus, "session-e2e", "turn-tool-e2e");
         let ui = agent_runtime::ToolUiModel::generic("shell_exec", json!({"command":"pwd"}));
         assert!(emitter.turn_started());
-        assert!(emitter.tool_call_requested_with_ui("provider-call-7", "shell_exec", Some(ui.clone())));
-        assert!(emitter.tool_execution_started_with_ui("provider-call-7", Some(ui.clone().running())));
-        assert!(emitter.tool_result_received_with_ui("provider-call-7", "ok", Some(ui.clone().completed(true, Some(json!({"text":"ok"}))))));
+        assert!(emitter.tool_call_requested_with_ui(
+            "provider-call-7",
+            "shell_exec",
+            Some(ui.clone())
+        ));
+        assert!(
+            emitter.tool_execution_started_with_ui("provider-call-7", Some(ui.clone().running()))
+        );
+        assert!(emitter.tool_result_received_with_ui(
+            "provider-call-7",
+            "ok",
+            Some(ui.clone().completed(true, Some(json!({"text":"ok"}))))
+        ));
         assert!(emitter.turn_completed());
 
         let mut sequence = SequenceTracker::default();

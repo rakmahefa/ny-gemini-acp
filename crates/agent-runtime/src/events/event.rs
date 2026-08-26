@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::ToolUiModel;
 use super::{EventContext, ToolEventContext};
+use crate::ToolUiModel;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum SemanticEvent {

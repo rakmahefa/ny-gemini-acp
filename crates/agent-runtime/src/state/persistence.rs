@@ -22,7 +22,9 @@ impl Store {
         })
     }
 
-    pub(crate) fn path(&self, id: &str) -> PathBuf { self.dir.join(format!("{id}.json")) }
+    pub(crate) fn path(&self, id: &str) -> PathBuf {
+        self.dir.join(format!("{id}.json"))
+    }
 
     pub(crate) async fn persist(&self, session: &Session) -> Result<()> {
         let raw = serde_json::to_vec_pretty(session)?;
@@ -32,22 +34,41 @@ impl Store {
         Ok(())
     }
 
-    pub async fn create(&self, cwd: PathBuf, additional_directories: Vec<PathBuf>, model: &str) -> Result<Session> {
+    pub async fn create(
+        &self,
+        cwd: PathBuf,
+        additional_directories: Vec<PathBuf>,
+        model: &str,
+    ) -> Result<Session> {
         let id = format!("sess_{}", uuid::Uuid::new_v4().simple());
         let session = Session::new(id.clone(), cwd, additional_directories, model);
         self.persist(&session).await?;
-        self.live.write().await.insert(id, Live { session: session.clone(), generation: 0 });
+        self.live.write().await.insert(
+            id,
+            Live {
+                session: session.clone(),
+                generation: 0,
+            },
+        );
         Ok(session)
     }
 
     pub async fn get(&self, id: &str) -> Option<Session> {
         {
             let live = self.live.read().await;
-            if let Some(entry) = live.get(id) { return Some(entry.session.clone()); }
+            if let Some(entry) = live.get(id) {
+                return Some(entry.session.clone());
+            }
         }
 
         if let Some(session) = self.read(id).await {
-            self.live.write().await.insert(id.to_string(), Live { session: session.clone(), generation: 0 });
+            self.live.write().await.insert(
+                id.to_string(),
+                Live {
+                    session: session.clone(),
+                    generation: 0,
+                },
+            );
             return Some(session);
         }
         None
@@ -60,7 +81,10 @@ impl Store {
 
     pub async fn list(&self, cwd: Option<&Path>) -> Vec<Session> {
         let mut out = Vec::new();
-        let mut entries = match tokio::fs::read_dir(&self.dir).await { Ok(v) => v, Err(_) => return out };
+        let mut entries = match tokio::fs::read_dir(&self.dir).await {
+            Ok(v) => v,
+            Err(_) => return out,
+        };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             let name = match path.file_name().and_then(|value| value.to_str()) {
@@ -75,7 +99,9 @@ impl Store {
             }
             if let Ok(raw) = tokio::fs::read(&path).await {
                 if let Ok(session) = serde_json::from_slice::<Session>(&raw) {
-                    if cwd.map(|c| session.cwd == c).unwrap_or(true) { out.push(session); }
+                    if cwd.map(|c| session.cwd == c).unwrap_or(true) {
+                        out.push(session);
+                    }
                 }
             }
         }
@@ -91,14 +117,21 @@ impl Store {
 }
 
 async fn cleanup_orphan_tmp_files(dir: &Path) {
-    let mut entries = match tokio::fs::read_dir(dir).await { Ok(entries) => entries, Err(_) => return };
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
     while let Ok(Some(entry)) = entries.next_entry().await {
         let path = entry.path();
         let is_tmp = path.is_file()
-            && path.file_name().and_then(|name| name.to_str())
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
                 .map(|name| name.ends_with(".json.tmp") || name.ends_with(".tmp"))
                 .unwrap_or(false);
-        if is_tmp { let _ = tokio::fs::remove_file(path).await; }
+        if is_tmp {
+            let _ = tokio::fs::remove_file(path).await;
+        }
     }
 }
 
@@ -108,11 +141,19 @@ mod tests {
 
     #[tokio::test]
     async fn list_excludes_snapshots_from_sessions() {
-        let dir = std::env::temp_dir().join(format!("acp-persistence-test-{}", uuid::Uuid::new_v4().simple()));
+        let dir = std::env::temp_dir().join(format!(
+            "acp-persistence-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         let store = Store::open(&dir).await.unwrap();
-        let session = store.create("/tmp".into(), vec![], "test-model").await.unwrap();
+        let session = store
+            .create("/tmp".into(), vec![], "test-model")
+            .await
+            .unwrap();
         let snapshot = store.snapshot_path(&session.id, 1);
-        tokio::fs::write(&snapshot, serde_json::to_vec_pretty(&session).unwrap()).await.unwrap();
+        tokio::fs::write(&snapshot, serde_json::to_vec_pretty(&session).unwrap())
+            .await
+            .unwrap();
 
         let listed = store.list(None).await;
         assert_eq!(listed.len(), 1);

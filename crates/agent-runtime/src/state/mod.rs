@@ -24,7 +24,9 @@ pub struct Store {
 impl Store {
     pub async fn begin_turn(&self, id: &str) -> Result<(Session, u64), TurnError> {
         let mut live = self.live.write().await;
-        self.acquire_busy(id).await.map_err(|_| TurnError::AlreadyRunning)?;
+        self.acquire_busy(id)
+            .await
+            .map_err(|_| TurnError::AlreadyRunning)?;
 
         if let Some(entry) = live.get_mut(id) {
             entry.generation = entry.generation.saturating_add(1);
@@ -38,19 +40,30 @@ impl Store {
                 return Err(TurnError::NotFound(id.to_string()));
             }
         };
-        live.insert(id.to_string(), Live { session: session.clone(), generation: 1 });
+        live.insert(
+            id.to_string(),
+            Live {
+                session: session.clone(),
+                generation: 1,
+            },
+        );
         Ok((session, 1))
     }
 
     pub async fn update_session<F>(&self, id: &str, f: F) -> Result<()>
-    where F: FnOnce(&mut Session) {
+    where
+        F: FnOnce(&mut Session),
+    {
         let mut live = self.live.write().await;
         if let Some(entry) = live.get_mut(id) {
             f(&mut entry.session);
             self.persist(&entry.session).await?;
             return Ok(());
         }
-        let mut session = self.read(id).await.ok_or_else(|| anyhow::anyhow!("session introuvable: {id}"))?;
+        let mut session = self
+            .read(id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("session introuvable: {id}"))?;
         f(&mut session);
         self.persist(&session).await?;
         Ok(())
@@ -65,7 +78,9 @@ impl Store {
             if let Some(current_gen) = current_gen {
                 if current_gen != expected_gen {
                     tracing::warn!(session = %id, expected_gen, current_gen, "end_turn: tour obsolète ignoré");
-                    bail!("tour obsolète: génération attendue {expected_gen}, courante {current_gen}");
+                    bail!(
+                        "tour obsolète: génération attendue {expected_gen}, courante {current_gen}"
+                    );
                 }
             }
         }
@@ -103,11 +118,20 @@ impl Store {
     }
 
     pub async fn fork(&self, source_id: &str) -> Result<Session> {
-        let source = self.get(source_id).await.ok_or_else(|| anyhow::anyhow!("session source introuvable: {source_id}"))?;
+        let source = self
+            .get(source_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("session source introuvable: {source_id}"))?;
         let new_id = format!("sess_{}", uuid::Uuid::new_v4().simple());
         let forked = source.fork(new_id);
         self.persist(&forked).await?;
-        self.live.write().await.insert(forked.id.clone(), Live { session: forked.clone(), generation: 0 });
+        self.live.write().await.insert(
+            forked.id.clone(),
+            Live {
+                session: forked.clone(),
+                generation: 0,
+            },
+        );
         Ok(forked)
     }
 }

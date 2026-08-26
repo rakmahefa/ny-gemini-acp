@@ -5,8 +5,8 @@ extern crate self as llm_provider;
 pub mod client;
 pub mod config;
 pub mod core;
-mod semantic_stream;
 pub mod provider;
+mod semantic_stream;
 pub mod settings;
 pub mod web2api;
 

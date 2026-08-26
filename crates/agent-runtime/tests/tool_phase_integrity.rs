@@ -32,7 +32,10 @@ async fn tool_result_cannot_bypass_execution() {
 
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 2);
-    assert_eq!(events.iter().map(event_sequence).collect::<Vec<_>>(), vec![0, 1]);
+    assert_eq!(
+        events.iter().map(event_sequence).collect::<Vec<_>>(),
+        vec![0, 1]
+    );
 
     assert!(emitter.tool_execution_started("call"));
     assert!(emitter.tool_result_received("call", "real result"));
@@ -54,7 +57,10 @@ async fn permission_result_remains_a_valid_terminal_path() {
 
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 5);
-    assert!(matches!(&events[3], SemanticEvent::ToolResultReceived { .. }));
+    assert!(matches!(
+        &events[3],
+        SemanticEvent::ToolResultReceived { .. }
+    ));
 }
 
 #[tokio::test]
@@ -76,5 +82,8 @@ async fn tool_call_cannot_overlap_an_open_assistant_stream() {
 
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 7);
-    assert_eq!(events.iter().map(event_sequence).collect::<Vec<_>>(), (0..7).collect::<Vec<_>>());
+    assert_eq!(
+        events.iter().map(event_sequence).collect::<Vec<_>>(),
+        (0..7).collect::<Vec<_>>()
+    );
 }

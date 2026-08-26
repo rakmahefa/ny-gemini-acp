@@ -6,17 +6,21 @@ use super::action;
 use super::content::blocks_to_parts;
 use super::notify::notify_usage;
 use super::title::derive_title;
-use permission::AcpToolPermissionHandler;
-use agent_client_protocol::schema::v1::{PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason};
+use super::turn_context::TurnContext;
+use agent_client_protocol::schema::v1::{
+    PromptRequest, PromptResponse, SessionInfoUpdate, SessionUpdate, StopReason,
+};
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
 use agent_runtime::{AgentLoop, AgentLoopConfig};
+use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
-use super::turn_context::TurnContext;
 
 fn fail_before_execution(semantic: &mut TurnEventEmitter) {
-    if semantic.is_terminal() { return; }
+    if semantic.is_terminal() {
+        return;
+    }
     let _ = semantic.turn_started();
     let _ = semantic.turn_failed();
 }
@@ -55,7 +59,10 @@ fn agent_error_response(session_id: &str, error: &agent_runtime::AgentLoopError)
     }))
 }
 
-pub async fn run_turn(ctx: TurnContext<'_>, req: PromptRequest) -> Result<PromptResponse, AcpError> {
+pub async fn run_turn(
+    ctx: TurnContext<'_>,
+    req: PromptRequest,
+) -> Result<PromptResponse, AcpError> {
     let session_id = req.session_id.clone();
     let sid = &*session_id.0;
     let span = tracing::info_span!(
@@ -72,7 +79,8 @@ pub async fn run_turn(ctx: TurnContext<'_>, req: PromptRequest) -> Result<Prompt
         Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
             fail_before_execution(ctx.semantic);
-            return Err(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string()})));
+            return Err(AcpError::invalid_params()
+                .data(serde_json::json!({"session_id": session_id.to_string()})));
         }
         Err(TurnError::AlreadyRunning) => {
             fail_before_execution(ctx.semantic);
@@ -89,7 +97,11 @@ pub async fn run_turn(ctx: TurnContext<'_>, req: PromptRequest) -> Result<Prompt
         if session.title.is_none() && !user_text.trim().is_empty() {
             let title = derive_title(&user_text);
             session.title = Some(title.clone());
-            safe_session_update(&ctx.cx, &session_id, SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)));
+            safe_session_update(
+                &ctx.cx,
+                &session_id,
+                SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title)),
+            );
         }
     }
 
@@ -108,25 +120,38 @@ pub async fn run_turn(ctx: TurnContext<'_>, req: PromptRequest) -> Result<Prompt
     }
 
     let action_handler = action::shared(ctx.cx.clone(), session_id.clone());
-    let permission_handler = std::sync::Arc::new(AcpToolPermissionHandler::new(ctx.cx.clone(), ctx.tools.clone()));
-    let agent_loop = match AgentLoop::new(ctx.llm.clone(), ctx.tools.clone(), AgentLoopConfig::default()) {
-        Ok(loop_) => loop_.with_action_handler(action_handler).with_permission_handler(permission_handler),
+    let permission_handler = std::sync::Arc::new(AcpToolPermissionHandler::new(
+        ctx.cx.clone(),
+        ctx.tools.clone(),
+    ));
+    let agent_loop = match AgentLoop::new(
+        ctx.llm.clone(),
+        ctx.tools.clone(),
+        AgentLoopConfig::default(),
+    ) {
+        Ok(loop_) => loop_
+            .with_action_handler(action_handler)
+            .with_permission_handler(permission_handler),
         Err(error) => {
             fail_before_execution(ctx.semantic);
             guard.finish().await;
-            return Err(AcpError::internal_error().data(serde_json::json!({"error": error.to_string()})));
+            return Err(
+                AcpError::internal_error().data(serde_json::json!({"error": error.to_string()}))
+            );
         }
     };
 
     let result = {
         let session = guard.session_mut();
-        agent_loop.run(
-            session,
-            &refs,
-            ctx.cancellation.clone(),
-            ctx.semantic,
-            |session, provider| crate::prompt::build::build_prompt(session, Some(provider)),
-        ).await
+        agent_loop
+            .run(
+                session,
+                &refs,
+                ctx.cancellation.clone(),
+                ctx.semantic,
+                |session, provider| crate::prompt::build::build_prompt(session, Some(provider)),
+            )
+            .await
     };
 
     match result {
@@ -178,20 +203,44 @@ mod tests {
 
     #[test]
     fn only_protocol_level_terminations_map_to_stop_reasons() {
-        assert_eq!(map_agent_error(&AgentLoopError::Cancelled), Some(StopReason::Cancelled));
-        assert_eq!(map_agent_error(&AgentLoopError::MaxRounds(20)), Some(StopReason::MaxTokens));
+        assert_eq!(
+            map_agent_error(&AgentLoopError::Cancelled),
+            Some(StopReason::Cancelled)
+        );
+        assert_eq!(
+            map_agent_error(&AgentLoopError::MaxRounds(20)),
+            Some(StopReason::MaxTokens)
+        );
         assert_eq!(map_agent_error(&AgentLoopError::EmptyStream), None);
         assert_eq!(map_agent_error(&AgentLoopError::NoProgress), None);
-        assert_eq!(map_agent_error(&AgentLoopError::SemanticEventRejected), None);
-        assert_eq!(map_agent_error(&AgentLoopError::InvalidModelSequence("broken".into())), None);
-        assert_eq!(map_agent_error(&AgentLoopError::Action("boom".into())), None);
+        assert_eq!(
+            map_agent_error(&AgentLoopError::SemanticEventRejected),
+            None
+        );
+        assert_eq!(
+            map_agent_error(&AgentLoopError::InvalidModelSequence("broken".into())),
+            None
+        );
+        assert_eq!(
+            map_agent_error(&AgentLoopError::Action("boom".into())),
+            None
+        );
     }
 
     #[test]
     fn error_kind_is_stable_and_machine_readable() {
-        assert_eq!(agent_error_kind(&AgentLoopError::EmptyStream), "empty_stream");
+        assert_eq!(
+            agent_error_kind(&AgentLoopError::EmptyStream),
+            "empty_stream"
+        );
         assert_eq!(agent_error_kind(&AgentLoopError::NoProgress), "no_progress");
-        assert_eq!(agent_error_kind(&AgentLoopError::SemanticEventRejected), "semantic_event_rejected");
-        assert_eq!(agent_error_kind(&AgentLoopError::MaxRounds(3)), "max_rounds");
+        assert_eq!(
+            agent_error_kind(&AgentLoopError::SemanticEventRejected),
+            "semantic_event_rejected"
+        );
+        assert_eq!(
+            agent_error_kind(&AgentLoopError::MaxRounds(3)),
+            "max_rounds"
+        );
     }
 }

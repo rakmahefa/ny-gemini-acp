@@ -14,7 +14,7 @@ use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, ORIGI
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
-use super::config::{ENDPOINT, TOKEN_TTL, StreamItem, StreamResult};
+use super::config::{StreamItem, StreamResult, ENDPOINT, TOKEN_TTL};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
 
@@ -45,16 +45,23 @@ impl Client {
                 emitted_tools: &mut emitted_tools,
                 tx: &tx,
             };
-            match self.attempt_http(&prompt, &refs, resolved, &mut state).await {
+            match self
+                .attempt_http(&prompt, &refs, resolved, &mut state)
+                .await
+            {
                 Ok(_) => return Ok(()),
                 Err(e) => {
                     let es = e.to_string();
-                    if es.contains("cookie") || es.contains("Cookie") || es.contains("BardErrorInfo") {
+                    if es.contains("cookie")
+                        || es.contains("Cookie")
+                        || es.contains("BardErrorInfo")
+                    {
                         return Err(e);
                     }
                     if emitted.is_empty() && emitted_tools.is_empty() && attempt < attempts {
                         let base_ms = self.inner.config.retry_delay.as_millis() as u64;
-                        let delay_ms = std::cmp::min(base_ms.saturating_mul(1u64 << (attempt - 1)), 30_000);
+                        let delay_ms =
+                            std::cmp::min(base_ms.saturating_mul(1u64 << (attempt - 1)), 30_000);
                         let jitter = delay_ms / 4;
                         let ts_nanos = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
@@ -62,7 +69,12 @@ impl Client {
                             .as_nanos() as u64;
                         let jitter_ms = (ts_nanos % (2 * jitter + 1)).saturating_sub(jitter);
                         let effective = delay_ms.saturating_add(jitter_ms);
-                        debug!(tentative = attempt, total = attempts, "tentative échouée, retry dans {}ms — {e:#}", effective);
+                        debug!(
+                            tentative = attempt,
+                            total = attempts,
+                            "tentative échouée, retry dans {}ms — {e:#}",
+                            effective
+                        );
                         decoder.clear();
                         tokio::time::sleep(Duration::from_millis(effective)).await;
                         continue;
@@ -82,7 +94,15 @@ impl Client {
         state: &mut AttemptState<'_>,
     ) -> anyhow::Result<Option<()>> {
         let (url, headers, body) = self.build_request(prompt, refs, resolved).await?;
-        let response = self.inner.http.post(&url).headers(headers).body(body).send().await.context("envoi requête Gemini")?;
+        let response = self
+            .inner
+            .http
+            .post(&url)
+            .headers(headers)
+            .body(body)
+            .send()
+            .await
+            .context("envoi requête Gemini")?;
         let response = response.error_for_status().context("HTTP Gemini")?;
         let mut bytes_stream = response.bytes_stream();
         let mut raw_accumulator = String::new();
@@ -140,9 +160,16 @@ impl Client {
         resolved: &models::Resolved,
     ) -> anyhow::Result<(String, HeaderMap, String)> {
         let inner = &self.inner;
-        let prefix = inner.config.auth_user.map(|n| format!("/u/{n}")).unwrap_or_default();
+        let prefix = inner
+            .config
+            .auth_user
+            .map(|n| format!("/u/{n}"))
+            .unwrap_or_default();
         let reqid = next_reqid();
-        let url = format!("https://gemini.google.com{prefix}/{ENDPOINT}?bl={}&hl=en&_reqid={reqid}&rt=c", inner.config.bl);
+        let url = format!(
+            "https://gemini.google.com{prefix}/{ENDPOINT}?bl={}&hl=en&_reqid={reqid}&rt=c",
+            inner.config.bl
+        );
         let jar = self.jar().await;
         let mut headers = HeaderMap::new();
         if let Some(cookie) = jar.as_ref().and_then(CookieJar::header) {
@@ -156,20 +183,37 @@ impl Client {
             v.set_sensitive(true);
             headers.insert(AUTHORIZATION, v);
         }
-        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/x-www-form-urlencoded;charset=utf-8"));
-        headers.insert(ORIGIN, HeaderValue::from_static("https://gemini.google.com"));
-        headers.insert(REFERER, HeaderValue::from_str(&format!("https://gemini.google.com{prefix}/app"))?);
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded;charset=utf-8"),
+        );
+        headers.insert(
+            ORIGIN,
+            HeaderValue::from_static("https://gemini.google.com"),
+        );
+        headers.insert(
+            REFERER,
+            HeaderValue::from_str(&format!("https://gemini.google.com{prefix}/app"))?,
+        );
         headers.insert("X-Same-Domain", HeaderValue::from_static("1"));
         if let Some(user) = inner.config.auth_user {
             headers.insert("X-Goog-AuthUser", HeaderValue::from_str(&user.to_string())?);
         }
-        let body = payload(prompt, resolved, refs, self.page_tokens().await.at.as_deref());
+        let body = payload(
+            prompt,
+            resolved,
+            refs,
+            self.page_tokens().await.at.as_deref(),
+        );
         Ok((url, headers, body))
     }
 
     pub(crate) async fn jar(&self) -> Option<CookieJar> {
         let mut guard = self.inner.jar.write().await;
-        let mtime = tokio::fs::metadata(&self.inner.config.cookie_file).await.and_then(|m| m.modified()).ok();
+        let mtime = tokio::fs::metadata(&self.inner.config.cookie_file)
+            .await
+            .and_then(|m| m.modified())
+            .ok();
         if guard.1 != mtime {
             *guard = load_jar(&self.inner.config.cookie_file).await;
         }
@@ -186,21 +230,40 @@ impl Client {
             }
         }
         self.refresh_page().await;
-        self.inner.page.read().await.as_ref().map(|(t, _)| t.clone()).unwrap_or_default()
+        self.inner
+            .page
+            .read()
+            .await
+            .as_ref()
+            .map(|(t, _)| t.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) async fn refresh_page(&self) {
-        let prefix = self.inner.config.auth_user.map(|n| format!("/u/{n}")).unwrap_or_default();
+        let prefix = self
+            .inner
+            .config
+            .auth_user
+            .map(|n| format!("/u/{n}"))
+            .unwrap_or_default();
         let url = format!("https://gemini.google.com{prefix}/app");
         match self.inner.http.get(&url).send().await {
             Ok(resp) => {
                 let body = match resp.text().await {
                     Ok(b) => b,
-                    Err(e) => { warn!("lecture /app impossible: {e:#}"); return; }
+                    Err(e) => {
+                        warn!("lecture /app impossible: {e:#}");
+                        return;
+                    }
                 };
                 let tokens = extract_page_tokens(&body);
                 *self.inner.page.write().await = Some((tokens.clone(), Instant::now()));
-                debug!("jetons de page récupérés (at: {}, push_id: {}, pctx: {})", tokens.at.is_some(), tokens.push_id.is_some(), tokens.pctx.is_some());
+                debug!(
+                    "jetons de page récupérés (at: {}, push_id: {}, pctx: {})",
+                    tokens.at.is_some(),
+                    tokens.push_id.is_some(),
+                    tokens.pctx.is_some()
+                );
             }
             Err(e) => {
                 let safe = self.inner.config.proxy.as_ref().map(|_| "<redacted>");
@@ -231,16 +294,30 @@ async fn emit_frame(
             let delta = frames::clean_text(&candidate[emitted.len()..], false);
             *emitted = candidate;
             if !delta.is_empty() {
-                tx.send(Ok(StreamItem::Text(delta))).await.map_err(|_| anyhow::anyhow!("stream receiver closed"))?;
+                tx.send(Ok(StreamItem::Text(delta)))
+                    .await
+                    .map_err(|_| anyhow::anyhow!("stream receiver closed"))?;
             }
         }
-        GeminiFrameEvent::ToolCall { id, name, arguments } => {
+        GeminiFrameEvent::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
             if emitted_tools.insert(id.clone()) {
-                tx.send(Ok(StreamItem::ToolCall { id, name, arguments })).await.map_err(|_| anyhow::anyhow!("stream receiver closed"))?;
+                tx.send(Ok(StreamItem::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                }))
+                .await
+                .map_err(|_| anyhow::anyhow!("stream receiver closed"))?;
             }
         }
         GeminiFrameEvent::Metadata { kind, value } => {
-            tx.send(Ok(StreamItem::Metadata { kind, value })).await.map_err(|_| anyhow::anyhow!("stream receiver closed"))?;
+            tx.send(Ok(StreamItem::Metadata { kind, value }))
+                .await
+                .map_err(|_| anyhow::anyhow!("stream receiver closed"))?;
         }
     }
     Ok(())

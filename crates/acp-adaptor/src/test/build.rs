@@ -67,8 +67,12 @@ fn tool_result_est_injecte_sans_double_enveloppe() {
 #[test]
 fn structured_tool_entries_are_rendered_without_reencoding() {
     let mut s = Session::new("s".into(), "/tmp".into(), vec![], "m");
-    s.messages.push(HistoryEntry::User { content: "run".into() });
-    s.messages.push(HistoryEntry::Assistant { content: "I will run it.".into() });
+    s.messages.push(HistoryEntry::User {
+        content: "run".into(),
+    });
+    s.messages.push(HistoryEntry::Assistant {
+        content: "I will run it.".into(),
+    });
     s.messages.push(HistoryEntry::ToolCall {
         id: "call-1".into(),
         name: "shell_exec".into(),

@@ -117,7 +117,8 @@ mod tests {
 
     #[test]
     fn lifecycle_is_explicit_and_terminal() {
-        let pending = ToolUiModel::generic("shell_exec", serde_json::json!({"command": "cargo test"}));
+        let pending =
+            ToolUiModel::generic("shell_exec", serde_json::json!({"command": "cargo test"}));
         assert_eq!(pending.status, ToolUiStatus::Pending);
 
         let running = pending.clone().running();

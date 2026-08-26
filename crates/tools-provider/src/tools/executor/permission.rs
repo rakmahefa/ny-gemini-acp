@@ -7,7 +7,7 @@ use agent_client_protocol::schema::v1::{
 use serde_json::{json, Map, Value};
 
 use super::super::sandbox::{RiskLevel, ShellAnalysis};
-use super::super::tool_ux::{classify_risk, bounded_raw_input, ToolInfo};
+use super::super::tool_ux::{bounded_raw_input, classify_risk, ToolInfo};
 use super::ToolExecutor;
 
 #[derive(Debug, Clone)]
@@ -62,7 +62,8 @@ impl PermissionRequest {
                 let command = args.get("command").and_then(Value::as_str).unwrap_or("");
                 let analysis = ShellAnalysis::analyze(command);
                 if analysis.has_dangerous_pipe_chain {
-                    warnings.push("Chaîne de commandes potentiellement dangereuse détectée.".into());
+                    warnings
+                        .push("Chaîne de commandes potentiellement dangereuse détectée.".into());
                 }
                 if analysis.has_env_injection {
                     warnings.push("Injection de variables d'environnement détectée.".into());
@@ -125,12 +126,7 @@ impl<'a> ToolExecutor<'a> {
         // The terminal resource does not exist yet at permission time. For shell_exec,
         // it is created only after the user grants permission by the ACP terminal request.
         // Therefore the permission prompt must never advertise a Terminal content block.
-        let info = ToolInfo::build(
-            &request.tool_name,
-            &request.arguments,
-            self.cwd,
-            None,
-        );
+        let info = ToolInfo::build(&request.tool_name, &request.arguments, self.cwd, None);
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(match request.kind {
                 PermissionKind::Read => ToolKind::Read,

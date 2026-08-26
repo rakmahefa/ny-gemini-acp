@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-};
+use std::{collections::HashMap, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -133,7 +130,9 @@ impl McpToolDescriptor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_runtime::{ToolServerConfig as RuntimeToolServerConfig, ToolTransportKind as RuntimeToolTransportKind};
+    use agent_runtime::{
+        ToolServerConfig as RuntimeToolServerConfig, ToolTransportKind as RuntimeToolTransportKind,
+    };
 
     #[test]
     fn tool_descriptor_requires_object_input_schema() {
@@ -158,10 +157,16 @@ mod tests {
         let config = McpServerConfig::from(server);
         assert_eq!(config.name, "project-tools");
         assert_eq!(config.transport, McpTransportKind::Stdio);
-        assert_eq!(config.command.as_deref(), Some("/usr/local/bin/project-mcp"));
+        assert_eq!(
+            config.command.as_deref(),
+            Some("/usr/local/bin/project-mcp")
+        );
         assert_eq!(config.args, ["--cwd", "/tmp/project"]);
         assert_eq!(config.env.get("TOKEN").map(String::as_str), Some("secret"));
-        assert_eq!(config.cwd.as_deref(), Some(std::path::Path::new("/tmp/zed-workspace")));
+        assert_eq!(
+            config.cwd.as_deref(),
+            Some(std::path::Path::new("/tmp/zed-workspace"))
+        );
     }
 
     #[test]
@@ -174,7 +179,10 @@ mod tests {
         let config = McpServerConfig::from(server);
         assert_eq!(config.transport, McpTransportKind::Http);
         assert_eq!(config.url.as_deref(), Some("https://mcp.example.test"));
-        assert_eq!(config.headers.get("authorization").map(String::as_str), Some("Bearer test"));
+        assert_eq!(
+            config.headers.get("authorization").map(String::as_str),
+            Some("Bearer test")
+        );
         assert_eq!(config.cwd, None);
     }
 

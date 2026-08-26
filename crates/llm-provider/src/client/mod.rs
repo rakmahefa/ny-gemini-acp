@@ -33,9 +33,20 @@ impl Client {
         match &jar.0 {
             Some(cookies) => {
                 let n = cookies.header().map_or(0, |h| h.split(';').count());
-                debug!("cookies chargés: {} paires, SAPISID {}", n, if cookies.sapisid().is_some() { "présent" } else { "absent" });
+                debug!(
+                    "cookies chargés: {} paires, SAPISID {}",
+                    n,
+                    if cookies.sapisid().is_some() {
+                        "présent"
+                    } else {
+                        "absent"
+                    }
+                );
             }
-            None => warn!("aucun cookie chargé depuis {:?} — les requêtes échoueront", config.cookie_file),
+            None => warn!(
+                "aucun cookie chargé depuis {:?} — les requêtes échoueront",
+                config.cookie_file
+            ),
         }
         let inner = Arc::new(ClientInner {
             http: builder.build().context("construction client HTTP")?,
@@ -48,13 +59,23 @@ impl Client {
         Ok(client)
     }
 
-    pub async fn stream(&self, prompt: &str, model: &str, think: Option<u32>, refs: &[String]) -> Result<mpsc::Receiver<StreamResult>> {
+    pub async fn stream(
+        &self,
+        prompt: &str,
+        model: &str,
+        think: Option<u32>,
+        refs: &[String],
+    ) -> Result<mpsc::Receiver<StreamResult>> {
         let model_arg = match think {
             Some(t) => format!("{model}@think={t}"),
             None => model.to_string(),
         };
-        let resolved = crate::core::models::resolve(&model_arg, &self.inner.config.default_model).map_err(|e| anyhow::anyhow!(e))?;
-        debug!("stream: {} -> mode {} think {} extra {:?}", resolved.name, resolved.mode, resolved.think, resolved.extra);
+        let resolved = crate::core::models::resolve(&model_arg, &self.inner.config.default_model)
+            .map_err(|e| anyhow::anyhow!(e))?;
+        debug!(
+            "stream: {} -> mode {} think {} extra {:?}",
+            resolved.name, resolved.mode, resolved.think, resolved.extra
+        );
         let (tx, rx) = mpsc::channel(16);
         let client = self.clone();
         let prompt = prompt.to_string();
@@ -67,13 +88,21 @@ impl Client {
         Ok(rx)
     }
 
-    pub async fn complete(&self, prompt: &str, model: &str, think: Option<u32>, refs: &[String]) -> Result<String> {
+    pub async fn complete(
+        &self,
+        prompt: &str,
+        model: &str,
+        think: Option<u32>,
+        refs: &[String],
+    ) -> Result<String> {
         let mut rx = self.stream(prompt, model, think, refs).await?;
         let mut out = String::new();
         while let Some(item) = rx.recv().await {
             match item {
                 Ok(StreamItem::Text(delta)) => out.push_str(&delta),
-                Ok(StreamItem::ToolCall { name, .. }) => anyhow::bail!("Gemini emitted tool call `{name}` during text completion"),
+                Ok(StreamItem::ToolCall { name, .. }) => {
+                    anyhow::bail!("Gemini emitted tool call `{name}` during text completion")
+                }
                 Ok(StreamItem::Metadata { .. }) => {}
                 Err(e) => anyhow::bail!("{e}"),
             }

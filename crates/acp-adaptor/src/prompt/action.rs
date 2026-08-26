@@ -44,7 +44,16 @@ impl AgentActionHandler for AcpActionHandler {
             .unwrap_or("")
             .trim();
         let mut cancel = cancellation.subscribe();
-        match request_action(&self.cx, &self.session_id, call_id, label, query, &mut cancel).await {
+        match request_action(
+            &self.cx,
+            &self.session_id,
+            call_id,
+            label,
+            query,
+            &mut cancel,
+        )
+        .await
+        {
             Ok(FollowUpOutcome::Selected(text)) => Ok(Some(text)),
             Ok(FollowUpOutcome::Rejected) => Ok(None),
             Ok(FollowUpOutcome::Cancelled) => Err("FollowUp cancelled".to_owned()),

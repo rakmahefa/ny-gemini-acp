@@ -11,7 +11,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "llm-provider",
- "regex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -77,11 +76,8 @@ dependencies = [
 name = "agent-runtime"
 version = "0.2.2"
 dependencies = [
- "agent-client-protocol",
  "anyhow",
  "async-trait",
- "regex",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -1236,7 +1232,6 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 name = "llm-provider"
 version = "0.2.2"
 dependencies = [
- "agent-client-protocol",
  "agent-runtime",
  "anyhow",
  "async-trait",
@@ -2226,7 +2221,6 @@ dependencies = [
  "agent-runtime",
  "anyhow",
  "async-trait",
- "base64",
  "futures-util",
  "regex",
  "reqwest",

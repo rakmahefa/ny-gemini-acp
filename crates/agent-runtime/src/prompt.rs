@@ -43,8 +43,8 @@ pub fn format_tool_result(id: &str, name: &str, content: &str, is_ok: bool) -> S
         status: if is_ok { "ok" } else { "error" },
         tool: name,
     };
-    let encoded = serde_json::to_string(&envelope)
-        .expect("tool result envelope serialization cannot fail");
+    let encoded =
+        serde_json::to_string(&envelope).expect("tool result envelope serialization cannot fail");
     format!("{TOOL_RESULT_PREFIX} {encoded}")
 }
 

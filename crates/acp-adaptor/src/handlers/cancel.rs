@@ -4,10 +4,7 @@ use agent_client_protocol::schema::v1::CancelNotification;
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::AppState;
 
-pub async fn handle(
-    notif: CancelNotification,
-    state: &AppState,
-) -> Result<(), AcpError> {
+pub async fn handle(notif: CancelNotification, state: &AppState) -> Result<(), AcpError> {
     tracing::info!(session = %notif.session_id, "session/cancel");
 
     state

@@ -17,11 +17,16 @@ pub(super) fn parse_inline_tool_call(text: &str, next_id: &mut usize) -> Option<
         Some((name, id)) => (name.trim(), Some(id.trim())),
         None => (header.trim(), None),
     };
-    if name.is_empty() || body.is_empty() { return None; }
+    if name.is_empty() || body.is_empty() {
+        return None;
+    }
     let arguments = serde_json::from_str::<Value>(body).ok()?;
     let arguments = normalize_arguments(arguments)?;
     Some(ModelToolCall {
-        id: id.filter(|id| !id.is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| allocate_call_id(next_id)),
+        id: id
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| allocate_call_id(next_id)),
         name: name.to_owned(),
         arguments,
     })
@@ -29,11 +34,26 @@ pub(super) fn parse_inline_tool_call(text: &str, next_id: &mut usize) -> Option<
 
 fn parse_tool_value(value: &Value, next_id: &mut usize) -> Option<ModelToolCall> {
     let name = value.get("name").and_then(Value::as_str)?.trim();
-    if name.is_empty() { return None; }
-    let arguments = value.get("arguments").or_else(|| value.get("args"))?.clone();
+    if name.is_empty() {
+        return None;
+    }
+    let arguments = value
+        .get("arguments")
+        .or_else(|| value.get("args"))?
+        .clone();
     let arguments = normalize_arguments(arguments)?;
-    let id = value.get("id").or_else(|| value.get("call_id")).and_then(Value::as_str).filter(|id| !id.trim().is_empty()).map(ToOwned::to_owned).unwrap_or_else(|| allocate_call_id(next_id));
-    Some(ModelToolCall { id, name: name.to_owned(), arguments })
+    let id = value
+        .get("id")
+        .or_else(|| value.get("call_id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| allocate_call_id(next_id));
+    Some(ModelToolCall {
+        id,
+        name: name.to_owned(),
+        arguments,
+    })
 }
 
 fn normalize_arguments(value: Value) -> Option<Value> {
@@ -61,16 +81,25 @@ pub(super) fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, Stri
         calls.push(parse_follow_up_tag(tag)?);
         cursor = absolute_end + 1;
     }
-    if found { Some(calls) } else { None }
+    if found {
+        Some(calls)
+    } else {
+        None
+    }
 }
 
 fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
-    let inner = tag.strip_prefix(FOLLOW_UP_PREFIX)?.strip_suffix('>')?.trim();
+    let inner = tag
+        .strip_prefix(FOLLOW_UP_PREFIX)?
+        .strip_suffix('>')?
+        .trim();
     let inner = inner.strip_suffix('/').unwrap_or(inner).trim();
     let attrs = parse_attributes(inner);
     let label = attrs.get("label")?.trim();
     let query = attrs.get("query")?.trim();
-    if label.is_empty() || query.is_empty() { return None; }
+    if label.is_empty() || query.is_empty() {
+        return None;
+    }
     Some((decode_xml(label), decode_xml(query)))
 }
 
@@ -79,28 +108,51 @@ fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
     let bytes = input.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
-        if index >= bytes.len() || bytes[index] == b'/' { break; }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] == b'/' {
+            break;
+        }
         let key_start = index;
-        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' { index += 1; }
-        if key_start == index { index += 1; continue; }
+        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' {
+            index += 1;
+        }
+        if key_start == index {
+            index += 1;
+            continue;
+        }
         let key = &input[key_start..index];
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
-        if index >= bytes.len() || bytes[index] != b'=' { break; }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() || bytes[index] != b'=' {
+            break;
+        }
         index += 1;
-        while index < bytes.len() && bytes[index].is_ascii_whitespace() { index += 1; }
-        if index >= bytes.len() { break; }
+        while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+            index += 1;
+        }
+        if index >= bytes.len() {
+            break;
+        }
         let value = if bytes[index] == b'\'' || bytes[index] == b'"' {
             let quote = bytes[index];
             index += 1;
             let value_start = index;
-            while index < bytes.len() && bytes[index] != quote { index += 1; }
+            while index < bytes.len() && bytes[index] != quote {
+                index += 1;
+            }
             let value = input[value_start..index].to_owned();
-            if index < bytes.len() { index += 1; }
+            if index < bytes.len() {
+                index += 1;
+            }
             value
         } else {
             let value_start = index;
-            while index < bytes.len() && !bytes[index].is_ascii_whitespace() { index += 1; }
+            while index < bytes.len() && !bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
             input[value_start..index].to_owned()
         };
         attrs.insert(key.to_ascii_lowercase(), value);
@@ -109,7 +161,12 @@ fn parse_attributes(input: &str) -> std::collections::BTreeMap<String, String> {
 }
 
 fn decode_xml(input: &str) -> String {
-    input.replace("&quot;", "\"").replace("&apos;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    input
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
 }
 
 fn find_tag_end(input: &str) -> Option<usize> {
