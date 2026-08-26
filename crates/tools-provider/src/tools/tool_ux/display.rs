@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use super::types::{CardBodyKind, ToolVisual, MAX_CARD_BODY_CHARS, MAX_RAW_INPUT_CHARS};
 
-pub(crate) fn bounded_raw_input(args: &Value) -> Value {
+pub fn bounded_raw_input(args: &Value) -> Value {
     let mut value = args.clone();
     let Some(object) = value.as_object_mut() else {
         return value;
