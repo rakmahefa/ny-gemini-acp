@@ -81,8 +81,13 @@ impl Client {
         let prompt = prompt.to_string();
         let refs = refs.to_vec();
         tokio::spawn(async move {
-            if let Err(e) = client.run_turn(tx.clone(), prompt, refs, &resolved).await {
-                let _ = tx.send(Err(format!("{e:#}"))).await;
+            tokio::select! {
+                result = client.run_turn(tx.clone(), prompt, refs, &resolved) => {
+                    if let Err(e) = result {
+                        let _ = tx.send(Err(format!("{e:#}"))).await;
+                    }
+                }
+                _ = tx.closed() => {}
             }
         });
         Ok(rx)

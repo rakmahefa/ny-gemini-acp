@@ -12,11 +12,16 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum GeminiError {
     /// Cookies expirés ou invalides — `BardErrorInfo [<code>]` dans le corps.
-    /// Code 401 = cookies expirés, autres codes = erreur amont Google.
+    /// Code 401 = cookies expirés.
     #[error(
         "cookies expires ou invalides (BardErrorInfo [{code}]) — reexportez vendor/cookie.json"
     )]
     CookiesExpired { code: i64 },
+
+    /// Rejet explicite du backend Gemini ne permettant pas d'être classé comme
+    /// une simple expiration de session.
+    #[error("Gemini upstream rejected request: BardErrorInfo [{code}]")]
+    UpstreamRejected { code: i64 },
 
     /// Modèle inconnu — la clé n'est pas dans la table `gemini_core::models`.
     #[error("modele inconnu: {0}")]
@@ -27,8 +32,12 @@ pub enum GeminiError {
     Network(String),
 
     /// Erreur HTTP (status non-2xx).
-    #[error("erreur HTTP {status}: {body}")]
-    Http { status: u16, body: String },
+    ///
+    /// Le body upstream n'est volontairement jamais stocké dans l'erreur :
+    /// une erreur `Debug`, un log structuré ou une remontée inter-couches ne
+    /// doit pas pouvoir divulguer des tokens, cookies ou contenu arbitraire.
+    #[error("erreur HTTP {status}")]
+    Http { status: u16 },
 
     /// Divergence de flux en cours de streaming — le texte cumulé a change
     /// de prefix après émission, retry impossible.

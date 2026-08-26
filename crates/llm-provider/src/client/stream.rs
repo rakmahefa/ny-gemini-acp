@@ -8,6 +8,7 @@ use crate::core::auth::sapisid_hash;
 use crate::core::cookies::CookieJar;
 use crate::core::frames::{self, GeminiFrameDecoder, GeminiFrameEvent};
 use crate::core::models;
+use crate::core::GeminiError;
 use anyhow::{bail, Context};
 use futures_util::StreamExt;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, ORIGIN, REFERER};
@@ -18,10 +19,18 @@ use super::config::{StreamItem, StreamResult, ENDPOINT, TOKEN_TTL};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
 
+const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TEXT_EVENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_TOOL_ID_BYTES: usize = 1024;
+const MAX_TOOL_NAME_BYTES: usize = 1024;
+const MAX_TOOL_ARGUMENTS_BYTES: usize = 1024 * 1024;
+const MAX_RAW_ACCUMULATOR: usize = 64 * 1024;
+
 struct AttemptState<'a> {
     decoder: &'a mut GeminiFrameDecoder,
     emitted: &'a mut String,
     emitted_tools: &'a mut HashSet<String>,
+    diverged: &'a mut bool,
     tx: &'a mpsc::Sender<StreamResult>,
 }
 
@@ -36,13 +45,18 @@ impl Client {
         let attempts = self.inner.config.retry_attempts.max(1);
         let mut emitted = String::new();
         let mut emitted_tools = HashSet::new();
+        let mut diverged = false;
         let mut decoder = GeminiFrameDecoder::new();
 
         for attempt in 1..=attempts {
+            if tx.is_closed() {
+                return Ok(());
+            }
             let mut state = AttemptState {
                 decoder: &mut decoder,
                 emitted: &mut emitted,
                 emitted_tools: &mut emitted_tools,
+                diverged: &mut diverged,
                 tx: &tx,
             };
             match self
@@ -58,7 +72,13 @@ impl Client {
                     {
                         return Err(e);
                     }
-                    if emitted.is_empty() && emitted_tools.is_empty() && attempt < attempts {
+                    let retryable_divergence = e
+                        .downcast_ref::<GeminiError>()
+                        .is_some_and(|error| matches!(error, GeminiError::StreamDivergence));
+                    if attempt < attempts
+                        && emitted_tools.is_empty()
+                        && (emitted.is_empty() || retryable_divergence)
+                    {
                         let base_ms = self.inner.config.retry_delay.as_millis() as u64;
                         let delay_ms =
                             std::cmp::min(base_ms.saturating_mul(1u64 << (attempt - 1)), 30_000);
@@ -72,11 +92,16 @@ impl Client {
                         debug!(
                             tentative = attempt,
                             total = attempts,
+                            divergence = retryable_divergence,
                             "tentative échouée, retry dans {}ms — {e:#}",
                             effective
                         );
                         decoder.clear();
-                        tokio::time::sleep(Duration::from_millis(effective)).await;
+                        diverged = false;
+                        tokio::select! {
+                            _ = tx.closed() => return Ok(()),
+                            _ = tokio::time::sleep(Duration::from_millis(effective)) => {}
+                        }
                         continue;
                     }
                     return Err(e);
@@ -103,10 +128,14 @@ impl Client {
             .send()
             .await
             .context("envoi requête Gemini")?;
-        let response = response.error_for_status().context("HTTP Gemini")?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            return Err(GeminiError::Http { status }.into());
+        }
+
         let mut bytes_stream = response.bytes_stream();
         let mut raw_accumulator = String::new();
-        const MAX_RAW_ACCUMULATOR: usize = 64 * 1024;
 
         loop {
             tokio::select! {
@@ -114,11 +143,15 @@ impl Client {
                 chunk = bytes_stream.next() => {
                     let Some(chunk) = chunk else {
                         for frame in state.decoder.finish() {
-                            emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
+                            validate_frame_event(&frame)?;
+                            emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
                         }
                         if let Some(reason) = frames::detect_safety_block(&raw_accumulator) {
                             let _ = state.tx.send(Err(reason)).await;
                             return Ok(Some(()));
+                        }
+                        if *state.diverged {
+                            return Err(GeminiError::StreamDivergence.into());
                         }
                         if state.emitted.is_empty() && state.emitted_tools.is_empty() && frames::is_empty_stream(&raw_accumulator) {
                             let _ = state.tx.send(Err("Gemini n'a produit aucune réponse exploitable.".to_string())).await;
@@ -128,6 +161,11 @@ impl Client {
                     };
                     let bytes = chunk.context("lecture flux Gemini")?;
                     let text = String::from_utf8_lossy(&bytes);
+                    if state.decoder.pending().len().saturating_add(text.len()) > MAX_FRAME_BYTES {
+                        return Err(GeminiError::Other(anyhow::anyhow!(
+                            "Gemini frame exceeded the configured safety limit ({MAX_FRAME_BYTES} bytes)"
+                        )).into());
+                    }
                     trace!("chunk {} octets, queue ligne {}", text.len(), state.decoder.pending().len());
                     if raw_accumulator.len() < MAX_RAW_ACCUMULATOR {
                         raw_accumulator.push_str(&text);
@@ -139,14 +177,18 @@ impl Client {
                     let combined = format!("{}{}", state.decoder.pending(), text);
                     if combined.contains("BardErrorInfo") {
                         let code = frames::bard_error(&combined).unwrap_or(0);
-                        bail!("Gemini upstream rejected request: BardErrorInfo [{code}]");
+                        if code == 401 {
+                            return Err(GeminiError::CookiesExpired { code }.into());
+                        }
+                        return Err(GeminiError::UpstreamRejected { code }.into());
                     }
                     if let Some(reason) = frames::detect_safety_block(&combined) {
                         let _ = state.tx.send(Err(reason)).await;
                         return Ok(Some(()));
                     }
                     for frame in state.decoder.feed(&text) {
-                        emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
+                        validate_frame_event(&frame)?;
+                        emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
                     }
                 }
             }
@@ -273,26 +315,66 @@ impl Client {
     }
 }
 
+fn validate_frame_event(frame: &GeminiFrameEvent) -> anyhow::Result<()> {
+    match frame {
+        GeminiFrameEvent::Text(text) if text.len() > MAX_TEXT_EVENT_BYTES => {
+            bail!("Gemini text frame exceeded {} bytes", MAX_TEXT_EVENT_BYTES);
+        }
+        GeminiFrameEvent::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
+            if id.len() > MAX_TOOL_ID_BYTES {
+                bail!("Gemini tool call id exceeded {} bytes", MAX_TOOL_ID_BYTES);
+            }
+            if name.len() > MAX_TOOL_NAME_BYTES {
+                bail!("Gemini tool name exceeded {} bytes", MAX_TOOL_NAME_BYTES);
+            }
+            let argument_bytes = serde_json::to_vec(arguments)?.len();
+            if argument_bytes > MAX_TOOL_ARGUMENTS_BYTES {
+                bail!(
+                    "Gemini tool arguments exceeded {} bytes",
+                    MAX_TOOL_ARGUMENTS_BYTES
+                );
+            }
+        }
+        GeminiFrameEvent::Metadata { value, .. } => {
+            let metadata_bytes = serde_json::to_vec(value)?.len();
+            if metadata_bytes > 64 * 1024 {
+                bail!("Gemini metadata exceeded 65536 bytes");
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 async fn emit_frame(
     frame: GeminiFrameEvent,
     emitted: &mut String,
     emitted_tools: &mut HashSet<String>,
+    diverged: &mut bool,
     tx: &mpsc::Sender<StreamResult>,
 ) -> anyhow::Result<()> {
     match frame {
         GeminiFrameEvent::Text(candidate) => {
-            if candidate == *emitted || emitted.starts_with(&candidate) {
+            if candidate == *emitted {
+                *diverged = false;
                 return Ok(());
             }
             if !candidate.starts_with(emitted.as_str()) {
-                if emitted.is_empty() {
-                    *emitted = candidate;
-                    return Ok(());
-                }
-                bail!("Gemini stream content changed during retry");
+                *diverged = true;
+                tracing::warn!(
+                    emitted_bytes = emitted.len(),
+                    candidate_bytes = candidate.len(),
+                    "Gemini stream candidate diverged; waiting for a compatible snapshot"
+                );
+                return Ok(());
             }
             let delta = frames::clean_text(&candidate[emitted.len()..], false);
             *emitted = candidate;
+            *diverged = false;
             if !delta.is_empty() {
                 tx.send(Ok(StreamItem::Text(delta)))
                     .await
@@ -321,4 +403,68 @@ async fn emit_frame(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn divergent_snapshot_is_recoverable_before_stream_end() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut emitted = "Bonjour".to_string();
+        let mut tools = HashSet::new();
+        let mut diverged = false;
+
+        emit_frame(
+            GeminiFrameEvent::Text("Bonjouir".into()),
+            &mut emitted,
+            &mut tools,
+            &mut diverged,
+            &tx,
+        )
+        .await
+        .unwrap();
+        assert!(diverged);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(emitted, "Bonjour");
+
+        emit_frame(
+            GeminiFrameEvent::Text("Bonjour, monde".into()),
+            &mut emitted,
+            &mut tools,
+            &mut diverged,
+            &tx,
+        )
+        .await
+        .unwrap();
+        assert!(!diverged);
+        assert_eq!(emitted, "Bonjour, monde");
+        assert!(matches!(rx.try_recv().unwrap(), Ok(StreamItem::Text(text)) if text == ", monde"));
+    }
+
+    #[tokio::test]
+    async fn unrecoverable_divergence_remains_distinguishable() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut emitted = "Bonjour".to_string();
+        let mut tools = HashSet::new();
+        let mut diverged = false;
+
+        emit_frame(
+            GeminiFrameEvent::Text("Bonsoir".into()),
+            &mut emitted,
+            &mut tools,
+            &mut diverged,
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        assert!(diverged);
+        assert_eq!(emitted, "Bonjour");
+        let error = GeminiError::StreamDivergence;
+        assert!(matches!(error, GeminiError::StreamDivergence));
+        let _ = json!({"kind": "stream_divergence"});
+    }
 }
