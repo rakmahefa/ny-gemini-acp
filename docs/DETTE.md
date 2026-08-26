@@ -13,7 +13,7 @@ Les chantiers suivants sont désormais stabilisés dans `main` :
 - intégrité du cycle `SemanticEvent` et du transport par tour ;
 - tests d'intégration/système du runtime et de la projection ACP.
 
-La branche courante `debt/sandbox-shell` rembourse la tranche de dette P3 consacrée au parsing, à la normalisation et à la politique d'exécution du shell.
+La tranche `debt/sandbox-shell` est désormais stabilisée pour le parsing, la normalisation, la politique d'exécution et l'analyse de risque. Le confinement OS reste un chantier séparé.
 
 ---
 
@@ -26,9 +26,9 @@ La branche courante `debt/sandbox-shell` rembourse la tranche de dette P3 consac
 | P2 | Dette d'orchestration des turns | ✅ Terminée | `TurnService` extrait, runtime découplé d'ACP |
 | P2 | Dette des erreurs structurées | ✅ Terminée | Contrats structurés + mappings ACP terminés |
 | P2 | Tests d'intégration/système | ✅ Terminée | Runtime, SemanticEvent, projection ACP et chemins adversariaux validés |
-| P3 | Sandbox shell — parsing/politique | ✅ Terminée | Parser lexical, normalisation déterministe, allowlist/blocklist et refus des constructions dynamiques intégrés |
-| P3 | Sandbox shell — confinement OS | ⏳ À traiter | Le périmètre applicatif reste devant les mécanismes OS de confinement ; aucune exécution n'est considérée isolée du host par cette couche seule |
-| P3 | CI automatisée | Différée | Validation manuelle maintenue pour l'instant |
+| P3 | Sandbox shell — parsing/politique/risque | ✅ Terminée | Parser lexical, normalisation déterministe, politique restrictive et tests adversariaux validés localement |
+| P3 | Sandbox shell — confinement OS | ⏳ À traiter | L'application ne revendique aucune isolation du host par la politique shell seule |
+| P3 | CI automatisée | Différée | Validation locale maintenue pour l'instant |
 
 ---
 
@@ -251,9 +251,9 @@ Les fonctions `notify_*` utilisées par ce chemin sont les mêmes que celles vé
 
 Le transport OS/stdio complet de `Agent::builder(...).connect_to(Stdio::new())` relève désormais de la validation de protocole/exécution du binaire, et non plus d'une dette de contrat runtime. Aucun scénario critique du pipeline interne ne dépend d'un mock permissif pour être considéré valide.
 
-## 6.6 Validation de la branche de tests
+## 6.6 Validation locale confirmée
 
-Validation locale historiquement confirmée :
+La branche a été validée localement par :
 
 ```text
 cargo fmt --check                                      ✅
@@ -265,9 +265,9 @@ La CI GitHub n'est pas active sur le dépôt ; la validation de référence rest
 
 ---
 
-# 7. Sandbox shell — PRIORITÉ 3 / TRANCHE ACTUELLE ✅
+# 7. Sandbox shell — PRIORITÉ 3 / PARSING, POLITIQUE ET RISQUE ✅ TERMINÉE
 
-La tranche de dette traitée sur `debt/sandbox-shell` remplace les décisions principalement fondées sur regex par un pipeline explicite :
+La tranche `debt/sandbox-shell` remplace les décisions principalement fondées sur regex par un pipeline explicite :
 
 ```text
 commande brute
@@ -287,24 +287,13 @@ décision d'exécution
 
 ## 7.1 Parsing lexical ✅
 
-`crates/tools-provider/src/tools/sandbox/parser.rs` reconnaît explicitement :
+Le parser reconnaît explicitement quotes, échappements, arguments, pipes, opérateurs de contrôle, commentaires et constructions dynamiques pertinentes pour la frontière de sécurité.
 
-- quotes simples et doubles ;
-- échappements ;
-- arguments séparés ;
-- pipelines `|` ;
-- opérateurs `;`, `&&`, `||` et `&` ;
-- commentaires en début de token ;
-- substitutions de commande `$(...)` et backticks ;
-- redirections et here-documents.
-
-Le parser ne cherche pas à devenir un interpréteur shell complet. Il doit seulement représenter les constructions nécessaires à la frontière de sécurité.
-
-Les erreurs lexicales deviennent des refus plutôt que des commandes partiellement comprises.
+Il refuse notamment les substitutions de commande, redirections et here-documents. Les erreurs lexicales deviennent des refus plutôt que des commandes partiellement comprises.
 
 ## 7.2 Normalisation ✅
 
-Chaque commande est convertie vers :
+Chaque commande devient une représentation structurée :
 
 ```text
 ParsedShellCommand
@@ -315,100 +304,139 @@ ParsedShellCommand
 └── has_environment_expansion
 ```
 
-La normalisation est déterministe et retire les différences de quoting qui ne changent pas les arguments sémantiques.
-
-Exemple :
-
-```text
-cat 'file name.txt' | grep "foo bar"
-```
-
-devient :
-
-```text
-cat file name.txt | grep foo bar
-```
-
-La représentation normalisée sert ensuite à l'analyse et non l'inverse : les règles de sécurité ne sont plus basées sur un simple `starts_with()` du texte brut.
+Les différences de quoting qui ne changent pas les arguments sémantiques sont normalisées avant l'évaluation de politique.
 
 ## 7.3 Politique d'exécution ✅
 
-La sandbox impose maintenant :
+La politique par défaut impose notamment :
 
-- allowlist explicite des programmes connus ;
-- blocklist explicite des programmes d'escalade, arrêt système et réseau sortant ;
-- interdiction d'exécuter un programme via un chemin explicite ;
-- interdiction des affectations d'environnement en tête de commande ;
-- interdiction des interpréteurs shell (`sh`, `bash`, `zsh`, etc.) ;
-- interdiction du code inline (`python -c`, `node -e`, etc.) ;
-- interdiction de `find -exec` / `-execdir` ;
-- interdiction des chaînes `xargs` vers un interpréteur ;
-- interdiction des cibles absolues ou traversées `../` pour les opérations destructrices (`rm`, `rmdir`, `chmod`, `chown`) ;
-- interdiction de la substitution de commande et des expansions d'environnement ;
-- interdiction des redirections, here-documents et opérateurs shell non-pipe.
+- allowlist des programmes connus ;
+- blocklist des programmes d'escalade, arrêt système et réseau sortant ;
+- interdiction des chemins de programme explicites ;
+- interdiction des affectations d'environnement en tête ;
+- interdiction des interpréteurs shell et du code inline ;
+- interdiction de `find -exec` / `-execdir` et des chaînes `xargs` vers un interpréteur ;
+- refus des cibles absolues ou traversées `../` pour les opérations destructrices ;
+- refus des expansions d'environnement, redirections, here-documents et opérateurs shell non-pipe.
 
-Le seul opérateur composé conservé comme construction de premier niveau est `|`, chaque segment étant ensuite validé indépendamment.
+Le pipeline `|` est conservé comme construction composée autorisée, avec validation indépendante de chaque segment.
 
 ## 7.4 Analyse de risque ✅
 
-`ShellAnalysis` est maintenant construit depuis la représentation parsée :
+`ShellAnalysis` est calculé depuis la représentation parsée et classe les commandes en :
 
 ```text
-Low
-Medium
-High
-Critical
+Low / Medium / High / Critical
 ```
 
-Le risque distingue notamment les pipelines, commandes à effets de bord, expansions dynamiques et opérations destructrices.
-
-Une commande non analysable devient `Critical` dans l'analyse descriptive et est refusée par la politique d'exécution.
+Une commande non analysable est traitée comme `Critical` pour l'analyse et n'est pas admise par la politique restrictive.
 
 ## 7.5 Tests adversariaux ✅
 
-La suite couvre maintenant :
+Les tests couvrent notamment les bypass de préfixe, interpréteurs shell, code inline, exfiltration réseau, pipes dangereux, `xargs`, `eval`, `exec`, opérateurs de contrôle, redirections, substitutions, expansions, chemins absolus, traversals, quoting et commentaires.
 
-```text
-✅ bypass de préfixe (`gitfoo`, `catabc`)
-✅ shell interpreters
-✅ code inline
-✅ curl/wget/nc/socat
-✅ pipes vers shell/interpréteur
-✅ xargs vers shell
-✅ eval / exec
-✅ ; / && / || / &
-✅ redirections / here-documents
-✅ command substitution
-✅ environment expansion
-✅ chemins absolus
-✅ traversal ../
-✅ quoting + normalisation
-✅ lignes/commentaires
-```
+## 7.6 Limite restante — confinement OS ⏳
 
-Le comportement permissif de test reste disponible, mais il est isolé explicitement et ne correspond pas à la politique par défaut.
+La politique applicative **n'est pas une isolation du système d'exploitation**. Elle réduit les commandes dangereuses acceptées, mais elle ne peut pas garantir à elle seule qu'un processus compromis ne lise pas un fichier hors périmètre, n'accède pas au réseau, ne consomme pas toutes les ressources ou n'exploite pas une vulnérabilité du host.
 
-## 7.6 Limite restante : confinement OS ⏳
-
-Cette tranche ne prétend pas fournir un sandbox kernel/container.
-
-Le chemin d'exécution ACP reste conceptuellement :
-
-```text
-policy decision
-    ↓
-ACP terminal
-    ↓
-sh -c <commande validée>
-```
-
-La validation actuelle réduit les classes de commandes dangereuses mais ne constitue pas une frontière de confidentialité, de privilège ou d'isolation du host.
-
-La prochaine tranche de cette dette devra donc décider explicitement si l'exécution doit être confinée par mécanisme OS/container, avec un contrat de fallback sécurisé lorsque le confinement n'est pas disponible.
+Le prochain chantier doit donc définir un contrat de confinement OS et un comportement de fallback sûr lorsque ce mécanisme est indisponible.
 
 ---
 
-# 8. CI — PRIORITÉ 3 / DIFFÉRÉE
+# 8. Confinement OS — PRIORITÉ 3 / À CONCEVOIR
+
+## Objectif
+
+Passer de :
+
+```text
+"la commande semble sûre"
+```
+
+à :
+
+```text
+"même un processus compromis reste dans un périmètre défini"
+```
+
+## 8.1 Ce que le confinement doit garantir
+
+Le contrat devra définir au minimum :
+
+```text
+Filesystem : uniquement les chemins explicitement accordés
+Network   : accès refusé par défaut, exceptions explicites
+Privileges: aucun accès privilégié, identité non-root
+Processes : pas de création d'un périmètre de processus illimité
+Resources : CPU, mémoire, fichiers ouverts et éventuellement durée bornés
+Signals   : impossibilité de contrôler arbitrairement les processus du host
+Host      : pas de /proc, /sys, devices ou sockets hôte accessibles par défaut
+```
+
+## 8.2 Hiérarchie des mécanismes
+
+La préférence de conception est :
+
+```text
+confinement OS natif
+    ↓
+conteneur/rootfs isolé
+    ↓
+seccomp / namespaces / cgroups / filesystem
+    ↓
+politique applicative en complément
+```
+
+La politique shell reste utile, mais elle devient une **couche préalable** et non la seule frontière de sécurité.
+
+## 8.3 Fallback obligatoire
+
+Le runtime ne doit pas faire :
+
+```text
+sandbox OS indisponible
+    ↓
+"on exécute quand même"
+```
+
+Le comportement sûr doit être :
+
+```text
+confinement demandé
+    ↓
+confinement disponible ?
+ ├── oui  → exécution confinée
+ └── non  → refus structuré
+```
+
+Une exécution non confinée pourrait éventuellement exister comme mode explicitement administratif/de développement, mais jamais comme fallback silencieux de la sandbox normale.
+
+## 8.4 Contrat runtime proposé
+
+```text
+ToolCall
+   ↓
+Shell policy
+   ↓
+ExecutionProfile
+   ├── filesystem_scope
+   ├── network_policy
+   ├── resource_limits
+   ├── privilege_policy
+   └── confinement_backend
+   ↓
+ConfinementBackend::spawn()
+   ↓
+process confined
+   ↓
+ToolResult
+```
+
+Cela permettrait de garder `tools-provider` indépendant du backend concret : Linux namespaces/seccomp aujourd'hui, éventuellement container runtime demain.
+
+---
+
+# 9. CI — PRIORITÉ 3 / DIFFÉRÉE
 
 La CI GitHub n'est actuellement pas active sur le dépôt.
 
@@ -425,7 +453,7 @@ La CI pourra être réintroduite ensuite pour protéger automatiquement les inva
 
 ---
 
-# 9. Stratégie de remboursement
+# 10. Stratégie de remboursement
 
 ```text
 ✅ 1. Dette de typage sémantique
@@ -437,15 +465,8 @@ La CI pourra être réintroduite ensuite pour protéger automatiquement les inva
 ✅ 4. Erreurs structurées
         ↓
 ✅ 5. Tests d'intégration / système
-        ├── ✅ provider → runtime
-        ├── ✅ runtime → SemanticEvent lifecycle
-        ├── ✅ tool execution
-        ├── ✅ runtime → persistence
-        ├── ✅ SemanticEvent → ACP projection
-        ├── ✅ ACP notification payloads
-        └── ✅ adversarial transport/projection paths
         ↓
-✅ 6. Sandbox shell — parsing / normalisation / politique
+✅ 6. Sandbox shell — parsing / normalisation / politique / risque
         ↓
 ⏳ 7. Sandbox shell — confinement OS
         ↓
@@ -454,7 +475,7 @@ La CI pourra être réintroduite ensuite pour protéger automatiquement les inva
 
 ---
 
-# 10. Règle générale
+# 11. Règle générale
 
 La dette technique ne doit pas être remboursée par refactorisation esthétique seule.
 
