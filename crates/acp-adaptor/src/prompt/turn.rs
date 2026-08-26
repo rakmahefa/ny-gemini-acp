@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentLoopError, AgentLoopConfig, TurnService};
+use agent_runtime::AgentLoopError;
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -118,14 +118,9 @@ pub async fn run_turn(
         ctx.cx.clone(),
         ctx.tools.clone(),
     ));
-    let service = TurnService::new(
-        ctx.store.clone(),
-        ctx.llm.clone(),
-        ctx.tools.clone(),
-        AgentLoopConfig::default(),
-    );
 
-    let result = service
+    let result = ctx
+        .turn_service
         .run_started(
             sid,
             session,
