@@ -10,9 +10,10 @@ Les chantiers suivants sont désormais stabilisés dans `main` :
 - persistance et finalisation des turns ;
 - orchestration des turns via `agent-runtime::TurnService` ;
 - erreurs structurées et mappings ACP ;
-- intégrité du cycle `SemanticEvent` et du transport par tour.
+- intégrité du cycle `SemanticEvent` et du transport par tour ;
+- tests d'intégration/système du runtime et de la projection ACP.
 
-La branche courante `debt/integration-system-tests` finalise le remboursement de la dette P2 de tests d'intégration/système.
+La branche courante `debt/sandbox-shell` rembourse la tranche de dette P3 consacrée au parsing, à la normalisation et à la politique d'exécution du shell.
 
 ---
 
@@ -25,7 +26,8 @@ La branche courante `debt/integration-system-tests` finalise le remboursement de
 | P2 | Dette d'orchestration des turns | ✅ Terminée | `TurnService` extrait, runtime découplé d'ACP |
 | P2 | Dette des erreurs structurées | ✅ Terminée | Contrats structurés + mappings ACP terminés |
 | P2 | Tests d'intégration/système | ✅ Terminée | Runtime, SemanticEvent, projection ACP et chemins adversariaux validés |
-| P3 | Sandbox shell | Différé volontairement | Parsing/normalisation/politique de risque à traiter plus tard |
+| P3 | Sandbox shell — parsing/politique | ✅ Terminée | Parser lexical, normalisation déterministe, allowlist/blocklist et refus des constructions dynamiques intégrés |
+| P3 | Sandbox shell — confinement OS | ⏳ À traiter | Le périmètre applicatif reste devant les mécanismes OS de confinement ; aucune exécution n'est considérée isolée du host par cette couche seule |
 | P3 | CI automatisée | Différée | Validation manuelle maintenue pour l'instant |
 
 ---
@@ -249,9 +251,9 @@ Les fonctions `notify_*` utilisées par ce chemin sont les mêmes que celles vé
 
 Le transport OS/stdio complet de `Agent::builder(...).connect_to(Stdio::new())` relève désormais de la validation de protocole/exécution du binaire, et non plus d'une dette de contrat runtime. Aucun scénario critique du pipeline interne ne dépend d'un mock permissif pour être considéré valide.
 
-## 6.6 Validation de la branche
+## 6.6 Validation de la branche de tests
 
-Validation locale confirmée :
+Validation locale historiquement confirmée :
 
 ```text
 cargo fmt --check                                      ✅
@@ -263,7 +265,150 @@ La CI GitHub n'est pas active sur le dépôt ; la validation de référence rest
 
 ---
 
-# 7. CI — PRIORITÉ 3 / DIFFÉRÉE
+# 7. Sandbox shell — PRIORITÉ 3 / TRANCHE ACTUELLE ✅
+
+La tranche de dette traitée sur `debt/sandbox-shell` remplace les décisions principalement fondées sur regex par un pipeline explicite :
+
+```text
+commande brute
+    ↓
+lexer shell limité
+    ↓
+segments + opérateurs
+    ↓
+normalisation déterministe
+    ↓
+politique sandbox
+    ↓
+analyse de risque
+    ↓
+décision d'exécution
+```
+
+## 7.1 Parsing lexical ✅
+
+`crates/tools-provider/src/tools/sandbox/parser.rs` reconnaît explicitement :
+
+- quotes simples et doubles ;
+- échappements ;
+- arguments séparés ;
+- pipelines `|` ;
+- opérateurs `;`, `&&`, `||` et `&` ;
+- commentaires en début de token ;
+- substitutions de commande `$(...)` et backticks ;
+- redirections et here-documents.
+
+Le parser ne cherche pas à devenir un interpréteur shell complet. Il doit seulement représenter les constructions nécessaires à la frontière de sécurité.
+
+Les erreurs lexicales deviennent des refus plutôt que des commandes partiellement comprises.
+
+## 7.2 Normalisation ✅
+
+Chaque commande est convertie vers :
+
+```text
+ParsedShellCommand
+├── segments
+│   ├── program
+│   └── args
+├── operators
+└── has_environment_expansion
+```
+
+La normalisation est déterministe et retire les différences de quoting qui ne changent pas les arguments sémantiques.
+
+Exemple :
+
+```text
+cat 'file name.txt' | grep "foo bar"
+```
+
+devient :
+
+```text
+cat file name.txt | grep foo bar
+```
+
+La représentation normalisée sert ensuite à l'analyse et non l'inverse : les règles de sécurité ne sont plus basées sur un simple `starts_with()` du texte brut.
+
+## 7.3 Politique d'exécution ✅
+
+La sandbox impose maintenant :
+
+- allowlist explicite des programmes connus ;
+- blocklist explicite des programmes d'escalade, arrêt système et réseau sortant ;
+- interdiction d'exécuter un programme via un chemin explicite ;
+- interdiction des affectations d'environnement en tête de commande ;
+- interdiction des interpréteurs shell (`sh`, `bash`, `zsh`, etc.) ;
+- interdiction du code inline (`python -c`, `node -e`, etc.) ;
+- interdiction de `find -exec` / `-execdir` ;
+- interdiction des chaînes `xargs` vers un interpréteur ;
+- interdiction des cibles absolues ou traversées `../` pour les opérations destructrices (`rm`, `rmdir`, `chmod`, `chown`) ;
+- interdiction de la substitution de commande et des expansions d'environnement ;
+- interdiction des redirections, here-documents et opérateurs shell non-pipe.
+
+Le seul opérateur composé conservé comme construction de premier niveau est `|`, chaque segment étant ensuite validé indépendamment.
+
+## 7.4 Analyse de risque ✅
+
+`ShellAnalysis` est maintenant construit depuis la représentation parsée :
+
+```text
+Low
+Medium
+High
+Critical
+```
+
+Le risque distingue notamment les pipelines, commandes à effets de bord, expansions dynamiques et opérations destructrices.
+
+Une commande non analysable devient `Critical` dans l'analyse descriptive et est refusée par la politique d'exécution.
+
+## 7.5 Tests adversariaux ✅
+
+La suite couvre maintenant :
+
+```text
+✅ bypass de préfixe (`gitfoo`, `catabc`)
+✅ shell interpreters
+✅ code inline
+✅ curl/wget/nc/socat
+✅ pipes vers shell/interpréteur
+✅ xargs vers shell
+✅ eval / exec
+✅ ; / && / || / &
+✅ redirections / here-documents
+✅ command substitution
+✅ environment expansion
+✅ chemins absolus
+✅ traversal ../
+✅ quoting + normalisation
+✅ lignes/commentaires
+```
+
+Le comportement permissif de test reste disponible, mais il est isolé explicitement et ne correspond pas à la politique par défaut.
+
+## 7.6 Limite restante : confinement OS ⏳
+
+Cette tranche ne prétend pas fournir un sandbox kernel/container.
+
+Le chemin d'exécution ACP reste conceptuellement :
+
+```text
+policy decision
+    ↓
+ACP terminal
+    ↓
+sh -c <commande validée>
+```
+
+La validation actuelle réduit les classes de commandes dangereuses mais ne constitue pas une frontière de confidentialité, de privilège ou d'isolation du host.
+
+La prochaine tranche de cette dette devra donc décider explicitement si l'exécution doit être confinée par mécanisme OS/container, avec un contrat de fallback sécurisé lorsque le confinement n'est pas disponible.
+
+---
+
+# 8. CI — PRIORITÉ 3 / DIFFÉRÉE
 
 La CI GitHub n'est actuellement pas active sur le dépôt.
 
@@ -277,24 +422,6 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 La CI pourra être réintroduite ensuite pour protéger automatiquement les invariants désormais couverts par la suite de tests.
-
----
-
-# 8. Sandbox shell — PRIORITÉ 3 / DIFFÉRÉE
-
-Le sandbox shell conserve encore des heuristiques pour certaines commandes dangereuses.
-
-Direction cible :
-
-```text
-commande brute
-→ tokenisation / parsing
-→ représentation normalisée
-→ politique de risque
-→ décision d'exécution
-```
-
-Ce chantier reste volontairement derrière les contrats d'intégration déjà stabilisés.
 
 ---
 
@@ -318,9 +445,11 @@ Ce chantier reste volontairement derrière les contrats d'intégration déjà st
         ├── ✅ ACP notification payloads
         └── ✅ adversarial transport/projection paths
         ↓
-6. Sandbox shell
+✅ 6. Sandbox shell — parsing / normalisation / politique
         ↓
-7. CI automatisée
+⏳ 7. Sandbox shell — confinement OS
+        ↓
+8. CI automatisée
 ```
 
 ---
