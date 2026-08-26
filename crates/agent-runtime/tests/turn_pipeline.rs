@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -7,10 +7,10 @@ use agent_runtime::state::{HistoryEntry, Store};
 use agent_runtime::{
     AgentLoopConfig, Cancellation, LlmError, LlmModelInfo, LlmProvider, ModelEvent,
     ModelRequest, ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider,
-    ToolTransportKind, ToolUiModel, TurnExecutionRequest, TurnService,
+    ToolUiModel, TurnExecutionRequest, TurnService,
 };
 use serde_json::{json, Value};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 
 struct ScriptedLlm {
     rounds: Mutex<VecDeque<Result<Vec<ModelEvent>, LlmError>>>,
@@ -19,7 +19,7 @@ struct ScriptedLlm {
 impl ScriptedLlm {
     fn new(rounds: Vec<Result<Vec<ModelEvent>, LlmError>>) -> Self {
         Self {
-            rounds: Mutex::new(rounds.into()),
+            rounds: rounds.into(),
         }
     }
 }
@@ -247,7 +247,7 @@ async fn tool_round_crosses_execution_and_preserves_canonical_call_id() {
     assert_eq!(result.outcome.tool_calls, 1);
     assert_eq!(
         calls.lock().expect("tool calls mutex poisoned").as_slice(),
-        ["upstream-42:alpha"]
+        ["upstream-42:alpha".to_string()]
     );
     assert!(semantic.is_terminal());
 
@@ -305,11 +305,4 @@ async fn provider_failure_is_terminal_and_turn_is_finalized() {
 
     bus.close_turn("integration-turn");
     std::fs::remove_dir_all(dir).ok();
-}
-
-#[allow(dead_code)]
-fn _keep_protocol_types_reachable() {
-    let _ = ToolTransportKind::Process;
-    let _ = HashMap::<String, String>::new();
-    let _ = watch::channel(false);
 }
