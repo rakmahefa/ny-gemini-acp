@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
+use agent_runtime::{AgentActionError, AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -261,7 +261,10 @@ mod tests {
             map_agent_error(&AgentLoopError::InvalidModelSequence("broken".into())),
             None
         );
-        assert_eq!(map_agent_error(&AgentLoopError::Action("boom".into())), None);
+        assert_eq!(
+            map_agent_error(&AgentLoopError::Action(AgentActionError::Failed("boom".into()))),
+            None
+        );
     }
 
     #[test]
