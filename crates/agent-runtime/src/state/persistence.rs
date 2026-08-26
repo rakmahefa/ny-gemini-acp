@@ -13,6 +13,7 @@ impl Store {
             .await
             .with_context(|| format!("création du répertoire {}", dir.display()))?;
         cleanup_orphan_tmp_files(dir).await;
+        cleanup_stale_busy_files(dir).await;
         let sessions_dir = dir.join("sessions");
         if tokio::fs::metadata(&sessions_dir).await.is_ok() {
             cleanup_orphan_tmp_files(&sessions_dir).await;
@@ -149,6 +150,28 @@ async fn cleanup_orphan_tmp_files(dir: &Path) {
     }
 }
 
+async fn cleanup_stale_busy_files(dir: &Path) {
+    let mut entries = match tokio::fs::read_dir(dir).await {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let path = entry.path();
+        let is_busy = path.is_file()
+            && path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| name.ends_with(".busy"))
+                .unwrap_or(false);
+        if !is_busy {
+            continue;
+        }
+        if super::busy::stale_busy_sentinel(&path).await {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,6 +211,22 @@ mod tests {
 
         assert_eq!(tokio::fs::read(&path).await.unwrap(), br#"{"ok":true}"#);
         assert!(!dir.join(".session.json.tmp").exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn open_removes_invalid_orphan_busy_sentinel() {
+        let dir = std::env::temp_dir().join(format!(
+            "acp-busy-recovery-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        let busy = dir.join("sess_orphan.busy");
+        tokio::fs::write(&busy, b"").await.unwrap();
+
+        let _store = Store::open(&dir).await.unwrap();
+        assert!(!busy.exists());
 
         std::fs::remove_dir_all(&dir).ok();
     }
