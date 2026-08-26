@@ -22,7 +22,10 @@ impl Store {
             .await
         {
             Ok(_) => {
-                tokio::fs::write(&path, &content).await?;
+                if let Err(error) = tokio::fs::write(&path, &content).await {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(error.into());
+                }
                 Ok(())
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -34,7 +37,10 @@ impl Store {
                         .open(&path)
                         .await?;
                     drop(file);
-                    tokio::fs::write(&path, &content).await?;
+                    if let Err(error) = tokio::fs::write(&path, &content).await {
+                        let _ = tokio::fs::remove_file(&path).await;
+                        return Err(error.into());
+                    }
                     Ok(())
                 } else {
                     anyhow::bail!("session {id} already busy")
@@ -49,7 +55,7 @@ impl Store {
     }
 }
 
-async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
+pub(crate) async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
     let Ok(raw) = tokio::fs::read_to_string(path).await else {
         return false;
     };
