@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use super::TurnExecutionRequest;
-use crate::state::{Session, Store};
+use crate::state::{Session, Store, StoreError};
 use crate::{AgentLoop, AgentLoopConfig, AgentLoopError, LlmProvider, ToolProvider};
 
 /// Result of one provider-neutral turn execution.
@@ -16,6 +16,13 @@ pub struct TurnExecutionResult {
 pub enum TurnServiceError {
     #[error("agent loop failed: {0}")]
     Agent(#[from] AgentLoopError),
+    #[error("turn finalization failed: {0}")]
+    Persistence(#[from] StoreError),
+    #[error("agent loop failed and turn finalization also failed: agent={agent}; persistence={persistence}")]
+    AgentAndPersistence {
+        agent: AgentLoopError,
+        persistence: StoreError,
+    },
 }
 
 /// Owns the runtime portion of a turn once the session has been acquired.
@@ -72,12 +79,18 @@ impl TurnService {
                 }
             }
             Err(error) => {
-                self.finish(&session_id, session, generation).await;
+                let finalization = self.finish(&session_id, session, generation).await;
                 if !semantic.is_terminal() {
                     let _ = semantic.turn_started();
                     let _ = semantic.turn_failed();
                 }
-                return Err(error.into());
+                return match finalization {
+                    Ok(()) => Err(error.into()),
+                    Err(persistence) => Err(TurnServiceError::AgentAndPersistence {
+                        agent: error,
+                        persistence,
+                    }),
+                };
             }
         };
 
@@ -97,7 +110,7 @@ impl TurnService {
                     outcome,
                     session: session.clone(),
                 };
-                self.finish(&session_id, session, generation).await;
+                self.finish(&session_id, session, generation).await?;
                 Ok(result)
             }
             Err(error) => {
@@ -108,16 +121,24 @@ impl TurnService {
                         let _ = semantic.turn_failed();
                     }
                 }
-                self.finish(&session_id, session, generation).await;
-                Err(error.into())
+                match self.finish(&session_id, session, generation).await {
+                    Ok(()) => Err(error.into()),
+                    Err(persistence) => Err(TurnServiceError::AgentAndPersistence {
+                        agent: error,
+                        persistence,
+                    }),
+                }
             }
         }
     }
 
-    async fn finish(&self, session_id: &str, session: Session, generation: u64) {
-        if let Err(error) = self.store.end_turn(session_id, session, generation).await {
-            tracing::warn!(session=%session_id, error=%error, "turn finalization failed");
-        }
+    async fn finish(
+        &self,
+        session_id: &str,
+        session: Session,
+        generation: u64,
+    ) -> Result<(), StoreError> {
+        self.store.end_turn(session_id, session, generation).await
     }
 }
 
