@@ -13,7 +13,7 @@ pub async fn handle_prompt(
     responder: Responder<PromptResponse>,
     cx: ConnectionTo<Client>,
     state: AppState,
-) -> Result<(), RuntimeError> {
+) -> Result<(), AcpError> {
     let session_id = req.session_id.clone();
     let sid = session_id.0.to_string();
     let turn_service = state.turn_service.clone();
@@ -100,7 +100,25 @@ pub async fn handle_prompt(
             .await
         })
         .await
-        .map_err(|error| anyhow::anyhow!("failed to enqueue agent turn: {error}"))?;
+        .map_err(|error| match error {
+            RuntimeError::TurnAlreadyActive => AcpError::invalid_params().data(serde_json::json!({
+                "session_id": sid,
+                "error": "a turn is already active for this session"
+            })),
+            RuntimeError::AlreadyRunning => AcpError::invalid_params().data(serde_json::json!({
+                "session_id": sid,
+                "error": "a turn is already running; send session/cancel first"
+            })),
+            RuntimeError::Task(message) => AcpError::internal_error().data(serde_json::json!({
+                "session_id": sid,
+                "error": "agent turn task failed",
+                "details": message,
+            })),
+            RuntimeError::ChannelClosed => AcpError::internal_error().data(serde_json::json!({
+                "session_id": sid,
+                "error": "agent turn cancellation channel closed",
+            })),
+        })?;
 
     Ok(())
 }
