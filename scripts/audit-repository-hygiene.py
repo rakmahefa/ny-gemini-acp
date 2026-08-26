@@ -88,10 +88,10 @@ COMMENTED_CODE_PATTERN = re.compile(
     re.MULTILINE,
 )
 MOD_PATTERN = re.compile(
-    r"^\s*(?:pub\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.MULTILINE
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;", re.MULTILINE
 )
 PATH_MOD_PATTERN = re.compile(
-    r"^\s*#\s*\[path\s*=\s*\"([^\"]+)\"\]\s*(?:pub\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*;",
+    r"^\s*#\s*\[path\s*=\s*\"([^\"]+)\"\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*;",
     re.MULTILINE,
 )
 DECL_PATTERN = re.compile(
@@ -162,9 +162,13 @@ class Audit:
 
     @staticmethod
     def strip_comments_preserving_strings(text: str) -> str:
-        # This is intentionally a conservative lexer, not a Rust parser. It
-        # removes line/block comments while preserving quoted strings and char
-        # literals so architecture checks do not fire on documentation/comments.
+        """Remove Rust comments while preserving strings, chars, and lifetimes.
+
+        This is deliberately not a Rust parser. The important invariant for the
+        repository graph is that Rust lifetimes such as `'a` and `'_` must stay
+        in normal code state; treating every apostrophe as a char literal can
+        swallow the rest of a source file and produce false dead-module findings.
+        """
         out: list[str] = []
         i = 0
         n = len(text)
@@ -185,8 +189,22 @@ class Audit:
                     continue
                 if ch == '"':
                     state = "string"
-                elif ch == "'":
-                    state = "char"
+                    out.append(ch)
+                    i += 1
+                    continue
+                if ch == "'":
+                    # Rust lifetimes (`'a`, `'_`, `'static`) are code, not char
+                    # literals. Enter char state only when a closing quote is
+                    # visible before the end of the line.
+                    line_end = text.find("\n", i + 1)
+                    if line_end == -1:
+                        line_end = n
+                    closing = text.find("'", i + 1, min(line_end, i + 4))
+                    if closing != -1:
+                        state = "char"
+                    out.append(ch)
+                    i += 1
+                    continue
                 out.append(ch)
                 i += 1
                 continue
@@ -340,8 +358,6 @@ class Audit:
             rel = self.rel(path)
             if rel.startswith("target/"):
                 continue
-            # Cargo integration tests/benches/examples are roots discovered above.
-            # Everything else should be reachable through a target/module graph.
             if path not in reachable:
                 self.add(
                     "possibly-unreferenced-module",
@@ -438,24 +454,26 @@ class Audit:
                 "consider moving its version/features to [workspace.dependencies] while keeping crate-local feature choices explicit when needed",
             )
 
-    def check_architecture_boundaries(self) -> None:
-        runtime = self.root / "crates" / "agent-runtime" / "src"
-        if not runtime.exists():
-            return
-        for path in sorted(runtime.rglob("*.rs")):
-            code = self.strip_comments_preserving_strings(self.read_text(path))
-            for label, pattern in ARCHITECTURE_PATTERNS.items():
-                if pattern.search(code):
+    def check_runtime_boundaries(self) -> None:
+        for path in self.rust_files():
+            rel = self.rel(path)
+            if not rel.startswith("crates/agent-runtime/"):
+                continue
+            if "/tests/" in rel:
+                continue
+            text = self.strip_comments_preserving_strings(self.read_text(path))
+            for kind, pattern in ARCHITECTURE_PATTERNS.items():
+                if pattern.search(text):
                     self.add(
-                        "architecture-boundary",
+                        "runtime-boundary",
                         "HIGH",
                         "HIGH",
-                        self.rel(path),
-                        f"agent-runtime production source matches forbidden boundary: {label}",
-                        "move ACP/provider-specific knowledge behind the adapter/provider contract",
+                        f"{rel}::{kind}",
+                        "provider-neutral runtime contains ACP/Gemini-specific production reference",
+                        "move the protocol/provider-specific reference to the adapter/provider layer",
                     )
 
-    def check_markers_and_comment_debt(self) -> None:
+    def check_maintenance_debt(self) -> None:
         for path in self.files:
             rel = self.rel(path)
             if rel == "scripts/audit-repository-hygiene.py":
@@ -463,68 +481,56 @@ class Audit:
             text = self.read_text(path)
             todo_count = len(TODO_PATTERN.findall(text))
             commented_code = len(COMMENTED_CODE_PATTERN.findall(text))
-            lines = max(1, len(text.splitlines()))
-            if todo_count >= 5:
+            if todo_count:
                 self.add(
                     "maintenance-debt",
                     "LOW",
                     "HIGH",
                     rel,
-                    f"{todo_count} TODO/FIXME/HACK markers in {lines} lines",
-                    "review and either resolve, convert into tracked work, or remove obsolete markers",
+                    f"{todo_count} TODO/FIXME/HACK markers",
+                    "review and either resolve, convert into tracked issues, or remove obsolete markers",
                 )
-            if commented_code >= 5 and commented_code / lines > 0.03:
+            if commented_code >= 3:
                 self.add(
                     "commented-code",
                     "LOW",
                     "MEDIUM",
                     rel,
-                    f"{commented_code} code-like commented lines ({commented_code / lines:.1%} of file)",
-                    "remove obsolete commented code; version control already preserves history",
+                    f"{commented_code} lines look like commented-out Rust code",
+                    "remove dead commented code or restore it intentionally through version control",
                 )
 
-    def check_large_sources(self) -> None:
+    def check_large_files(self) -> None:
         for path in self.rust_files():
-            lines = len(self.read_text(path).splitlines())
-            if lines >= 1200:
-                severity = "MEDIUM"
-            elif lines >= 900:
-                severity = "LOW"
-            else:
+            text = self.read_text(path)
+            lines = text.count("\n") + (1 if text else 0)
+            if lines < 900:
                 continue
             self.add(
                 "large-source-file",
-                severity,
+                "LOW",
                 "HIGH",
                 self.rel(path),
                 f"{lines} lines of Rust source",
                 "review whether responsibilities can be split without creating needless abstraction or cross-module coupling",
             )
 
-    def check_readme_drift(self) -> None:
+    def check_readme_paths(self) -> None:
         readme = self.root / "README.md"
         if not readme.exists():
             return
-        text = self.read_text(readme)
-        tokens = sorted(
-            {
-                token.rstrip(".,:;`)")
-                for token in re.findall(
-                    r"(?:crates|scripts|docs|tests|examples|benches)/[A-Za-z0-9_./-]+",
-                    text,
-                )
-            }
-        )
-        for token in tokens:
-            if token and not (self.root / token).exists():
-                self.add(
-                    "documentation-drift",
-                    "MEDIUM",
-                    "HIGH",
-                    token,
-                    "README references a repository path that does not exist",
-                    "update the documentation or restore the referenced artifact",
-                )
+        for line_no, line in enumerate(self.read_text(readme).splitlines(), 1):
+            for match in re.finditer(r"(?<![A-Za-z0-9_./-])((?:crates|scripts|docs)/[A-Za-z0-9_./-]+)", line):
+                candidate = match.group(1).rstrip(".,:;`)")
+                if candidate and not (self.root / candidate).exists():
+                    self.add(
+                        "readme-drift",
+                        "LOW",
+                        "HIGH",
+                        f"README.md:{line_no}",
+                        f"referenced path does not exist: {candidate}",
+                        "update the documentation path or restore the referenced artifact",
+                    )
 
     def run(self) -> None:
         self.walk()
@@ -534,81 +540,66 @@ class Audit:
         self.check_legacy_and_stale_names()
         self.check_workspace_consistency()
         self.check_dependency_repetition()
-        self.check_architecture_boundaries()
-        self.check_markers_and_comment_debt()
-        self.check_large_sources()
-        self.check_readme_drift()
-
-    def text_report(self) -> str:
-        order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
-        findings = sorted(
-            self.findings,
-            key=lambda f: (order.get(f.severity, 9), f.category, f.subject),
-        )
-        counts = Counter(f.severity for f in findings)
-        lines = [
-            "ny-gemini-acp — deep repository hygiene audit",
-            f"root: {self.root}",
-            f"files scanned: {len(self.files)}",
-            f"cargo roots: {len(self.cargo_roots)}",
-            f"findings: {len(findings)} (HIGH={counts['HIGH']}, MEDIUM={counts['MEDIUM']}, LOW={counts['LOW']})",
-            "",
-        ]
-        if not findings:
-            lines.append("CLEAN: no findings matched the current audit heuristics.")
-            return "\n".join(lines)
-        current = None
-        for finding in findings:
-            if finding.category != current:
-                current = finding.category
-                lines.append(f"## {current}")
-            lines.append(f"[{finding.severity}/{finding.confidence}] {finding.subject}")
-            lines.append(f"  evidence: {finding.evidence}")
-            lines.append(f"  action:   {finding.action}")
-        return "\n".join(lines)
-
-    def json_report(self) -> dict:
-        counts = Counter(f.severity for f in self.findings)
-        return {
-            "root": str(self.root),
-            "files_scanned": len(self.files),
-            "cargo_roots": sorted(self.rel(p) for p in self.cargo_roots if p.exists()),
-            "summary": {
-                "high": counts["HIGH"],
-                "medium": counts["MEDIUM"],
-                "low": counts["LOW"],
-                "total": len(self.findings),
-            },
-            "findings": [asdict(f) for f in self.findings],
-        }
+        self.check_runtime_boundaries()
+        self.check_maintenance_debt()
+        self.check_large_files()
+        self.check_readme_paths()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", default=".", help="repository root (default: current directory)")
     parser.add_argument("--format", choices=("text", "json"), default="text")
-    parser.add_argument("--output", help="optional output file; stdout when omitted")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("root", nargs="?", default=".")
     args = parser.parse_args()
 
-    root = Path(args.root)
-    if not root.is_dir():
-        print(f"error: repository root is not a directory: {root}", file=sys.stderr)
+    root = Path(args.root).resolve()
+    if not root.exists():
+        print(f"error: repository root does not exist: {root}", file=sys.stderr)
         return 2
 
     audit = Audit(root)
     audit.run()
-    payload = (
-        audit.text_report()
-        if args.format == "text"
-        else json.dumps(audit.json_report(), indent=2, ensure_ascii=False) + "\n"
-    )
+
+    counts = Counter(f.severity for f in audit.findings)
+    payload = {
+        "root": str(root),
+        "files_scanned": len(audit.files),
+        "cargo_roots": len(audit.cargo_roots),
+        "findings": [asdict(f) for f in audit.findings],
+    }
+
+    if args.format == "json":
+        rendered = json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+    else:
+        lines = [
+            "ny-gemini-acp — deep repository hygiene audit",
+            f"root: {root}",
+            f"files scanned: {len(audit.files)}",
+            f"cargo roots: {len(audit.cargo_roots)}",
+            f"findings: {len(audit.findings)} (HIGH={counts.get('HIGH', 0)}, MEDIUM={counts.get('MEDIUM', 0)}, LOW={counts.get('LOW', 0)})",
+        ]
+        grouped: dict[str, list[Finding]] = defaultdict(list)
+        for finding in audit.findings:
+            grouped[finding.category].append(finding)
+        for category in sorted(grouped):
+            lines.extend(["", f"## {category}"])
+            for finding in grouped[category]:
+                lines.extend(
+                    [
+                        f"[{finding.severity}/{finding.confidence}] {finding.subject}",
+                        f"  evidence: {finding.evidence}",
+                        f"  action:   {finding.action}",
+                    ]
+                )
+        rendered = "\n".join(lines) + "\n"
 
     if args.output:
-        Path(args.output).write_text(payload, encoding="utf-8")
+        args.output.write_text(rendered, encoding="utf-8")
     else:
-        print(payload)
+        print(rendered, end="")
 
-    return 1 if any(f.severity == "HIGH" for f in audit.findings) else 0
+    return 1 if counts.get("HIGH", 0) else 0
 
 
 if __name__ == "__main__":
