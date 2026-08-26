@@ -16,8 +16,13 @@ use agent_runtime::AppState;
 use tools_provider::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 
 fn is_valid_session_id(id: &str) -> bool {
-    let Some(rest) = id.strip_prefix("sess_") else { return false; };
-    rest.len() == 32 && rest.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    let Some(rest) = id.strip_prefix("sess_") else {
+        return false;
+    };
+    rest.len() == 32
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 fn session_id_error(id: &SessionId) -> AcpError {
@@ -57,7 +62,10 @@ fn session_mode_id(mode: AcpSessionMode) -> SessionModeId {
 fn build_available_modes() -> Vec<SessionMode> {
     AcpSessionMode::all()
         .iter()
-        .map(|mode| SessionMode::new(session_mode_id(*mode), mode.display_name()).description(mode.description()))
+        .map(|mode| {
+            SessionMode::new(session_mode_id(*mode), mode.display_name())
+                .description(mode.description())
+        })
         .collect()
 }
 
@@ -70,7 +78,9 @@ fn send_restored_title(
     session_id: &SessionId,
     title: Option<&str>,
 ) -> Result<(), AcpError> {
-    let Some(title) = title else { return Ok(()); };
+    let Some(title) = title else {
+        return Ok(());
+    };
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::SessionInfoUpdate(SessionInfoUpdate::new().title(title.to_owned())),
@@ -114,7 +124,11 @@ fn replay_tool_result(
             ToolCall::new(call_id.clone(), info.title.clone())
                 .kind(info.kind)
                 .status(if replay.result_text.is_some() {
-                    if is_ok { ToolCallStatus::Completed } else { ToolCallStatus::Failed }
+                    if is_ok {
+                        ToolCallStatus::Completed
+                    } else {
+                        ToolCallStatus::Failed
+                    }
                 } else {
                     ToolCallStatus::InProgress
                 })
@@ -125,18 +139,23 @@ fn replay_tool_result(
     ))?;
 
     if let Some(result_text) = replay.result_text {
-        let rendered = result_update(replay.name, replay.arguments, result_text, is_ok, replay.cwd, None);
+        let rendered = result_update(
+            replay.name,
+            replay.arguments,
+            result_text,
+            is_ok,
+            replay.cwd,
+            None,
+        );
         cx.send_notification(SessionNotification::new(
             session_id.clone(),
-            SessionUpdate::ToolCallUpdate(
-                ToolCallUpdate::new(
-                    call_id,
-                    ToolCallUpdateFields::new()
-                        .status(rendered.status)
-                        .content(rendered.content)
-                        .locations(rendered.locations),
-                ),
-            ),
+            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+                call_id,
+                ToolCallUpdateFields::new()
+                    .status(rendered.status)
+                    .content(rendered.content)
+                    .locations(rendered.locations),
+            )),
         ))?;
     }
     Ok(())
@@ -147,13 +166,19 @@ pub async fn handle_new(
     responder: Responder<NewSessionResponse>,
     state: &AppState,
 ) -> Result<(), AcpError> {
-    let session = match state.sessions.create(
-        req.cwd.clone(),
-        req.additional_directories.clone(),
-        &state.config.default_model,
-    ).await {
+    let session = match state
+        .sessions
+        .create(
+            req.cwd.clone(),
+            req.additional_directories.clone(),
+            &state.config.default_model,
+        )
+        .await
+    {
         Ok(session) => session,
-        Err(error) => return responder.respond_with_internal_error(format!("création de session: {error:#}")),
+        Err(error) => {
+            return responder.respond_with_internal_error(format!("création de session: {error:#}"))
+        }
     };
     let session_id = SessionId::from(session.id.clone());
     if let Err(error) = configure_mcp(state, &session.id, req.mcp_servers, &session.cwd).await {
@@ -164,7 +189,11 @@ pub async fn handle_new(
     }
     responder.respond(
         NewSessionResponse::new(session_id)
-            .config_options(build_config_options(&session.model, session.think, session.tools_enabled))
+            .config_options(build_config_options(
+                &session.model,
+                session.think,
+                session.tools_enabled,
+            ))
             .modes(build_mode_state(session.mode)),
     )
 }
@@ -176,7 +205,9 @@ pub async fn handle_list(
 ) -> Result<(), AcpError> {
     let sessions = match state.sessions.list(req.cwd.as_deref()).await {
         Ok(sessions) => sessions,
-        Err(error) => return responder.respond_with_internal_error(format!("liste des sessions: {error:#}")),
+        Err(error) => {
+            return responder.respond_with_internal_error(format!("liste des sessions: {error:#}"))
+        }
     };
     let infos = sessions
         .into_iter()
@@ -201,14 +232,17 @@ pub async fn handle_load(
     }
     let session = match state.sessions.load(&req.session_id.0, &req.cwd).await {
         Ok(session) => session,
-        Err(error) => return responder.respond_with_error(
-            AcpError::invalid_params().data(serde_json::json!({
-                "session_id": req.session_id.to_string(),
-                "error": format!("session introuvable ou workspace incompatible: {error:#}")
-            }))
-        ),
+        Err(error) => {
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
+                    "session_id": req.session_id.to_string(),
+                    "error": format!("session introuvable ou workspace incompatible: {error:#}")
+                }),
+            ))
+        }
     };
-    if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await {
+    if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await
+    {
         state.sessions.clear_mcp(&req.session_id.0).await;
         return responder.respond_with_error(mcp_config_error(&req.session_id, &error));
     }
@@ -218,7 +252,13 @@ pub async fn handle_load(
     let entries = session.messages.entries();
     let mut results_by_id: HashMap<String, (String, String, bool)> = HashMap::new();
     for entry in &entries {
-        if let HistoryEntry::ToolResult { id, name, content, is_ok } = entry {
+        if let HistoryEntry::ToolResult {
+            id,
+            name,
+            content,
+            is_ok,
+        } = entry
+        {
             results_by_id.insert(id.clone(), (name.clone(), content.clone(), *is_ok));
         }
     }
@@ -226,23 +266,31 @@ pub async fn handle_load(
     for (index, entry) in entries.iter().enumerate() {
         match entry {
             HistoryEntry::User { content } => {
-                let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(content.clone())))
-                    .message_id(MessageId::from(format!("msg_{index}")));
+                let chunk =
+                    ContentChunk::new(ContentBlock::Text(TextContent::new(content.clone())))
+                        .message_id(MessageId::from(format!("msg_{index}")));
                 cx.send_notification(SessionNotification::new(
                     req.session_id.clone(),
                     SessionUpdate::UserMessageChunk(chunk),
                 ))?;
             }
             HistoryEntry::Assistant { content } => {
-                if content.trim().is_empty() { continue; }
-                let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new(content.clone())))
-                    .message_id(MessageId::from(format!("msg_{index}")));
+                if content.trim().is_empty() {
+                    continue;
+                }
+                let chunk =
+                    ContentChunk::new(ContentBlock::Text(TextContent::new(content.clone())))
+                        .message_id(MessageId::from(format!("msg_{index}")));
                 cx.send_notification(SessionNotification::new(
                     req.session_id.clone(),
                     SessionUpdate::AgentMessageChunk(chunk),
                 ))?;
             }
-            HistoryEntry::ToolCall { id, name, arguments } => {
+            HistoryEntry::ToolCall {
+                id,
+                name,
+                arguments,
+            } => {
                 let result = results_by_id.get(id);
                 let (result_text, result_ok) = result
                     .map(|(_, content, is_ok)| (Some(content.as_str()), Some(*is_ok)))
@@ -266,7 +314,11 @@ pub async fn handle_load(
 
     responder.respond(
         LoadSessionResponse::new()
-            .config_options(build_config_options(&session.model, session.think, session.tools_enabled))
+            .config_options(build_config_options(
+                &session.model,
+                session.think,
+                session.tools_enabled,
+            ))
             .modes(build_mode_state(session.mode)),
     )
 }
@@ -282,19 +334,28 @@ pub async fn handle_resume(
     }
     let session = match state.sessions.resume(&req.session_id.0, &req.cwd).await {
         Ok(session) => session,
-        Err(error) => return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": format!("session introuvable ou workspace incompatible: {error:#}")
-        }))),
+        Err(error) => {
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
+                    "session_id": req.session_id.to_string(),
+                    "error": format!("session introuvable ou workspace incompatible: {error:#}")
+                }),
+            ))
+        }
     };
-    if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await {
+    if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await
+    {
         state.sessions.clear_mcp(&req.session_id.0).await;
         return responder.respond_with_error(mcp_config_error(&req.session_id, &error));
     }
     send_restored_title(cx, &req.session_id, session.title.as_deref())?;
     responder.respond(
         ResumeSessionResponse::new()
-            .config_options(build_config_options(&session.model, session.think, session.tools_enabled))
+            .config_options(build_config_options(
+                &session.model,
+                session.think,
+                session.tools_enabled,
+            ))
             .modes(build_mode_state(session.mode)),
     )
 }
@@ -307,18 +368,26 @@ pub async fn handle_delete(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
-    state.turns.cancel_and_wait(&req.session_id.0).await.map_err(|error| {
-        AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": error.to_string(),
-        }))
-    })?;
+    state
+        .turns
+        .cancel_and_wait(&req.session_id.0)
+        .await
+        .map_err(|error| {
+            AcpError::invalid_params().data(serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": error.to_string(),
+            }))
+        })?;
     match state.sessions.delete(&req.session_id.0).await {
         Ok(true) => responder.respond(DeleteSessionResponse::new()),
-        Ok(false) => responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(), "error": "session introuvable"
-        }))),
-        Err(error) => responder.respond_with_internal_error(format!("suppression de session: {error:#}")),
+        Ok(false) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+                "session_id": req.session_id.to_string(), "error": "session introuvable"
+            })))
+        }
+        Err(error) => {
+            responder.respond_with_internal_error(format!("suppression de session: {error:#}"))
+        }
     }
 }
 
@@ -330,18 +399,26 @@ pub async fn handle_close(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
-    state.turns.cancel_and_wait(&req.session_id.0).await.map_err(|error| {
-        AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": error.to_string(),
-        }))
-    })?;
+    state
+        .turns
+        .cancel_and_wait(&req.session_id.0)
+        .await
+        .map_err(|error| {
+            AcpError::invalid_params().data(serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": error.to_string(),
+            }))
+        })?;
     match state.sessions.close(&req.session_id.0).await {
         Ok(true) => responder.respond(CloseSessionResponse::new()),
-        Ok(false) => responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(), "error": "session introuvable"
-        }))),
-        Err(error) => responder.respond_with_internal_error(format!("fermeture de session: {error:#}")),
+        Ok(false) => {
+            responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+                "session_id": req.session_id.to_string(), "error": "session introuvable"
+            })))
+        }
+        Err(error) => {
+            responder.respond_with_internal_error(format!("fermeture de session: {error:#}"))
+        }
     }
 }
 
@@ -364,10 +441,14 @@ pub async fn handle_set_mode(
     };
     let updated = match state.sessions.set_mode(&req.session_id.0, new_mode).await {
         Ok(session) => session,
-        Err(error) => return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-            "session_id": req.session_id.to_string(),
-            "error": format!("impossible de changer le mode: {error:#}")
-        }))),
+        Err(error) => {
+            return responder.respond_with_error(AcpError::invalid_params().data(
+                serde_json::json!({
+                    "session_id": req.session_id.to_string(),
+                    "error": format!("impossible de changer le mode: {error:#}")
+                }),
+            ))
+        }
     };
     cx.send_notification(SessionNotification::new(
         req.session_id.clone(),
@@ -386,7 +467,9 @@ pub async fn handle_fork(
     }
     let forked = match state.sessions.fork(&req.session_id.0).await {
         Ok(forked) => forked,
-        Err(error) => return responder.respond_with_internal_error(format!("fork de session: {error:#}")),
+        Err(error) => {
+            return responder.respond_with_internal_error(format!("fork de session: {error:#}"))
+        }
     };
     responder.respond(ForkSessionResponse::new(SessionId::from(forked.id)))
 }

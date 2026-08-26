@@ -13,7 +13,11 @@ use crate::tool_ui::ToolUiModel;
 pub enum ModelEvent {
     TextDelta(String),
     ReasoningDelta(String),
-    ToolCall { id: String, name: String, arguments: Value },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: Value,
+    },
     Usage {
         prompt_tokens: Option<u64>,
         completion_tokens: Option<u64>,
@@ -63,7 +67,10 @@ pub trait LlmProvider: Send + Sync {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ToolTransportKind { Process, Http }
+pub enum ToolTransportKind {
+    Process,
+    Http,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolServerConfig {
@@ -78,12 +85,40 @@ pub struct ToolServerConfig {
 }
 
 impl ToolServerConfig {
-    pub fn process(name: impl Into<String>, command: impl Into<String>, args: Vec<String>, env: HashMap<String, String>, cwd: Option<PathBuf>) -> Self {
-        Self { name: name.into(), transport: ToolTransportKind::Process, command: Some(command.into()), args, env, cwd, url: None, headers: HashMap::new() }
+    pub fn process(
+        name: impl Into<String>,
+        command: impl Into<String>,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+        cwd: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            transport: ToolTransportKind::Process,
+            command: Some(command.into()),
+            args,
+            env,
+            cwd,
+            url: None,
+            headers: HashMap::new(),
+        }
     }
 
-    pub fn http(name: impl Into<String>, url: impl Into<String>, headers: HashMap<String, String>) -> Self {
-        Self { name: name.into(), transport: ToolTransportKind::Http, command: None, args: Vec::new(), env: HashMap::new(), cwd: None, url: Some(url.into()), headers }
+    pub fn http(
+        name: impl Into<String>,
+        url: impl Into<String>,
+        headers: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            transport: ToolTransportKind::Http,
+            command: None,
+            args: Vec::new(),
+            env: HashMap::new(),
+            cwd: None,
+            url: Some(url.into()),
+            headers,
+        }
     }
 }
 
@@ -109,14 +144,24 @@ pub struct ToolCallResult {
 
 impl ToolCallResult {
     pub fn error(content: impl Into<String>) -> Self {
-        Self { content: content.into(), is_ok: false, executed: false, ui: None }
+        Self {
+            content: content.into(),
+            is_ok: false,
+            executed: false,
+            ui: None,
+        }
     }
 }
 
 #[async_trait::async_trait]
 pub trait ToolProvider: Send + Sync {
     async fn for_session(&self, session_id: &str) -> Arc<dyn ToolProvider>;
-    async fn configure_session(&self, session_id: &str, cwd: PathBuf, servers: Vec<ToolServerConfig>) -> Result<(), String>;
+    async fn configure_session(
+        &self,
+        session_id: &str,
+        cwd: PathBuf,
+        servers: Vec<ToolServerConfig>,
+    ) -> Result<(), String>;
     async fn clear_session(&self, session_id: &str);
     fn definitions(&self) -> Vec<Value>;
     fn prompt_fragment(&self) -> Option<String>;
@@ -132,14 +177,33 @@ pub struct NullToolProvider;
 
 #[async_trait::async_trait]
 impl ToolProvider for NullToolProvider {
-    async fn for_session(&self, _: &str) -> Arc<dyn ToolProvider> { Arc::new(Self) }
-    async fn configure_session(&self, _: &str, _: PathBuf, _: Vec<ToolServerConfig>) -> Result<(), String> { Ok(()) }
+    async fn for_session(&self, _: &str) -> Arc<dyn ToolProvider> {
+        Arc::new(Self)
+    }
+    async fn configure_session(
+        &self,
+        _: &str,
+        _: PathBuf,
+        _: Vec<ToolServerConfig>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     async fn clear_session(&self, _: &str) {}
-    fn definitions(&self) -> Vec<Value> { Vec::new() }
-    fn prompt_fragment(&self) -> Option<String> { None }
-    fn has_tools(&self) -> bool { false }
-    fn ui_model(&self, _call_id: &str, _name: &str, _arguments: &Value) -> Option<ToolUiModel> { None }
-    async fn call(&self, request: ToolCallRequest) -> ToolCallResult { ToolCallResult::error(format!("outil indisponible: {}", request.name)) }
+    fn definitions(&self) -> Vec<Value> {
+        Vec::new()
+    }
+    fn prompt_fragment(&self) -> Option<String> {
+        None
+    }
+    fn has_tools(&self) -> bool {
+        false
+    }
+    fn ui_model(&self, _call_id: &str, _name: &str, _arguments: &Value) -> Option<ToolUiModel> {
+        None
+    }
+    async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
+        ToolCallResult::error(format!("outil indisponible: {}", request.name))
+    }
 }
 
 #[derive(Clone, Default)]
@@ -147,9 +211,16 @@ pub struct NullLlmProvider;
 
 #[async_trait::async_trait]
 impl LlmProvider for NullLlmProvider {
-    async fn stream(&self, _: ModelRequest) -> Result<LlmStream, LlmError> { let (_tx, rx) = mpsc::channel(1); Ok(rx) }
-    async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> { Err(LlmError::Unavailable("LLM provider indisponible".into())) }
-    fn model_info(&self, _: &str) -> LlmModelInfo { LlmModelInfo::default() }
+    async fn stream(&self, _: ModelRequest) -> Result<LlmStream, LlmError> {
+        let (_tx, rx) = mpsc::channel(1);
+        Ok(rx)
+    }
+    async fn upload_image(&self, _: &str, _: &str) -> Result<String, LlmError> {
+        Err(LlmError::Unavailable("LLM provider indisponible".into()))
+    }
+    fn model_info(&self, _: &str) -> LlmModelInfo {
+        LlmModelInfo::default()
+    }
 }
 
 pub type SharedLlmProvider = Arc<dyn LlmProvider>;

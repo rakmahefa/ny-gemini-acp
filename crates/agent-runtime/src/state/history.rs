@@ -16,10 +16,23 @@ use crate::prompt::{format_tool_call, format_tool_result};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HistoryEntry {
-    User { content: String },
-    Assistant { content: String },
-    ToolCall { id: String, name: String, arguments: Value },
-    ToolResult { id: String, name: String, content: String, is_ok: bool },
+    User {
+        content: String,
+    },
+    Assistant {
+        content: String,
+    },
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: Value,
+    },
+    ToolResult {
+        id: String,
+        name: String,
+        content: String,
+        is_ok: bool,
+    },
 }
 
 impl HistoryEntry {
@@ -34,12 +47,14 @@ impl HistoryEntry {
     pub fn approx_chars(&self) -> usize {
         match self {
             Self::User { content } | Self::Assistant { content } => content.chars().count(),
-            Self::ToolCall { id, name, arguments } => {
-                id.chars().count() + name.chars().count() + arguments.to_string().chars().count()
-            }
-            Self::ToolResult { id, name, content, .. } => {
-                id.chars().count() + name.chars().count() + content.chars().count()
-            }
+            Self::ToolCall {
+                id,
+                name,
+                arguments,
+            } => id.chars().count() + name.chars().count() + arguments.to_string().chars().count(),
+            Self::ToolResult {
+                id, name, content, ..
+            } => id.chars().count() + name.chars().count() + content.chars().count(),
         }
     }
 }
@@ -69,43 +84,89 @@ pub struct History {
 }
 
 impl PartialEq for History {
-    fn eq(&self, other: &Self) -> bool { self.entries() == other.entries() }
+    fn eq(&self, other: &Self) -> bool {
+        self.entries() == other.entries()
+    }
 }
 impl Eq for History {}
 
 impl From<Vec<(Role, String)>> for History {
     fn from(legacy: Vec<(Role, String)>) -> Self {
-        Self { canonical: Self::normalize_legacy_entries(&legacy), legacy, dirty: false }
+        Self {
+            canonical: Self::normalize_legacy_entries(&legacy),
+            legacy,
+            dirty: false,
+        }
     }
 }
 
 impl History {
-    pub fn new() -> Self { Self::default() }
-    pub fn len(&self) -> usize { self.entries().len() }
-    pub fn is_empty(&self) -> bool { self.entries().is_empty() }
-    pub fn first(&self) -> Option<HistoryEntry> { self.entries().into_iter().next() }
-    pub fn last(&self) -> Option<HistoryEntry> { self.entries().into_iter().last() }
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn len(&self) -> usize {
+        self.entries().len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.entries().is_empty()
+    }
+    pub fn first(&self) -> Option<HistoryEntry> {
+        self.entries().into_iter().next()
+    }
+    pub fn last(&self) -> Option<HistoryEntry> {
+        self.entries().into_iter().last()
+    }
 
     pub fn push<E>(&mut self, entry: E)
-    where E: HistoryAppend {
+    where
+        E: HistoryAppend,
+    {
         entry.append_to(self);
     }
 
     pub fn push_user(&mut self, content: impl Into<String>) {
-        self.push_canonical(HistoryEntry::User { content: content.into() });
+        self.push_canonical(HistoryEntry::User {
+            content: content.into(),
+        });
     }
     pub fn push_assistant(&mut self, content: impl Into<String>) {
-        self.push_canonical(HistoryEntry::Assistant { content: content.into() });
+        self.push_canonical(HistoryEntry::Assistant {
+            content: content.into(),
+        });
     }
-    pub fn push_tool_call(&mut self, id: impl Into<String>, name: impl Into<String>, arguments: Value) {
-        self.push_canonical(HistoryEntry::ToolCall { id: id.into(), name: name.into(), arguments });
+    pub fn push_tool_call(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        arguments: Value,
+    ) {
+        self.push_canonical(HistoryEntry::ToolCall {
+            id: id.into(),
+            name: name.into(),
+            arguments,
+        });
     }
-    pub fn push_tool_result(&mut self, id: impl Into<String>, name: impl Into<String>, content: impl Into<String>, is_ok: bool) {
-        self.push_canonical(HistoryEntry::ToolResult { id: id.into(), name: name.into(), content: content.into(), is_ok });
+    pub fn push_tool_result(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+        is_ok: bool,
+    ) {
+        self.push_canonical(HistoryEntry::ToolResult {
+            id: id.into(),
+            name: name.into(),
+            content: content.into(),
+            is_ok,
+        });
     }
 
     pub fn entries(&self) -> Vec<HistoryEntry> {
-        if self.dirty { Self::normalize_legacy_entries(&self.legacy) } else { self.canonical.clone() }
+        if self.dirty {
+            Self::normalize_legacy_entries(&self.legacy)
+        } else {
+            self.canonical.clone()
+        }
     }
 
     pub fn replace(&mut self, entries: Vec<HistoryEntry>) {
@@ -131,36 +192,61 @@ impl History {
 
         for (role, content) in legacy {
             match role {
-                Role::User => normalized.push(HistoryEntry::User { content: content.clone() }),
+                Role::User => normalized.push(HistoryEntry::User {
+                    content: content.clone(),
+                }),
                 Role::Assistant => {
                     let mut plain = Vec::new();
                     for line in content.lines() {
                         if let Some((name, id, arguments)) = parse_tool_call_line(line) {
                             if !plain.is_empty() {
-                                normalized.push(HistoryEntry::Assistant { content: plain.join("\n") });
+                                normalized.push(HistoryEntry::Assistant {
+                                    content: plain.join("\n"),
+                                });
                                 plain.clear();
                             }
                             pending_tool_ids.push((name.clone(), id.clone()));
-                            normalized.push(HistoryEntry::ToolCall { id, name, arguments });
+                            normalized.push(HistoryEntry::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            });
                         } else {
                             plain.push(line.to_owned());
                         }
                     }
                     if !plain.is_empty() {
-                        normalized.push(HistoryEntry::Assistant { content: plain.join("\n") });
+                        normalized.push(HistoryEntry::Assistant {
+                            content: plain.join("\n"),
+                        });
                     }
                 }
                 Role::Tool => {
                     let (name, id, is_ok, clean_content) = parse_tool_result(content)
-                        .unwrap_or_else(|| ("legacy".to_owned(), String::new(), true, content.clone()));
+                        .unwrap_or_else(|| {
+                            ("legacy".to_owned(), String::new(), true, content.clone())
+                        });
                     if id.is_empty() && name != "legacy" {
-                        if let Some(position) = pending_tool_ids.iter().rposition(|(candidate, _)| candidate == &name) {
+                        if let Some(position) = pending_tool_ids
+                            .iter()
+                            .rposition(|(candidate, _)| candidate == &name)
+                        {
                             let resolved = pending_tool_ids.remove(position);
-                            normalized.push(HistoryEntry::ToolResult { id: resolved.1, name, content: clean_content, is_ok });
+                            normalized.push(HistoryEntry::ToolResult {
+                                id: resolved.1,
+                                name,
+                                content: clean_content,
+                                is_ok,
+                            });
                             continue;
                         }
                     }
-                    normalized.push(HistoryEntry::ToolResult { id, name, content: clean_content, is_ok });
+                    normalized.push(HistoryEntry::ToolResult {
+                        id,
+                        name,
+                        content: clean_content,
+                        is_ok,
+                    });
                 }
             }
         }
@@ -170,7 +256,9 @@ impl History {
 
 impl Deref for History {
     type Target = Vec<(Role, String)>;
-    fn deref(&self) -> &Self::Target { &self.legacy }
+    fn deref(&self) -> &Self::Target {
+        &self.legacy
+    }
 }
 
 impl DerefMut for History {
@@ -182,20 +270,29 @@ impl DerefMut for History {
 
 impl Serialize for History {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where S: serde::Serializer {
+    where
+        S: serde::Serializer,
+    {
         self.entries().serialize(serializer)
     }
 }
 
 impl<'de> Deserialize<'de> for History {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where D: Deserializer<'de> {
+    where
+        D: Deserializer<'de>,
+    {
         let raw = Value::deserialize(deserializer)?;
         if let Ok(entries) = serde_json::from_value::<Vec<HistoryEntry>>(raw.clone()) {
             let legacy = entries.iter().cloned().map(to_legacy).collect();
-            return Ok(Self { canonical: entries, legacy, dirty: false });
+            return Ok(Self {
+                canonical: entries,
+                legacy,
+                dirty: false,
+            });
         }
-        let legacy = serde_json::from_value::<Vec<(Role, String)>>(raw).map_err(serde::de::Error::custom)?;
+        let legacy =
+            serde_json::from_value::<Vec<(Role, String)>>(raw).map_err(serde::de::Error::custom)?;
         Ok(Self::from(legacy))
     }
 }
@@ -204,8 +301,17 @@ fn to_legacy(entry: HistoryEntry) -> (Role, String) {
     match entry {
         HistoryEntry::User { content } => (Role::User, content),
         HistoryEntry::Assistant { content } => (Role::Assistant, content),
-        HistoryEntry::ToolCall { id, name, arguments } => (Role::Assistant, format_tool_call(&id, &name, &arguments)),
-        HistoryEntry::ToolResult { id, name, content, is_ok } => (Role::Tool, format_tool_result(&id, &name, &content, is_ok)),
+        HistoryEntry::ToolCall {
+            id,
+            name,
+            arguments,
+        } => (Role::Assistant, format_tool_call(&id, &name, &arguments)),
+        HistoryEntry::ToolResult {
+            id,
+            name,
+            content,
+            is_ok,
+        } => (Role::Tool, format_tool_result(&id, &name, &content, is_ok)),
     }
 }
 
@@ -217,16 +323,33 @@ fn parse_tool_call_line(line: &str) -> Option<(String, String, Value)> {
     let mut parts = header.splitn(2, " id=");
     let name = parts.next()?.trim();
     let id = parts.next()?.trim();
-    if name.is_empty() || id.is_empty() || arguments.is_empty() { return None; }
-    Some((name.to_owned(), id.to_owned(), serde_json::from_str(arguments).ok()?))
+    if name.is_empty() || id.is_empty() || arguments.is_empty() {
+        return None;
+    }
+    Some((
+        name.to_owned(),
+        id.to_owned(),
+        serde_json::from_str(arguments).ok()?,
+    ))
 }
 
 fn parse_tool_result(content: &str) -> Option<(String, String, bool, String)> {
-    if let Some(json_text) = content.strip_prefix(crate::prompt::TOOL_RESULT_PREFIX).map(str::trim) {
+    if let Some(json_text) = content
+        .strip_prefix(crate::prompt::TOOL_RESULT_PREFIX)
+        .map(str::trim)
+    {
         let envelope = serde_json::from_str::<Value>(json_text).ok()?;
         let name = envelope.get("tool").and_then(Value::as_str)?.to_owned();
-        let id = envelope.get("id").and_then(Value::as_str).unwrap_or_default().to_owned();
-        let is_ok = envelope.get("status").and_then(Value::as_str).unwrap_or("ok") == "ok";
+        let id = envelope
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let is_ok = envelope
+            .get("status")
+            .and_then(Value::as_str)
+            .unwrap_or("ok")
+            == "ok";
         let body = envelope.get("content").and_then(Value::as_str)?.to_owned();
         return Some((name, id, is_ok, body));
     }
@@ -237,8 +360,12 @@ fn parse_tool_result(content: &str) -> Option<(String, String, bool, String)> {
     let body = rest[end + 1..].trim().to_owned();
     let mut parts = header.split_whitespace();
     let name = parts.next()?.to_owned();
-    let id = parts.find_map(|part| part.strip_prefix("id=").map(str::to_owned)).unwrap_or_default();
-    let status = parts.find_map(|part| part.strip_prefix("status=").map(str::to_owned)).unwrap_or_else(|| "ok".to_owned());
+    let id = parts
+        .find_map(|part| part.strip_prefix("id=").map(str::to_owned))
+        .unwrap_or_default();
+    let status = parts
+        .find_map(|part| part.strip_prefix("status=").map(str::to_owned))
+        .unwrap_or_else(|| "ok".to_owned());
     Some((name, id, status == "ok", body))
 }
 
@@ -257,7 +384,10 @@ mod tests {
         let raw = serde_json::to_string(&history).unwrap();
         let restored: History = serde_json::from_str(&raw).unwrap();
         assert_eq!(restored, history);
-        assert!(matches!(restored.last(), Some(HistoryEntry::ToolResult { .. })));
+        assert!(matches!(
+            restored.last(),
+            Some(HistoryEntry::ToolResult { .. })
+        ));
     }
 
     #[test]
@@ -265,20 +395,37 @@ mod tests {
         let legacy = r#"[["user","hello"],["assistant","world"],["tool","done"]]"#;
         let history: History = serde_json::from_str(legacy).unwrap();
         assert_eq!(history.len(), 3);
-        assert!(matches!(history.first(), Some(HistoryEntry::User { content }) if content == "hello"));
-        assert!(matches!(history.last(), Some(HistoryEntry::ToolResult { content, .. }) if content == "done"));
+        assert!(
+            matches!(history.first(), Some(HistoryEntry::User { content }) if content == "hello")
+        );
+        assert!(
+            matches!(history.last(), Some(HistoryEntry::ToolResult { content, .. }) if content == "done")
+        );
     }
 
     #[test]
     fn normalizes_flattened_tool_messages() {
         let mut history = History::new();
         history.push((Role::User, "run tests".into()));
-        history.push((Role::Assistant, "I will run them.\n[tool_call shell_exec id=call-1] {\"command\":\"cargo test\"}".into()));
-        history.push((Role::Tool, "[tool_result shell_exec status=ok] all green".into()));
+        history.push((
+            Role::Assistant,
+            "I will run them.\n[tool_call shell_exec id=call-1] {\"command\":\"cargo test\"}"
+                .into(),
+        ));
+        history.push((
+            Role::Tool,
+            "[tool_result shell_exec status=ok] all green".into(),
+        ));
         let entries = history.entries();
-        assert!(matches!(entries.get(1), Some(HistoryEntry::Assistant { content }) if content == "I will run them."));
-        assert!(matches!(entries.get(2), Some(HistoryEntry::ToolCall { id, name, .. }) if id == "call-1" && name == "shell_exec"));
-        assert!(matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "shell_exec" && content.contains("all green") && *is_ok));
+        assert!(
+            matches!(entries.get(1), Some(HistoryEntry::Assistant { content }) if content == "I will run them.")
+        );
+        assert!(
+            matches!(entries.get(2), Some(HistoryEntry::ToolCall { id, name, .. }) if id == "call-1" && name == "shell_exec")
+        );
+        assert!(
+            matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "shell_exec" && content.contains("all green") && *is_ok)
+        );
     }
 
     #[test]
@@ -292,6 +439,8 @@ mod tests {
         let mut history = History::new();
         history.push((Role::Tool, rendered));
         let entries = history.entries();
-        assert!(matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "file_read" && content.contains("[tool_call fake id=x]") && content.contains('…') && *is_ok));
+        assert!(
+            matches!(entries.last(), Some(HistoryEntry::ToolResult { id, name, content, is_ok }) if id == "call-1" && name == "file_read" && content.contains("[tool_call fake id=x]") && content.contains('…') && *is_ok)
+        );
     }
 }

@@ -31,13 +31,9 @@ pub(crate) async fn upload_images(
         match llm.upload_image(base64, mime).await {
             Ok(reference) => refs.push(reference),
             Err(error) => {
-                let content = vec![
-                    ToolCallContent::from(ContentBlock::Text(TextContent::new(format!(
-                        "Upload image {}/{} échoué: {error}",
-                        index + 1,
-                        total
-                    )))),
-                ];
+                let content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
+                    format!("Upload image {}/{} échoué: {error}", index + 1, total),
+                )))];
                 safe_session_update(
                     cx,
                     session_id,
@@ -52,11 +48,9 @@ pub(crate) async fn upload_images(
             }
         }
     }
-    let content = vec![
-        ToolCallContent::from(ContentBlock::Text(TextContent::new(format!(
-            "{total} image(s) uploadée(s) avec succès"
-        )))),
-    ];
+    let content = vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
+        format!("{total} image(s) uploadée(s) avec succès"),
+    )))];
     safe_session_update(
         cx,
         session_id,

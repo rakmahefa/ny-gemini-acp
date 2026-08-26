@@ -50,7 +50,8 @@ fn web_search_params() -> Value {
 fn web_search_def() -> ToolDef {
     ToolDef {
         name: "web_search",
-        description: "Recherche sur le web et retourne des résultats bornés avec titre, URL et extrait.",
+        description:
+            "Recherche sur le web et retourne des résultats bornés avec titre, URL et extrait.",
         parameters_fn: web_search_params,
     }
 }
@@ -126,7 +127,8 @@ async fn search_endpoint(
     region: &str,
     max_results: usize,
 ) -> Result<Vec<SearchResult>, String> {
-    let endpoint = Url::parse(endpoint).map_err(|error| format!("endpoint web invalide: {error}"))?;
+    let endpoint =
+        Url::parse(endpoint).map_err(|error| format!("endpoint web invalide: {error}"))?;
     if endpoint.scheme() != "https" && endpoint.scheme() != "http" {
         return Err("endpoint web non autorisé".into());
     }
@@ -166,7 +168,9 @@ async fn search_endpoint(
         && !content_type.starts_with("text/html")
         && !content_type.starts_with("application/xhtml+xml")
     {
-        return Err(format!("réponse web inattendue: Content-Type {content_type}"));
+        return Err(format!(
+            "réponse web inattendue: Content-Type {content_type}"
+        ));
     }
 
     let bytes = read_body_bounded(response).await?;
@@ -268,9 +272,7 @@ fn extract_attribute(tag: &str, attribute: &str) -> Option<String> {
         rest = rest[1..].trim_start();
         let quote = rest.chars().next()?;
         if quote != '\'' && quote != '"' {
-            let value_end = rest
-                .find(char::is_whitespace)
-                .unwrap_or(rest.len());
+            let value_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
             let value = &rest[..value_end];
             rest = &rest[value_end..];
             if key.eq_ignore_ascii_case(attribute) {
@@ -294,13 +296,17 @@ fn extract_snippet(html: &str, from: usize) -> Option<String> {
     let remaining = &html[from..];
     let class_offset = remaining.find("result__snippet")?;
     let class_start = from + class_offset;
+
     let tag_start = html[..class_start].rfind('<')?;
     let tag_end = class_start + html[class_start..].find('>')?;
+
     let content_start = tag_end + 1;
-    let content_end = html[content_start..].find("</")? + content_start;
+    let content_end = html[content_start..].find("</a>")? + content_start;
+
     if tag_start >= tag_end || content_start > content_end {
         return None;
     }
+
     Some(clean_html_text(&html[content_start..content_end]))
 }
 
@@ -423,11 +429,29 @@ mod tests {
     }
 
     #[test]
+    fn parser_handles_nested_html_in_snippet() {
+        let html = r#"
+        <a class="result__a" href="https://example.com">Example</a>
+        <a class="result__snippet">
+        A <b>useful</b> snippet with <strong>nested</strong> tags.
+        </a>
+        "#;
+
+        let results = parse_results(html, 1);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].snippet,
+            "A useful snippet with nested tags."
+        );
+    }
+
+    #[test]
     fn parser_accepts_reordered_and_single_quoted_attributes() {
         let html = r#"
             <div class='result'>
               <a href='//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fdocs&amp;rut=1' data-x='1' class='result__a'>Example &amp; Docs</a>
-              <a data-x='2' class='result__snippet'>A <b>useful</b> snippet.</a>
+              <a class='result__snippet'>A <b>useful</b> snippet.</a>
             </div>
         "#;
         let results = parse_results(html, 1);

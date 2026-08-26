@@ -8,12 +8,15 @@ mod tests;
 
 use std::collections::HashSet;
 
-use agent_runtime::ModelEvent;
 use crate::core::frames::GeminiFrameEvent;
+use agent_runtime::ModelEvent;
 
 use self::protocol::ProtocolDetector;
 use self::reasoning::ReasoningDetector;
-use self::types::{ProtocolEvent, FOLLOW_UP_PREFIX, FUNCTION_CALL_FENCE, TOOL_CALL_FENCE, TOOL_CALL_INLINE, TOOL_CALL_SINGLE_QUOTE_FENCE};
+use self::types::{
+    ProtocolEvent, FOLLOW_UP_PREFIX, FUNCTION_CALL_FENCE, TOOL_CALL_FENCE, TOOL_CALL_INLINE,
+    TOOL_CALL_SINGLE_QUOTE_FENCE,
+};
 
 /// Normalizes Gemini frame-level events into provider-neutral `ModelEvent`s.
 ///
@@ -45,7 +48,11 @@ impl GeminiSemanticStream {
         }
         match frame {
             GeminiFrameEvent::Text(text) => self.feed_text(&text),
-            GeminiFrameEvent::ToolCall { id, name, arguments } => self.project_tool_call(id, name, arguments),
+            GeminiFrameEvent::ToolCall {
+                id,
+                name,
+                arguments,
+            } => self.project_tool_call(id, name, arguments),
             GeminiFrameEvent::Metadata { kind, value } => self.project_metadata(&kind, value),
         }
     }
@@ -80,7 +87,9 @@ impl GeminiSemanticStream {
     fn project_protocol_event(&mut self, event: ProtocolEvent) -> Vec<ModelEvent> {
         match event {
             ProtocolEvent::Text(text) => self.project_protocol_text(text),
-            ProtocolEvent::ToolCall(call) => self.project_tool_call(call.id, call.name, call.arguments),
+            ProtocolEvent::ToolCall(call) => {
+                self.project_tool_call(call.id, call.name, call.arguments)
+            }
         }
     }
 
@@ -107,7 +116,9 @@ impl GeminiSemanticStream {
                 }
                 ProtocolEvent::Text(residual) => {
                     if contains_protocol_marker(&residual) {
-                        tracing::warn!("dropping residual tool protocol that escaped semantic parsing");
+                        tracing::warn!(
+                            "dropping residual tool protocol that escaped semantic parsing"
+                        );
                     } else if !residual.is_empty() {
                         output.extend(self.reasoning.feed(residual));
                     }
@@ -133,7 +144,11 @@ impl GeminiSemanticStream {
             tracing::debug!(%id, "suppressing duplicate semantic tool call");
             return Vec::new();
         }
-        vec![ModelEvent::ToolCall { id, name, arguments }]
+        vec![ModelEvent::ToolCall {
+            id,
+            name,
+            arguments,
+        }]
     }
 
     fn project_metadata(&self, kind: &str, value: serde_json::Value) -> Vec<ModelEvent> {

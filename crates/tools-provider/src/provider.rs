@@ -5,7 +5,9 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
-use agent_runtime::{ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiKind, ToolUiModel};
+use agent_runtime::{
+    ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiKind, ToolUiModel,
+};
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
@@ -71,7 +73,10 @@ fn ui_kind(name: &str) -> ToolUiKind {
 }
 
 fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
-    values.iter().filter_map(|value| serde_json::to_value(value).ok()).collect()
+    values
+        .iter()
+        .filter_map(|value| serde_json::to_value(value).ok())
+        .collect()
 }
 
 fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
@@ -80,9 +85,14 @@ fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
 
 fn pending_ui(_call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
     let info = presentation_info(name, arguments, cwd);
-    ToolUiModel::pending(ui_kind(name), info.title.clone(), info.title, bounded_raw_input(arguments))
-        .with_content(rich_values(&info.content))
-        .with_locations(rich_values(&info.locations))
+    ToolUiModel::pending(
+        ui_kind(name),
+        info.title.clone(),
+        info.title,
+        bounded_raw_input(arguments),
+    )
+    .with_content(rich_values(&info.content))
+    .with_locations(rich_values(&info.locations))
 }
 
 fn completed_ui_from_info(
@@ -153,7 +163,10 @@ impl ToolProvider for DefaultToolProvider {
         if servers.is_empty() {
             self.state.sessions.write().await.insert(
                 session_id.to_owned(),
-                SessionToolBinding { registry: Arc::clone(&self.state.fallback), cwd },
+                SessionToolBinding {
+                    registry: Arc::clone(&self.state.fallback),
+                    cwd,
+                },
             );
             return Ok(());
         }
@@ -169,15 +182,26 @@ impl ToolProvider for DefaultToolProvider {
         registry.register_mcp(Arc::new(catalog));
         self.state.sessions.write().await.insert(
             session_id.to_owned(),
-            SessionToolBinding { registry: Arc::new(registry), cwd },
+            SessionToolBinding {
+                registry: Arc::new(registry),
+                cwd,
+            },
         );
         Ok(())
     }
 
-    async fn clear_session(&self, session_id: &str) { self.state.sessions.write().await.remove(session_id); }
-    fn definitions(&self) -> Vec<Value> { self.registry.definitions() }
-    fn prompt_fragment(&self) -> Option<String> { crate::tools::prompt::tools_section(&self.registry) }
-    fn has_tools(&self) -> bool { self.registry.has_tools() }
+    async fn clear_session(&self, session_id: &str) {
+        self.state.sessions.write().await.remove(session_id);
+    }
+    fn definitions(&self) -> Vec<Value> {
+        self.registry.definitions()
+    }
+    fn prompt_fragment(&self) -> Option<String> {
+        crate::tools::prompt::tools_section(&self.registry)
+    }
+    fn has_tools(&self) -> bool {
+        self.registry.has_tools()
+    }
 
     fn ui_model(&self, call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> {
         let cwd = self.cwd.as_deref().unwrap_or_else(|| Path::new("."));
@@ -191,17 +215,36 @@ impl ToolProvider for DefaultToolProvider {
 
         let result = match self
             .registry
-            .call_async(&request.name, &request.arguments, &request.cwd, &request.additional_dirs)
+            .call_async(
+                &request.name,
+                &request.arguments,
+                &request.cwd,
+                &request.additional_dirs,
+            )
             .await
         {
             Some(crate::tools::registry::ToolResult::Ok(content)) => ToolCallResult {
-                ui: Some(completed_ui_from_info(&request.name, &request.arguments, &content, true, &request.cwd, &info)),
+                ui: Some(completed_ui_from_info(
+                    &request.name,
+                    &request.arguments,
+                    &content,
+                    true,
+                    &request.cwd,
+                    &info,
+                )),
                 content,
                 is_ok: true,
                 executed: true,
             },
             Some(crate::tools::registry::ToolResult::Err(content)) => ToolCallResult {
-                ui: Some(completed_ui_from_info(&request.name, &request.arguments, &content, false, &request.cwd, &info)),
+                ui: Some(completed_ui_from_info(
+                    &request.name,
+                    &request.arguments,
+                    &content,
+                    false,
+                    &request.cwd,
+                    &info,
+                )),
                 content,
                 is_ok: false,
                 executed: true,
@@ -209,7 +252,14 @@ impl ToolProvider for DefaultToolProvider {
             None => {
                 let content = format!("Outil inconnu : {}", request.name);
                 ToolCallResult {
-                    ui: Some(completed_ui_from_info(&request.name, &request.arguments, &content, false, &request.cwd, &info)),
+                    ui: Some(completed_ui_from_info(
+                        &request.name,
+                        &request.arguments,
+                        &content,
+                        false,
+                        &request.cwd,
+                        &info,
+                    )),
                     content,
                     is_ok: false,
                     executed: false,

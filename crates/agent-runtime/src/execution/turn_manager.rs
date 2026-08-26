@@ -17,7 +17,9 @@ pub struct TurnManager {
 }
 
 impl TurnManager {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub async fn start<F, Fut>(
         &self,
@@ -208,14 +210,8 @@ mod tests {
     #[tokio::test]
     async fn cancel_all_and_wait_waits_for_every_turn() {
         let manager = TurnManager::new();
-        let a = manager
-            .start("a", wait_for_cancellation)
-            .await
-            .unwrap();
-        let b = manager
-            .start("b", wait_for_cancellation)
-            .await
-            .unwrap();
+        let a = manager.start("a", wait_for_cancellation).await.unwrap();
+        let b = manager.start("b", wait_for_cancellation).await.unwrap();
 
         assert_eq!(manager.cancel_all_and_wait().await.unwrap(), 2);
         assert!(manager.state("a").await.is_none());

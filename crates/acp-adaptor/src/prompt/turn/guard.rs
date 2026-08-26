@@ -11,12 +11,25 @@ pub(crate) struct TurnGuard {
 }
 
 impl TurnGuard {
-    pub(crate) fn new(store: Arc<Store>, session_id: String, session: Session, generation: u64) -> Self {
-        Self { store, session_id, session: Some(session), finished: false, generation }
+    pub(crate) fn new(
+        store: Arc<Store>,
+        session_id: String,
+        session: Session,
+        generation: u64,
+    ) -> Self {
+        Self {
+            store,
+            session_id,
+            session: Some(session),
+            finished: false,
+            generation,
+        }
     }
 
     pub(crate) fn session_mut(&mut self) -> &mut Session {
-        self.session.as_mut().expect("TurnGuard: session déjà consommée")
+        self.session
+            .as_mut()
+            .expect("TurnGuard: session déjà consommée")
     }
 
     pub(crate) async fn finish(mut self) {
@@ -25,7 +38,11 @@ impl TurnGuard {
             return;
         };
 
-        match self.store.end_turn(&self.session_id, session.clone(), self.generation).await {
+        match self
+            .store
+            .end_turn(&self.session_id, session.clone(), self.generation)
+            .await
+        {
             Ok(()) => {
                 self.finished = true;
             }
@@ -39,11 +56,15 @@ impl TurnGuard {
 
 impl Drop for TurnGuard {
     fn drop(&mut self) {
-        if self.finished { return; }
+        if self.finished {
+            return;
+        }
         let sid = self.session_id.clone();
         let store = self.store.clone();
         let generation = self.generation;
-        let Some(session) = self.session.take() else { return; };
+        let Some(session) = self.session.take() else {
+            return;
+        };
 
         tokio::spawn(async move {
             if let Err(error) = store.end_turn(&sid, session, generation).await {

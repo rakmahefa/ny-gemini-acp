@@ -9,8 +9,14 @@ pub const MAX_PROMPT_CHARS: usize = 32_000;
 fn format_entry(entry: &HistoryEntry) -> String {
     match entry {
         HistoryEntry::User { content } => format!("<user_message>\n{content}\n</user_message>\n\n"),
-        HistoryEntry::Assistant { content } => format!("<assistant_message>\n{content}\n</assistant_message>\n\n"),
-        HistoryEntry::ToolCall { id, name, arguments } => {
+        HistoryEntry::Assistant { content } => {
+            format!("<assistant_message>\n{content}\n</assistant_message>\n\n")
+        }
+        HistoryEntry::ToolCall {
+            id,
+            name,
+            arguments,
+        } => {
             format!("{}\n\n", format_tool_call(id, name, arguments))
         }
         HistoryEntry::ToolResult {
@@ -42,7 +48,10 @@ pub fn build_prompt(session: &Session, provider: Option<&dyn ToolProvider>) -> S
         return system;
     }
 
-    let lens: Vec<usize> = history.iter().map(|entry| format_entry(entry).chars().count()).collect();
+    let lens: Vec<usize> = history
+        .iter()
+        .map(|entry| format_entry(entry).chars().count())
+        .collect();
     let prefix: Vec<usize> = std::iter::once(0)
         .chain(lens.iter().scan(0usize, |sum, len| {
             *sum += *len;

@@ -3,8 +3,13 @@ use std::sync::Arc;
 use agent_client_protocol::schema::v1::{SessionId, ToolCallId};
 use agent_client_protocol::{Client, ConnectionTo};
 use agent_runtime::state::SessionMode;
-use agent_runtime::{Cancellation, ToolPermissionDecision, ToolPermissionHandler, ToolPermissionRequest, ToolProvider};
-use tools_provider::tools::executor::{PermissionKind, PermissionRequest, PermissionResult, ToolExecutor};
+use agent_runtime::{
+    Cancellation, ToolPermissionDecision, ToolPermissionHandler, ToolPermissionRequest,
+    ToolProvider,
+};
+use tools_provider::tools::executor::{
+    PermissionKind, PermissionRequest, PermissionResult, ToolExecutor,
+};
 use tools_provider::tools::ToolPermissionMode;
 
 pub(crate) struct AcpToolPermissionHandler {
@@ -24,14 +29,20 @@ impl AcpToolPermissionHandler {
 
 #[async_trait::async_trait]
 impl ToolPermissionHandler for AcpToolPermissionHandler {
-    fn needs_permission(&self, session: &agent_runtime::state::Session, request: &ToolPermissionRequest) -> bool {
+    fn needs_permission(
+        &self,
+        session: &agent_runtime::state::Session,
+        request: &ToolPermissionRequest,
+    ) -> bool {
         let permission = self.permission_request(request);
         match permission.kind {
             PermissionKind::Read | PermissionKind::Network => false,
             PermissionKind::Write | PermissionKind::Execute => match session.mode {
                 SessionMode::BypassPermissions => false,
-                SessionMode::AcceptEdits => permission.kind == PermissionKind::Execute
-                    && permission.risk >= tools_provider::tools::sandbox::RiskLevel::High,
+                SessionMode::AcceptEdits => {
+                    permission.kind == PermissionKind::Execute
+                        && permission.risk >= tools_provider::tools::sandbox::RiskLevel::High
+                }
                 SessionMode::Default => true,
             },
         }
@@ -65,13 +76,15 @@ impl ToolPermissionHandler for AcpToolPermissionHandler {
             .await
         {
             PermissionResult::Allow => ToolPermissionDecision::Allow,
-            PermissionResult::Reject => ToolPermissionDecision::Reject(
-                format!("{} ({}) refusé par l'utilisateur.", permission.kind.label(), permission.summary),
-            ),
+            PermissionResult::Reject => ToolPermissionDecision::Reject(format!(
+                "{} ({}) refusé par l'utilisateur.",
+                permission.kind.label(),
+                permission.summary
+            )),
             PermissionResult::Cancelled => ToolPermissionDecision::Cancelled,
-            PermissionResult::TransportError(error) => ToolPermissionDecision::Reject(
-                format!("Échec de la demande de permission ACP : {error}"),
-            ),
+            PermissionResult::TransportError(error) => ToolPermissionDecision::Reject(format!(
+                "Échec de la demande de permission ACP : {error}"
+            )),
         }
     }
 }

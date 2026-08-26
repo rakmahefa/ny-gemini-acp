@@ -102,7 +102,8 @@ impl<'a> ToolExecutor<'a> {
         arguments: &Value,
         semantic: &mut dyn TurnEventSink,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, Some(semantic)).await
+        self.execute_inner(call_id, tool_name, arguments, Some(semantic))
+            .await
     }
     pub async fn execute_with_call_id(
         &self,
@@ -110,7 +111,8 @@ impl<'a> ToolExecutor<'a> {
         tool_name: &str,
         arguments: &Value,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, None).await
+        self.execute_inner(call_id, tool_name, arguments, None)
+            .await
     }
     pub async fn execute(&self, tool_name: &str, arguments: &Value) -> ToolResult {
         self.execute_with_call_id(
@@ -159,7 +161,11 @@ impl<'a> ToolExecutor<'a> {
             Some(meta),
         );
         if let Some(e) = semantic.as_mut() {
-            e.tool_result_received(call_id.to_string(), content.clone(), Some(ToolUiModel::generic(tool_name, arguments.clone())));
+            e.tool_result_received(
+                call_id.to_string(),
+                content.clone(),
+                Some(ToolUiModel::generic(tool_name, arguments.clone())),
+            );
         }
         ToolResult {
             content,
@@ -361,7 +367,11 @@ impl<'a> ToolExecutor<'a> {
                 content: outcome.result.content,
                 is_ok: outcome.result.is_ok,
                 cancelled: outcome.cancelled,
-                reason: if outcome.cancelled { Some("cancelled") } else { None },
+                reason: if outcome.cancelled {
+                    Some("cancelled")
+                } else {
+                    None
+                },
                 terminal_id: outcome.terminal_id.as_deref(),
                 terminal_meta: outcome.terminal_meta,
             },
@@ -388,7 +398,8 @@ impl<'a> ToolExecutor<'a> {
             value = self.registry.call(request) => value,
             _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true }
         };
-        let cancelled = session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
+        let cancelled =
+            session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
         ExecutionOutcome {
             result: ToolResult {
                 content: result.content,
@@ -425,8 +436,14 @@ mod tests {
     }
     #[test]
     fn cancelled_terminal_preserves_partial_output() {
-        assert_eq!(terminal::terminal_output_text(("partial output".into(), false)), "partial output");
-        assert_eq!(terminal::terminal_output_text(("partial output".into(), true)), "partial output\n… (sortie tronquée par le client ACP)");
+        assert_eq!(
+            terminal::terminal_output_text(("partial output".into(), false)),
+            "partial output"
+        );
+        assert_eq!(
+            terminal::terminal_output_text(("partial output".into(), true)),
+            "partial output\n… (sortie tronquée par le client ACP)"
+        );
     }
     #[test]
     fn empty_cancelled_terminal_output_stays_empty() {
@@ -434,7 +451,8 @@ mod tests {
     }
     #[test]
     fn terminal_metadata_shape() {
-        let meta = terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
+        let meta =
+            terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
         assert_eq!(meta["terminal_info"]["terminal_id"], "term-1");
         assert_eq!(meta["terminal_output"]["data"], "hello");
         assert_eq!(meta["terminal_exit"]["exit_code"], 0);

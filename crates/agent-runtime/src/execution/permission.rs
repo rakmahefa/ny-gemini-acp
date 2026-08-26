@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use crate::Cancellation;
 use crate::state::Session;
+use crate::Cancellation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolPermissionDecision {

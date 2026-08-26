@@ -18,7 +18,11 @@ pub(crate) fn payload(
     let refs_json = if refs.is_empty() {
         serde_json::Value::Null
     } else {
-        serde_json::Value::Array(refs.iter().map(|r| serde_json::json!([null, null, r])).collect())
+        serde_json::Value::Array(
+            refs.iter()
+                .map(|r| serde_json::json!([null, null, r]))
+                .collect(),
+        )
     };
     inner[0] = serde_json::json!([prompt, 0, null, refs_json, null, null, 0]);
     inner[1] = serde_json::json!(["en"]);
@@ -51,14 +55,20 @@ pub(crate) fn payload(
 }
 
 pub(crate) fn form_urlencode(params: &[(String, String)]) -> String {
-    params.iter().map(|(k, v)| format!("{}={}", enc(k), enc(v))).collect::<Vec<_>>().join("&")
+    params
+        .iter()
+        .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
+        .collect::<Vec<_>>()
+        .join("&")
 }
 
 fn enc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             b' ' => out.push('+'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
@@ -83,8 +93,14 @@ pub(crate) fn extract_page_tokens(body: &str) -> PageTokens {
 }
 
 pub(crate) async fn load_jar(path: &Path) -> (Option<CookieJar>, Option<SystemTime>) {
-    let mtime = tokio::fs::metadata(path).await.and_then(|m| m.modified()).ok();
-    let jar = tokio::fs::read_to_string(path).await.ok().and_then(|raw| CookieJar::parse(&raw).ok());
+    let mtime = tokio::fs::metadata(path)
+        .await
+        .and_then(|m| m.modified())
+        .ok();
+    let jar = tokio::fs::read_to_string(path)
+        .await
+        .ok()
+        .and_then(|raw| CookieJar::parse(&raw).ok());
     (jar, mtime)
 }
 
@@ -99,7 +115,13 @@ fn unix_now() -> u64 {
 
 #[cfg(test)]
 pub(crate) fn decode_freq(body: &str) -> String {
-    let raw = body.split_once("f.req=").unwrap().1.split('&').next().unwrap();
+    let raw = body
+        .split_once("f.req=")
+        .unwrap()
+        .1
+        .split('&')
+        .next()
+        .unwrap();
     let mut out = Vec::new();
     let bytes = raw.as_bytes();
     let mut i = 0;

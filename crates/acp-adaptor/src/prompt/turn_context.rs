@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use agent_client_protocol::{Client, ConnectionTo};
 use agent_runtime::events::TurnEventEmitter;
-use agent_runtime::{Cancellation, LlmProvider, ToolProvider};
 use agent_runtime::state::Store;
+use agent_runtime::{Cancellation, LlmProvider, ToolProvider};
 
 pub struct TurnContext<'a> {
     pub store: Arc<Store>,

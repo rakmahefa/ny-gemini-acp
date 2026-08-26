@@ -1,6 +1,9 @@
 use agent_runtime::events::{EventBus, SemanticEvent, TurnEventEmitter};
 
-fn emitter() -> (TurnEventEmitter, tokio::sync::mpsc::UnboundedReceiver<SemanticEvent>) {
+fn emitter() -> (
+    TurnEventEmitter,
+    tokio::sync::mpsc::UnboundedReceiver<SemanticEvent>,
+) {
     let bus = EventBus::new();
     let rx = bus.subscribe_turn("turn-adversarial");
     (
@@ -30,7 +33,9 @@ fn cancellation_aborts_open_tool_without_fabricating_tool_result() {
     assert!(matches!(events[0], SemanticEvent::TurnStarted { .. }));
     assert!(matches!(events[1], SemanticEvent::ToolCallRequested { .. }));
     assert!(matches!(events[2], SemanticEvent::TurnCancelled { .. }));
-    assert!(events.iter().all(|event| !matches!(event, SemanticEvent::ToolResultReceived { .. })));
+    assert!(events
+        .iter()
+        .all(|event| !matches!(event, SemanticEvent::ToolResultReceived { .. })));
 }
 
 #[test]
@@ -43,7 +48,9 @@ fn failure_aborts_open_tool_without_fabricating_tool_result() {
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 3);
     assert!(matches!(events[2], SemanticEvent::TurnFailed { .. }));
-    assert!(events.iter().all(|event| !matches!(event, SemanticEvent::ToolResultReceived { .. })));
+    assert!(events
+        .iter()
+        .all(|event| !matches!(event, SemanticEvent::ToolResultReceived { .. })));
 }
 
 #[test]
@@ -83,7 +90,8 @@ fn distinct_tool_ids_can_complete_out_of_order() {
 #[test]
 fn missing_transport_rejects_before_sequence_allocation() {
     let bus = EventBus::new();
-    let mut emitter = TurnEventEmitter::new_with_required_transport(bus, "session", "turn-adversarial");
+    let mut emitter =
+        TurnEventEmitter::new_with_required_transport(bus, "session", "turn-adversarial");
     assert!(!emitter.turn_started());
     assert_eq!(emitter.sequence(), 0);
     assert!(!emitter.is_terminal());

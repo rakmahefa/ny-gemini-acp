@@ -25,8 +25,10 @@ pub fn emit_error_chunk(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(format!("\n\n[error] {error}"))))
-                .message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(format!(
+                "\n\n[error] {error}"
+            ))))
+            .message_id(message_id.clone()),
         ),
     ))
     .ok();
@@ -45,7 +47,8 @@ pub fn notify_text(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentMessageChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text))).message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+                .message_id(message_id.clone()),
         ),
     ))
 }
@@ -62,7 +65,8 @@ pub fn notify_reasoning(
     cx.send_notification(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::AgentThoughtChunk(
-            ContentChunk::new(ContentBlock::Text(TextContent::new(text))).message_id(message_id.clone()),
+            ContentChunk::new(ContentBlock::Text(TextContent::new(text)))
+                .message_id(message_id.clone()),
         ),
     ))
 }
@@ -103,11 +107,17 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
 }
 
 fn rich_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
-    ui.content.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect()
+    ui.content
+        .iter()
+        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .collect()
 }
 
 fn rich_locations(ui: &ToolUiModel) -> Vec<ToolCallLocation> {
-    ui.locations.iter().filter_map(|value| serde_json::from_value(value.clone()).ok()).collect()
+    ui.locations
+        .iter()
+        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .collect()
 }
 
 fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
@@ -116,14 +126,22 @@ fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
         .and_then(|value| value.get("text"))
         .and_then(serde_json::Value::as_str)
         .filter(|text| !text.is_empty())
-        .map(|text| vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))])
+        .map(|text| {
+            vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
+                text,
+            )))]
+        })
         .unwrap_or_default()
 }
 
 fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
     let content = {
         let rich = rich_content(ui);
-        if rich.is_empty() { fallback_text_content(ui) } else { rich }
+        if rich.is_empty() {
+            fallback_text_content(ui)
+        } else {
+            rich
+        }
     };
     let locations = rich_locations(ui);
 

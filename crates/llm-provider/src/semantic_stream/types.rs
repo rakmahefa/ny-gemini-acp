@@ -1,6 +1,7 @@
 use serde_json::Value;
 
-pub(super) const REASONING_OPEN_MARKERS: [&str; 4] = ["<thinking>", "<think>", "[Thinking]:", "[thinking]:"];
+pub(super) const REASONING_OPEN_MARKERS: [&str; 4] =
+    ["<thinking>", "<think>", "[Thinking]:", "[thinking]:"];
 pub(super) const REASONING_CLOSE_MARKERS: [&str; 2] = ["</thinking>", "</think>"];
 pub(super) const TOOL_RESULT_PREFIX: &str = "[Tool result for ";
 pub(super) const TOOL_RESULT_ENVELOPE: &str = "[Tool result]:";
@@ -48,9 +49,15 @@ impl BlockKind {
 #[derive(Debug)]
 pub(super) enum ProtocolMode {
     Normal,
-    IgnoreToolResult { closing: Option<&'static str> },
+    IgnoreToolResult {
+        closing: Option<&'static str>,
+    },
     IgnoreInlineToolResult,
-    ToolBlock { kind: BlockKind, body: String, oversized: bool },
+    ToolBlock {
+        kind: BlockKind,
+        body: String,
+        oversized: bool,
+    },
     InlineToolCall,
 }
 

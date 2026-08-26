@@ -44,9 +44,13 @@ fn system_prompt_coding_has_execution_contract() {
 fn system_prompt_coding_forbids_fake_execution_claims() {
     let s = test_session();
     let p = system_prompt(&s, Some(Persona::Coding));
-    assert!(p.contains("Ne jamais prétendre avoir créé, modifié, supprimé, exécuté, compilé, testé ou vérifié"));
+    assert!(p.contains(
+        "Ne jamais prétendre avoir créé, modifié, supprimé, exécuté, compilé, testé ou vérifié"
+    ));
     assert!(p.contains("Une sortie textuelle annonçant une action n'est qu'une intention"));
-    assert!(p.contains("ne considère jamais une étape comme terminée sur la seule base de ton propre texte"));
+    assert!(p.contains(
+        "ne considère jamais une étape comme terminée sur la seule base de ton propre texte"
+    ));
 }
 
 #[test]

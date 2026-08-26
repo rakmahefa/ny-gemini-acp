@@ -7,7 +7,10 @@ pub fn normalize_servers(
     servers: Vec<McpServer>,
     session_cwd: &Path,
 ) -> Result<Vec<ToolServerConfig>, String> {
-    servers.into_iter().map(|server| normalize_server(server, session_cwd)).collect()
+    servers
+        .into_iter()
+        .map(|server| normalize_server(server, session_cwd))
+        .collect()
 }
 
 fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<ToolServerConfig, String> {
@@ -36,7 +39,10 @@ fn normalize_server(server: McpServer, session_cwd: &Path) -> Result<ToolServerC
 fn header_map(headers: Vec<HttpHeader>) -> Result<HashMap<String, String>, String> {
     let mut result = HashMap::with_capacity(headers.len());
     for header in headers {
-        if result.keys().any(|name: &String| name.eq_ignore_ascii_case(&header.name)) {
+        if result
+            .keys()
+            .any(|name: &String| name.eq_ignore_ascii_case(&header.name))
+        {
             return Err(format!("duplicate MCP HTTP header '{}'", header.name));
         }
         result.insert(header.name, header.value);
@@ -47,34 +53,60 @@ fn header_map(headers: Vec<HttpHeader>) -> Result<HashMap<String, String>, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agent_client_protocol::schema::v1::{EnvVariable, HttpHeader, McpServerHttp, McpServerSse, McpServerStdio};
+    use agent_client_protocol::schema::v1::{
+        EnvVariable, HttpHeader, McpServerHttp, McpServerSse, McpServerStdio,
+    };
     use agent_runtime::ToolTransportKind;
 
     #[test]
     fn normalizes_stdio_configuration() {
-        let server = McpServer::Stdio(McpServerStdio::new("project-tools", "/usr/local/bin/project-mcp").args(vec!["--cwd".into(), "/tmp/project".into()]).env(vec![EnvVariable::new("TOKEN", "secret")]));
+        let server = McpServer::Stdio(
+            McpServerStdio::new("project-tools", "/usr/local/bin/project-mcp")
+                .args(vec!["--cwd".into(), "/tmp/project".into()])
+                .env(vec![EnvVariable::new("TOKEN", "secret")]),
+        );
         let config = normalize_servers(vec![server], Path::new("/tmp/workspace")).unwrap();
         assert_eq!(config[0].transport, ToolTransportKind::Process);
-        assert_eq!(config[0].command.as_deref(), Some("/usr/local/bin/project-mcp"));
+        assert_eq!(
+            config[0].command.as_deref(),
+            Some("/usr/local/bin/project-mcp")
+        );
         assert_eq!(config[0].args, ["--cwd", "/tmp/project"]);
-        assert_eq!(config[0].env.get("TOKEN").map(String::as_str), Some("secret"));
+        assert_eq!(
+            config[0].env.get("TOKEN").map(String::as_str),
+            Some("secret")
+        );
         assert_eq!(config[0].cwd.as_deref(), Some(Path::new("/tmp/workspace")));
     }
 
     #[test]
     fn normalizes_http_configuration_and_headers() {
-        let server = McpServer::Http(McpServerHttp::new("remote", "https://mcp.example.test").headers(vec![HttpHeader::new("Authorization", "Bearer test")]));
+        let server = McpServer::Http(
+            McpServerHttp::new("remote", "https://mcp.example.test")
+                .headers(vec![HttpHeader::new("Authorization", "Bearer test")]),
+        );
         let config = normalize_servers(vec![server], Path::new("/tmp/workspace")).unwrap();
         assert_eq!(config[0].transport, ToolTransportKind::Http);
         assert_eq!(config[0].url.as_deref(), Some("https://mcp.example.test"));
-        assert_eq!(config[0].headers.get("Authorization").map(String::as_str), Some("Bearer test"));
+        assert_eq!(
+            config[0].headers.get("Authorization").map(String::as_str),
+            Some("Bearer test")
+        );
     }
 
     #[test]
     fn rejects_sse_and_duplicate_headers() {
-        let sse = McpServer::Sse(McpServerSse::new("legacy-events", "https://mcp.example.test/events"));
+        let sse = McpServer::Sse(McpServerSse::new(
+            "legacy-events",
+            "https://mcp.example.test/events",
+        ));
         assert!(normalize_servers(vec![sse], Path::new("/tmp/workspace")).is_err());
-        let duplicate = McpServer::Http(McpServerHttp::new("remote", "https://mcp.example.test").headers(vec![HttpHeader::new("Authorization", "a"), HttpHeader::new("authorization", "b")]));
+        let duplicate = McpServer::Http(
+            McpServerHttp::new("remote", "https://mcp.example.test").headers(vec![
+                HttpHeader::new("Authorization", "a"),
+                HttpHeader::new("authorization", "b"),
+            ]),
+        );
         assert!(normalize_servers(vec![duplicate], Path::new("/tmp/workspace")).is_err());
     }
 }
