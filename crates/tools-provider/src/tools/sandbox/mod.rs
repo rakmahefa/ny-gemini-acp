@@ -1,11 +1,15 @@
 //! Security sandbox module.
 //!
-//! The implementation remains behaviorally identical; this facade establishes
-//! a stable module boundary for subsequent separation of path policy, command
-//! analysis, and shell execution concerns.
+//! The sandbox is split by responsibility: filesystem scope, risk analysis,
+//! and shell command policy.
 
-mod implementation;
+mod path;
+mod risk;
+mod shell;
 
-pub use implementation::{
-    validate_path, RiskLevel, SecurityError, ShellAnalysis, ShellSandbox,
-};
+#[cfg(test)]
+mod tests;
+
+pub use path::{validate_path, SecurityError};
+pub use risk::{RiskLevel, ShellAnalysis};
+pub use shell::ShellSandbox;
