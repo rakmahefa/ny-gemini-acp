@@ -2,7 +2,7 @@
 
 A Rust-based **Agent Client Protocol (ACP)** agent designed for **Zed**, with **Gemini** as the current LLM provider and **builtin + MCP tools** as the tool capability layer.
 
-The `dev/agent-runtime-architecture` branch establishes a provider-neutral runtime architecture. The central design goal is to keep **ACP protocol concerns, agent orchestration, model integration, and tool execution independently bounded** so the runtime can evolve without becoming coupled to Zed, ACP, or Gemini implementation details.
+The repository now contains the provider-neutral runtime architecture established by the recent architecture work. The central design goal is to keep **ACP protocol concerns, agent orchestration, model integration, and tool execution independently bounded** so the runtime can evolve without becoming coupled to Zed, ACP, or Gemini implementation details.
 
 > **Architectural reference:** DeepSeek Harness is used only as a source of architectural ideas. `ny-gemini-acp` does not depend on or attempt to reproduce DeepSeek Harness or Cordis.
 
@@ -155,6 +155,8 @@ Tool Provider
     ├── process / stdio transport
     └── HTTP transport
 ```
+
+The shell builtin currently uses a **restrictive lexical parser, deterministic normalization, program policy, argument policy, and risk analysis** before execution. This is an application-level safety boundary; it is **not OS/container isolation**. OS-level confinement is intentionally deferred to a separate future tranche with a fail-closed availability contract.
 
 The runtime only knows the generic `ToolProvider` contract and `ToolServerConfig`. MCP-specific configuration and transport stay outside `agent-runtime`.
 
@@ -401,13 +403,15 @@ cargo test --workspace --all-targets
 ./scripts/audit-provider-neutral.sh
 ```
 
-The expected result is:
+The shell-sandbox branch has additionally been validated locally with:
 
-```text
-PASS: no hard-boundary failures
+```bash
+cargo fmt --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-The audit can report non-blocking warnings while the architecture is being progressively strengthened.
+The repository does not currently have an active GitHub Actions validation workflow, so local validation remains the reference until CI is reintroduced.
 
 ## Migration status
 
@@ -426,20 +430,25 @@ The audit can report non-blocking warnings while the architecture is being progr
 - Gemini isolated in `llm-provider`;
 - builtin + MCP implementations isolated in `tools-provider`;
 - provider-neutral architecture audit script;
+- restrictive shell parsing, normalization and execution policy;
+- adversarial shell-policy tests;
 - workspace validation command defined as the branch baseline.
 
 ### Current architectural focus
 
 The architecture should now favor **consolidation and integrity** rather than another physical crate split.
 
+The current work has intentionally stopped at the validated shell-policy boundary. The next security step is OS-level confinement, but it is not part of the current debt repayment tranche.
+
 Priority areas are:
 
-1. strengthen the end-to-end integrity of `SemanticEvent → ACP` projection;
+1. keep the end-to-end integrity of `SemanticEvent → ACP` projection;
 2. keep tool IDs, raw results, rich tool UI content and locations correlated deterministically;
 3. reduce weakly typed contract fields where a stable semantic type can replace generic JSON/string surfaces;
 4. preserve replay and cancellation invariants as execution paths expand;
 5. validate new model providers against the existing provider contracts instead of branching the runtime;
-6. keep ACP handlers focused on protocol and presentation rather than agent-loop policy.
+6. design OS-level shell confinement only when the project is ready to resume that debt;
+7. keep ACP handlers focused on protocol and presentation rather than agent-loop policy.
 
 ## Non-goals
 
@@ -451,7 +460,8 @@ This architecture does not currently aim to:
 - introduce multiple LLM providers before the runtime contracts are stable;
 - move MCP into the LLM provider;
 - make ACP handlers responsible for the core agent loop;
-- encode host-specific visual behavior directly into `agent-runtime`.
+- encode host-specific visual behavior directly into `agent-runtime`;
+- claim OS-level isolation from the shell policy alone.
 
 ## Success criteria
 
@@ -467,6 +477,7 @@ The architecture is successful when:
 8. Tool UI can evolve without contaminating the raw execution contract.
 9. Session/thread state can be replayed and projected consistently.
 10. A second LLM provider can be added without redesigning ACP, sessions, or MCP.
+11. Shell commands accepted by the default policy are parsed and validated structurally rather than by prefix-only heuristics.
 
 ## Reference
 

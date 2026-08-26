@@ -1,6 +1,7 @@
-//! Risk classification and shell command analysis.
+//! Risk classification for normalized shell commands.
 
-/// Niveau de risque d'une opération outil.
+use super::parser::{parse_shell, ParsedShellCommand, ShellOperator};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum RiskLevel {
     #[default]
@@ -22,36 +23,26 @@ impl RiskLevel {
 
     pub fn description(&self) -> &'static str {
         match self {
-            Self::Low => "Lecture ou listing — aucun effet de bord",
-            Self::Medium => "Écriture ou compilation — modifications locales possibles",
-            Self::High => "Suppression ou commande réseau — effets irréversibles possibles",
-            Self::Critical => "Destruction massive ou escalade de privilèges",
+            Self::Low => "Lecture ou inspection — effets limités",
+            Self::Medium => "Pipeline ou plusieurs opérations — effets locaux possibles",
+            Self::High => "Écriture, compilation, package ou outil à effets de bord",
+            Self::Critical => "Suppression massive, escalade ou exécution dynamique",
         }
     }
 
     pub fn emoji(&self) -> &'static str {
         match self {
-            Self::Low => "\u{2705}",
-            Self::Medium => "\u{26a0}\u{fe0f}",
-            Self::High => "\u{1f6d1}",
-            Self::Critical => "\u{1f534}",
-        }
-    }
-
-    #[allow(dead_code)]
-    pub fn as_u8(&self) -> u8 {
-        match self {
-            Self::Low => 0,
-            Self::Medium => 1,
-            Self::High => 2,
-            Self::Critical => 3,
+            Self::Low => "✅",
+            Self::Medium => "⚠️",
+            Self::High => "🛑",
+            Self::Critical => "🔴",
         }
     }
 }
 
 impl std::fmt::Display for RiskLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.label())
+        f.write_str(self.label())
     }
 }
 
@@ -68,34 +59,35 @@ pub struct ShellAnalysis {
 
 impl ShellAnalysis {
     pub fn analyze(command: &str) -> Self {
-        let lines: Vec<&str> = command
-            .lines()
-            .filter(|l| {
-                let t = l.trim();
-                !t.is_empty() && !t.starts_with('#')
-            })
-            .collect();
-        let line_count = lines.len();
-        let full_trimmed = command.trim();
-        let has_pipes = full_trimmed.contains('|');
-        let commands: Vec<String> = if has_pipes {
-            full_trimmed
-                .split('|')
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
-                .collect()
-        } else {
-            lines.iter().map(|s| s.trim().to_string()).collect()
-        };
-        let has_env_injection = contains_env_injection(command);
-        let has_dangerous_pipe_chain = detect_dangerous_pipe_chain(command);
-        let risk = compute_risk(
-            command,
-            &commands,
-            has_pipes,
-            has_env_injection,
-            has_dangerous_pipe_chain,
-        );
+        let parsed = parse_shell(command);
+        match parsed {
+            Ok(parsed) => Self::from_parsed(command, &parsed),
+            Err(error) => Self {
+                risk: RiskLevel::Critical,
+                commands: Vec::new(),
+                has_pipes: command.contains('|'),
+                has_env_injection: command.contains('$') || command.contains('`'),
+                has_dangerous_pipe_chain: true,
+                risk_description: format!("commande non analysable : {error}"),
+                line_count: command.lines().filter(|line| !line.trim().is_empty()).count(),
+            },
+        }
+    }
+
+    pub(crate) fn from_parsed(command: &str, parsed: &ParsedShellCommand) -> Self {
+        let commands = parsed
+            .segments
+            .iter()
+            .map(|segment| segment.normalized())
+            .collect::<Vec<_>>();
+        let has_pipes = parsed
+            .operators
+            .iter()
+            .any(|operator| matches!(operator, ShellOperator::Pipe));
+        let has_dangerous_pipe_chain = parsed.has_non_pipe_operator();
+        let has_env_injection = parsed.has_environment_expansion;
+        let risk = compute_risk(parsed, has_env_injection, has_dangerous_pipe_chain);
+        let line_count = command.lines().filter(|line| !line.trim().is_empty()).count();
         let risk_description = build_risk_description(
             &risk,
             has_pipes,
@@ -121,106 +113,73 @@ impl ShellAnalysis {
             parts.push(format!("{} lines", self.line_count));
         }
         if self.has_env_injection {
-            parts.push("env var injection detected".to_string());
+            parts.push("env expansion detected".to_owned());
         }
         if self.has_dangerous_pipe_chain {
-            parts.push("dangerous pipe chain".to_string());
+            parts.push("non-pipe shell operator".to_owned());
         }
         parts.join(" — ")
     }
 }
 
-fn contains_env_injection(command: &str) -> bool {
-    if command.contains("$(") && command.contains(')') {
-        return true;
-    }
-    if command.contains('`') {
-        return true;
-    }
-    command.contains("${")
-}
-
-fn detect_dangerous_pipe_chain(command: &str) -> bool {
-    let lower = command.to_lowercase();
-    if lower.contains("| sh") || lower.contains("|bash") || lower.contains("|zsh") {
-        return true;
-    }
-    if lower.contains("-exec") && (lower.contains("sh") || lower.contains("bash")) {
-        return true;
-    }
-    if lower.contains("xargs") && (lower.contains("sh") || lower.contains("bash")) {
-        return true;
-    }
-    if lower.contains("eval ") {
-        return true;
-    }
-    lower.contains("exec ")
-}
-
-const HIGH_RISK_COMMANDS: &[&str] = &[
-    "rm", "rmdir", "mv", "docker", "podman", "npm", "npx", "pnpm", "yarn", "bun", "pip",
-    "pip3", "cargo", "go", "make", "cmake", "gcc", "g++", "clang", "patch",
-];
-
-const CRITICAL_RISK_COMMANDS: &[&str] = &["rm", "chmod", "chown"];
-
 fn compute_risk(
-    command: &str,
-    _commands: &[String],
-    has_pipes: bool,
-    has_env_injection: bool,
-    has_dangerous_pipe_chain: bool,
+    parsed: &ParsedShellCommand,
+    has_env_expansion: bool,
+    has_non_pipe_operator: bool,
 ) -> RiskLevel {
-    if has_dangerous_pipe_chain {
+    if has_non_pipe_operator {
         return RiskLevel::Critical;
     }
 
-    let lower = command.to_lowercase();
-    let first_word = command.split_whitespace().next().unwrap_or("");
-    for cmd in CRITICAL_RISK_COMMANDS {
-        if first_word == *cmd && first_word == "rm" && (lower.contains("-rf") || lower.contains("-fr")) {
+    let mut risk = if parsed.segments.len() > 1 {
+        RiskLevel::Medium
+    } else {
+        RiskLevel::Low
+    };
+
+    for segment in &parsed.segments {
+        let program = segment.program.rsplit('/').next().unwrap_or(&segment.program);
+        if matches!(program, "rm" | "rmdir" | "chmod" | "chown")
+            && segment.args.iter().any(|arg| arg == "/" || arg == "-rf" || arg == "-fr")
+        {
             return RiskLevel::Critical;
         }
-    }
-    for cmd in HIGH_RISK_COMMANDS {
-        if first_word == *cmd {
-            return RiskLevel::High;
+        if matches!(
+            program,
+            "rm" | "rmdir" | "mv" | "cp" | "chmod" | "chown" | "docker" | "podman"
+                | "npm" | "npx" | "pnpm" | "yarn" | "bun" | "pip" | "pip3" | "cargo"
+                | "go" | "make" | "cmake" | "gcc" | "g++" | "clang" | "patch"
+        ) {
+            risk = risk.max(RiskLevel::High);
         }
     }
-    if has_env_injection {
-        return if has_pipes { RiskLevel::High } else { RiskLevel::Medium };
+
+    if has_env_expansion {
+        risk = risk.max(if parsed.segments.len() > 1 {
+            RiskLevel::High
+        } else {
+            RiskLevel::Medium
+        });
     }
-    if has_pipes {
-        return RiskLevel::Medium;
-    }
-    let non_empty_lines: Vec<&str> = command
-        .lines()
-        .filter(|l| {
-            let t = l.trim();
-            !t.is_empty() && !t.starts_with('#')
-        })
-        .collect();
-    if non_empty_lines.len() > 1 {
-        return RiskLevel::Medium;
-    }
-    RiskLevel::Low
+
+    risk
 }
 
 fn build_risk_description(
     risk: &RiskLevel,
     has_pipes: bool,
-    has_env_injection: bool,
-    has_dangerous_pipe_chain: bool,
+    has_env_expansion: bool,
+    has_non_pipe_operator: bool,
 ) -> String {
-    let mut parts = vec![risk.description().to_string()];
-    if has_dangerous_pipe_chain {
-        parts.push("Chaîne de pipes dangereuse détectée (exécution dynamique possible)".to_string());
+    let mut parts = vec![risk.description().to_owned()];
+    if has_pipes {
+        parts.push("Pipeline analysé segment par segment".to_owned());
     }
-    if has_env_injection {
-        parts.push("Injection de variables d'environnement détectée ($(), backticks, ${VAR})".to_string());
+    if has_non_pipe_operator {
+        parts.push("Opérateur shell non-pipe détecté".to_owned());
     }
-    if has_pipes && !has_dangerous_pipe_chain {
-        parts.push("Commande pipée — vérifie chaque segment".to_string());
+    if has_env_expansion {
+        parts.push("Expansion de variable d'environnement détectée".to_owned());
     }
     parts.join(". ")
 }
