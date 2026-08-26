@@ -12,9 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{
-    AgentLoopError, AgentLoopConfig, TurnService, TurnServiceError,
-};
+use agent_runtime::{AgentLoopError, AgentLoopConfig, TurnService};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -48,13 +46,6 @@ fn agent_error_kind(error: &AgentLoopError) -> &'static str {
         AgentLoopError::InvalidModelSequence(_) => "invalid_model_sequence",
         AgentLoopError::SemanticEventRejected => "semantic_event_rejected",
         AgentLoopError::Action(_) => "action",
-    }
-}
-
-fn map_service_error(error: &TurnServiceError) -> Option<&AgentLoopError> {
-    match error {
-        TurnServiceError::Agent(error) => Some(error),
-        TurnServiceError::Acquire(_) => None,
     }
 }
 
@@ -153,10 +144,8 @@ pub async fn run_turn(
             span.record("tool_rounds", result.outcome.rounds);
             span.record("chars_output", result.outcome.output.chars().count());
             span.record("outcome", "success");
-            let usage_prompt = crate::prompt::build::build_prompt(
-                &result.session,
-                Some(&*ctx.tools),
-            );
+            let usage_prompt =
+                crate::prompt::build::build_prompt(&result.session, Some(&*ctx.tools));
             if let Err(error) = notify_usage(
                 &ctx.cx,
                 &session_id,
@@ -167,31 +156,18 @@ pub async fn run_turn(
             }
             Ok(PromptResponse::new(StopReason::EndTurn))
         }
-        Err(error) => {
-            if let Some(agent_error) = map_service_error(&error) {
-                let kind = agent_error_kind(agent_error);
-                span.record("agent_error_kind", kind);
-                span.record("outcome", kind);
-                if let AgentLoopError::MaxRounds(limit) = agent_error {
-                    tracing::error!(session=%session_id, error_kind=%kind, max_rounds=*limit, error=%agent_error, "agent loop exhausted its round limit");
-                } else {
-                    tracing::error!(session=%session_id, error_kind=%kind, error=%agent_error, "agent loop failed");
-                }
-                return match map_agent_error(agent_error) {
-                    Some(reason) => Ok(PromptResponse::new(reason)),
-                    None => Err(agent_error_response(&session_id.to_string(), agent_error)),
-                };
+        Err(agent_runtime::TurnServiceError::Agent(agent_error)) => {
+            let kind = agent_error_kind(&agent_error);
+            span.record("agent_error_kind", kind);
+            span.record("outcome", kind);
+            if let AgentLoopError::MaxRounds(limit) = &agent_error {
+                tracing::error!(session=%session_id, error_kind=%kind, max_rounds=*limit, error=%agent_error, "agent loop exhausted its round limit");
+            } else {
+                tracing::error!(session=%session_id, error_kind=%kind, error=%agent_error, "agent loop failed");
             }
-
-            match error {
-                TurnServiceError::Acquire(TurnError::NotFound(_)) => Err(AcpError::invalid_params()
-                    .data(serde_json::json!({"session_id": session_id.to_string()}))),
-                TurnServiceError::Acquire(TurnError::AlreadyRunning) => Err(AcpError::invalid_params()
-                    .data(serde_json::json!({
-                        "session_id": session_id.to_string(),
-                        "error": "a turn is already running; send session/cancel first"
-                    }))),
-                TurnServiceError::Agent(_) => unreachable!("agent error handled above"),
+            match map_agent_error(&agent_error) {
+                Some(reason) => Ok(PromptResponse::new(reason)),
+                None => Err(agent_error_response(&session_id.to_string(), &agent_error)),
             }
         }
     }
