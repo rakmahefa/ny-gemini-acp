@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentLoopError, TurnExecutionRequest};
+use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -49,13 +49,32 @@ fn agent_error_kind(error: &AgentLoopError) -> &'static str {
     }
 }
 
+fn llm_error_kind(error: &LlmError) -> &'static str {
+    match error.kind() {
+        Some(LlmProviderErrorKind::Authentication) => "authentication",
+        Some(LlmProviderErrorKind::InvalidRequest) => "invalid_request",
+        Some(LlmProviderErrorKind::ModelUnavailable) => "model_unavailable",
+        Some(LlmProviderErrorKind::Network) => "network",
+        Some(LlmProviderErrorKind::Upstream) => "upstream",
+        Some(LlmProviderErrorKind::StreamDivergence) => "stream_divergence",
+        Some(LlmProviderErrorKind::Upload) => "upload",
+        None => "cancelled",
+    }
+}
+
 fn agent_error_response(session_id: &str, error: &AgentLoopError) -> AcpError {
-    AcpError::internal_error().data(serde_json::json!({
+    let mut data = serde_json::json!({
         "error": "agent_loop_failed",
         "kind": agent_error_kind(error),
         "message": error.to_string(),
         "session_id": session_id,
-    }))
+    });
+
+    if let AgentLoopError::Llm(llm_error) = error {
+        data["llm_kind"] = serde_json::Value::String(llm_error_kind(llm_error).to_owned());
+    }
+
+    AcpError::internal_error().data(data)
 }
 
 fn turn_service_error_response(
@@ -77,14 +96,20 @@ fn turn_service_error_response(
         agent_runtime::TurnServiceError::AgentAndPersistence {
             agent,
             persistence,
-        } => AcpError::internal_error().data(serde_json::json!({
-            "error": "turn_failed_and_finalization_failed",
-            "kind": "agent_and_persistence",
-            "agent_error_kind": agent_error_kind(agent),
-            "agent_message": agent.to_string(),
-            "persistence_message": persistence.to_string(),
-            "session_id": session_id,
-        })),
+        } => {
+            let mut data = serde_json::json!({
+                "error": "turn_failed_and_finalization_failed",
+                "kind": "agent_and_persistence",
+                "agent_error_kind": agent_error_kind(agent),
+                "agent_message": agent.to_string(),
+                "persistence_message": persistence.to_string(),
+                "session_id": session_id,
+            });
+            if let AgentLoopError::Llm(llm_error) = agent {
+                data["llm_kind"] = serde_json::Value::String(llm_error_kind(llm_error).to_owned());
+            }
+            AcpError::internal_error().data(data)
+        }
     }
 }
 
@@ -236,10 +261,7 @@ mod tests {
             map_agent_error(&AgentLoopError::InvalidModelSequence("broken".into())),
             None
         );
-        assert_eq!(
-            map_agent_error(&AgentLoopError::Action("boom".into())),
-            None
-        );
+        assert_eq!(map_agent_error(&AgentLoopError::Action("boom".into())), None);
     }
 
     #[test]
@@ -253,9 +275,26 @@ mod tests {
             agent_error_kind(&AgentLoopError::SemanticEventRejected),
             "semantic_event_rejected"
         );
+        assert_eq!(agent_error_kind(&AgentLoopError::MaxRounds(3)), "max_rounds");
+    }
+
+    #[test]
+    fn llm_error_kind_is_stable_and_machine_readable() {
         assert_eq!(
-            agent_error_kind(&AgentLoopError::MaxRounds(3)),
-            "max_rounds"
+            llm_error_kind(&LlmError::Authentication("expired".into())),
+            "authentication"
+        );
+        assert_eq!(
+            llm_error_kind(&LlmError::Unavailable("gemini-3".into())),
+            "model_unavailable"
+        );
+        assert_eq!(
+            llm_error_kind(&LlmError::Network("timeout".into())),
+            "network"
+        );
+        assert_eq!(
+            llm_error_kind(&LlmError::StreamDivergence),
+            "stream_divergence"
         );
     }
 }
