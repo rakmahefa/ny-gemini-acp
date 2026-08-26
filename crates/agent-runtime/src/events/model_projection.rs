@@ -132,7 +132,6 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
     if thinking_active && !sink.thinking_completed() {
         return Err(ModelProjectionError::SemanticEventRejected);
     }
-    thinking_active = false;
 
     if tool_calls.is_empty() {
         if assistant_active && !sink.assistant_completed() {
@@ -146,7 +145,6 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
         if !sink.assistant_yields_to_action() {
             return Err(ModelProjectionError::SemanticEventRejected);
         }
-        assistant_active = false;
     }
 
     Ok(ModelRound {
