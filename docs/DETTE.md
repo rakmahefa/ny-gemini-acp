@@ -1,4 +1,3 @@
-
 # DETTE TECHNIQUE — ny-gemini-acp
 
 ## Statut
@@ -18,7 +17,7 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P2 | Dette d'orchestration des turns | ✅ Terminée | TurnService extrait, adaptateur découplé, tests et validations verts |
-| P2 | Dette des erreurs structurées | 🚧 En cours | Tranches session/persistance/provider traitées sur `debt/structured-errors` |
+| P2 | Dette des erreurs structurées | 🚧 En cours | Tranches session/persistance/provider/MCP traitées sur `debt/structured-errors` |
 | P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
 | P3 | CI automatisée | Hors priorité | Tests CI manuels par le mainteneur |
@@ -330,18 +329,74 @@ cargo clippy --workspace --all-targets -- -D warnings  ✅
 
 ---
 
+## 5.4 Quatrième tranche — outillage / MCP ✅
+
+Le contrat d'erreur de l'outillage ne réduit plus les erreurs MCP à une seule chaîne générique lorsqu'une configuration de session est initialisée.
+
+Réalisé :
+
+* extension de `ToolConfigurationError` avec les familles `Transport`, `Protocol`, `Remote`, `MessageTooLarge` et `PaginationLimit` ;
+* conservation de `InvalidConfiguration` pour les erreurs `McpError::Config` ;
+* mapping explicite `McpError → ToolConfigurationError` dans `DefaultToolProvider` ;
+* préservation du code JSON-RPC pour les erreurs `Remote` ;
+* préservation de la nature de transport (`stdio`, `http`, etc.) pour les échecs de transport ;
+* suppression du `map_err(|error| ToolConfigurationError::Provider(error.to_string()))` sur la configuration MCP ;
+* maintien de la conversion vers `String` uniquement dans les façades protocolaires qui l'exigent.
+
+Contrat :
+
+```text
+MCP layer
+    ↓
+McpError
+    ├── Config
+    ├── Transport
+    ├── Protocol
+    ├── Remote { code, message }
+    ├── MessageTooLarge
+    └── PaginationLimit
+    ↓
+ToolConfigurationError
+    ↓
+SessionToolConfigurationError
+    ↓
+frontière applicative / ACP
+```
+
+La frontière runtime reste donc provider-neutral et ne dépend pas du type `McpError`.
+
+## Limite volontaire
+
+Le contenu textuel d'une erreur reste disponible dans les variantes qui portent un message, mais la catégorie de l'échec n'est plus perdue avant d'atteindre le runtime.
+
+Une différenciation encore plus riche au niveau du contenu MCP pourra être traitée ultérieurement seulement si le protocole ou les besoins d'observabilité le justifient.
+
+## Validation
+
+Cette tranche a été revue statiquement dans le dépôt, mais les commandes suivantes n'ont pas été exécutées dans cet environnement :
+
+```text
+cargo fmt --check                                      ⏳
+cargo check --workspace                                ⏳
+cargo test --workspace                                 ⏳
+cargo clippy --workspace --all-targets -- -D warnings  ⏳
+```
+
+La validation locale reste donc requise avant de considérer cette tranche comme intégrée et verte.
+
+---
+
 ## Limites restantes
 
 La dette des erreurs structurées n'est pas encore totalement soldée.
 
 Les prochaines zones à traiter sont notamment :
 
-* erreurs d'outillage/MCP encore aplaties en chaînes ;
 * erreurs de session et de persistance hors du chemin de finalisation d'un turn ;
 * mappings ACP finaux et tests associés ;
 * vérification systématique des `Result<T, String>` restants ;
 * contrats d'actions interactives ACP encore exprimés en `String` ;
-* différenciation plus fine des erreurs MCP `Config`, `Transport`, `Protocol` et `Remote`.
+* différenciation plus fine du contenu des erreurs LLM/MCP si elle apporte une valeur réelle.
 
 Le cœur runtime doit rester indépendant d'ACP.
 
@@ -351,12 +406,13 @@ Les conversions vers les erreurs protocolaires restent du ressort des adaptateur
 
 ## Validation globale de la branche
 
-Les validations locales confirmées jusqu'à présent :
+Les validations globales historiques restent documentées pour les tranches précédentes. Pour les commits MCP ajoutés sur cette branche, la validation locale doit encore être exécutée explicitement :
 
 ```text
-cargo fmt --check                                      ✅
-cargo test --workspace                                 ✅
-cargo clippy --workspace --all-targets -- -D warnings  ✅
+cargo fmt --check
+cargo check --workspace
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 La CI GitHub n'est pas actuellement active sur le dépôt ; la validation complète reste donc exécutée manuellement par le mainteneur.
@@ -365,13 +421,13 @@ La CI GitHub n'est pas actuellement active sur le dépôt ; la validation compl�
 
 ## Statut
 
-**🚧 En cours — trois tranches structurées réalisées :**
+**🚧 En cours — quatre tranches structurées réalisées :**
 
 ```text
 ✅ session / configuration
 ✅ persistance / finalisation
 ✅ provider LLM
-🚧 outillage / MCP
+✅ outillage / MCP
 🚧 mappings ACP finaux
 🚧 audit systématique des Result<T, String>
 ```
@@ -491,7 +547,7 @@ L'ordre de travail retenu est désormais :
         ├── ✅ session / configuration
         ├── ✅ persistance / finalisation
         ├── ✅ provider LLM
-        ├── 🚧 outillage / MCP
+        ├── ✅ outillage / MCP
         └── 🚧 mappings ACP finaux
         ↓
 6. Tests d'intégration / système renforcés
@@ -518,33 +574,3 @@ Chaque chantier doit viser au moins l'un des bénéfices suivants :
 * faciliter les tests et la maintenance future.
 
 Les changements qui n'apportent aucun de ces bénéfices doivent être considérés comme optionnels et ne doivent pas être prioritaires face aux dettes listées ci-dessus.
-
----
-
-# 11. Point de reprise
-
-La branche `debt/structured-errors` constitue actuellement le point de reprise de la dette des erreurs structurées.
-
-Les prochaines étapes sont :
-
-```text
-outillage / MCP
-    ↓
-erreurs structurées MCP
-    ↓
-mappings ACP
-    ↓
-audit Result<T, String>
-    ↓
-tests d'intégration
-```
-
-Principe directeur :
-
-> Les erreurs doivent rester structurées aussi longtemps que possible dans le runtime.
-> La conversion en texte ne doit intervenir qu'à une frontière de présentation ou de protocole qui l'exige explicitement.
-
-```
-
-Source actuelle : `docs/DETTE.md` sur `debt/structured-errors`. 
-```
