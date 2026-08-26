@@ -1,4 +1,5 @@
 use std::fmt;
+use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
@@ -31,6 +32,14 @@ impl From<&str> for SessionId {
 
 impl AsRef<str> for SessionId {
     fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Deref for SessionId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         self.as_str()
     }
 }
@@ -70,6 +79,14 @@ impl From<&str> for TurnId {
 
 impl AsRef<str> for TurnId {
     fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl Deref for TurnId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
         self.as_str()
     }
 }
@@ -118,8 +135,46 @@ impl AsRef<str> for ToolCallId {
     }
 }
 
+impl Deref for ToolCallId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
 impl fmt::Display for ToolCallId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionId, ToolCallId, TurnId};
+
+    #[test]
+    fn identities_preserve_wire_string_representation() {
+        let session = SessionId::new("sess-1");
+        let turn = TurnId::new("turn-1");
+        let call = ToolCallId::new("call-1");
+
+        assert_eq!(session.as_str(), "sess-1");
+        assert_eq!(turn.as_str(), "turn-1");
+        assert_eq!(call.as_str(), "call-1");
+        assert_eq!(serde_json::to_string(&session).unwrap(), "\"sess-1\"");
+        assert_eq!(serde_json::to_string(&turn).unwrap(), "\"turn-1\"");
+        assert_eq!(serde_json::to_string(&call).unwrap(), "\"call-1\"");
+    }
+
+    #[test]
+    fn identities_are_distinct_types() {
+        fn needs_session(_: SessionId) {}
+        fn needs_turn(_: TurnId) {}
+        fn needs_call(_: ToolCallId) {}
+
+        needs_session(SessionId::new("same"));
+        needs_turn(TurnId::new("same"));
+        needs_call(ToolCallId::new("same"));
     }
 }
