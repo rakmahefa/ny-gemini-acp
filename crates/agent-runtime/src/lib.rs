@@ -18,20 +18,21 @@ pub use events::{
     TurnEventSink, TurnTermination,
 };
 pub use execution::{
-    AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError, AgentLoopOutcome,
-    AgentTurn, AgentTurnHandle, Cancellation, RuntimeError, ToolPermissionDecision,
-    ToolPermissionHandler, ToolPermissionRequest, TurnExecutionRequest, TurnExecutionResult,
-    TurnManager, TurnService, TurnServiceError, TurnState,
+    AgentActionError, AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError,
+    AgentLoopOutcome, AgentTurn, AgentTurnHandle, Cancellation, RuntimeError,
+    ToolPermissionDecision, ToolPermissionHandler, ToolPermissionRequest, TurnExecutionRequest,
+    TurnExecutionResult, TurnManager, TurnService, TurnServiceError, TurnState,
 };
 pub use identity::{SessionId, ToolCallId, TurnId};
 pub use prompt::{
     format_tool_call, format_tool_result, TOOL_CALL_CLOSE, TOOL_CALL_OPEN, TOOL_RESULT_PREFIX,
 };
 pub use providers::{
-    GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
-    NullLlmProvider, NullToolProvider, SharedLlmProvider, SharedToolProvider, ToolCallRequest,
-    ToolCallResult, ToolProvider, ToolServerConfig, ToolTransportKind,
+    GenerationOptions, LlmError, LlmModelInfo, LlmProvider, LlmProviderErrorKind, LlmStream,
+    ModelEvent, ModelRequest, NullLlmProvider, NullToolProvider, SharedLlmProvider,
+    SharedToolProvider, ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider,
+    ToolServerConfig, ToolTransportKind,
 };
 pub use runtime::{AgentRuntime, AppState, RuntimeConfig};
-pub use session::SessionManager;
+pub use session::{SessionManager, SessionToolConfigurationError};
 pub use tool_ui::{ToolUiKind, ToolUiModel, ToolUiStatus};

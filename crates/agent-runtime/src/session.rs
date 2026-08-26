@@ -1,44 +1,79 @@
 //! Session lifecycle and persistence.
-use crate::providers::{NullToolProvider, SharedToolProvider, ToolProvider, ToolServerConfig};
+use crate::providers::{
+    NullToolProvider, SharedToolProvider, ToolConfigurationError, ToolProvider, ToolServerConfig,
+};
 use crate::state::{Session, SessionMode, Store};
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
 pub const SESSION_ID_PREFIX: &str = "sess_";
 pub const MAX_TITLE_LENGTH: usize = 256;
+
+#[derive(Debug, thiserror::Error)]
+pub enum SessionToolConfigurationError {
+    #[error("session not found: {0}")]
+    SessionNotFound(String),
+    #[error(transparent)]
+    Tool(#[from] ToolConfigurationError),
+}
+
 #[derive(Clone)]
 pub struct SessionManager {
     store: Arc<Store>,
     tools: SharedToolProvider,
 }
+
 impl SessionManager {
     pub fn new(store: Arc<Store>) -> Self {
         Self::with_tool_provider(store, Arc::new(NullToolProvider))
     }
+
     pub fn with_tool_provider(store: Arc<Store>, tools: SharedToolProvider) -> Self {
         Self { store, tools }
     }
+
     pub fn store(&self) -> &Arc<Store> {
         &self.store
     }
+
     pub async fn tools_for(&self, id: &str) -> Arc<dyn ToolProvider> {
         self.tools.for_session(id).await
     }
+
     pub async fn clear_mcp(&self, id: &str) {
         self.tools.clear_session(id).await;
     }
+
+    /// Canonical typed MCP/session configuration contract for runtime callers.
+    pub async fn configure_mcp_typed(
+        &self,
+        id: &str,
+        servers: Vec<ToolServerConfig>,
+    ) -> std::result::Result<(), SessionToolConfigurationError> {
+        let session = self
+            .store
+            .get(id)
+            .await
+            .ok_or_else(|| SessionToolConfigurationError::SessionNotFound(id.to_string()))?;
+        self.tools
+            .configure_session(id, session.cwd, servers)
+            .await
+            .map_err(SessionToolConfigurationError::from)
+    }
+
+    /// ACP compatibility boundary: protocol callers receive a presentation string,
+    /// while the runtime keeps the canonical typed error above.
     pub async fn configure_mcp(
         &self,
         id: &str,
         servers: Vec<ToolServerConfig>,
     ) -> Result<(), String> {
-        let session = self
-            .store
-            .get(id)
+        self.configure_mcp_typed(id, servers)
             .await
-            .ok_or_else(|| format!("session introuvable: {id}"))?;
-        self.tools.configure_session(id, session.cwd, servers).await
+            .map_err(|error| error.to_string())
     }
+
     pub fn validate_id(id: &str) -> Result<()> {
         let Some(rest) = id.strip_prefix(SESSION_ID_PREFIX) else {
             bail!("identifiant de session invalide: préfixe attendu `{SESSION_ID_PREFIX}`");
@@ -52,6 +87,7 @@ impl SessionManager {
         }
         Ok(())
     }
+
     pub async fn validate_cwd(cwd: &Path) -> Result<()> {
         if !cwd.is_absolute() {
             bail!("le chemin de session doit être absolu");
@@ -64,6 +100,7 @@ impl SessionManager {
         }
         Ok(())
     }
+
     pub fn sanitize_title(text: &str) -> Option<String> {
         let title = text
             .replace(['\r', '\n'], " ")
@@ -85,6 +122,7 @@ impl SessionManager {
             Some(truncated)
         }
     }
+
     pub async fn create(
         &self,
         cwd: PathBuf,
@@ -102,6 +140,7 @@ impl SessionManager {
             .await
             .context("création de session")
     }
+
     pub async fn get(&self, id: &str) -> Result<Session> {
         Self::validate_id(id)?;
         self.store
@@ -109,12 +148,14 @@ impl SessionManager {
             .await
             .ok_or_else(|| anyhow::anyhow!("session introuvable: {id}"))
     }
+
     pub async fn list(&self, cwd: Option<&Path>) -> Result<Vec<Session>> {
         if let Some(cwd) = cwd {
             Self::validate_cwd(cwd).await?;
         }
         Ok(self.store.list(cwd).await)
     }
+
     pub async fn load(&self, id: &str, cwd: &Path) -> Result<Session> {
         Self::validate_id(id)?;
         Self::validate_cwd(cwd).await?;
@@ -124,9 +165,11 @@ impl SessionManager {
         }
         Ok(session)
     }
+
     pub async fn resume(&self, id: &str, cwd: &Path) -> Result<Session> {
         self.load(id, cwd).await
     }
+
     pub async fn set_title(&self, id: &str, title: &str) -> Result<()> {
         let title = Self::sanitize_title(title);
         self.get(id).await?;
@@ -135,6 +178,7 @@ impl SessionManager {
             .await
             .context("mise à jour du titre de session")
     }
+
     pub async fn set_title_from_prompt(&self, id: &str, prompt: &str) -> Result<()> {
         let title = Self::sanitize_title(prompt);
         if title.is_none() {
@@ -149,6 +193,7 @@ impl SessionManager {
             .await
             .context("initialisation du titre de session")
     }
+
     pub async fn set_mode(&self, id: &str, mode: SessionMode) -> Result<Session> {
         let mut updated = self.get(id).await?;
         self.store
@@ -158,10 +203,12 @@ impl SessionManager {
         updated.mode = mode;
         Ok(updated)
     }
+
     pub async fn fork(&self, id: &str) -> Result<Session> {
         self.get(id).await?;
         self.store.fork(id).await.context("fork de session")
     }
+
     pub async fn close(&self, id: &str) -> Result<bool> {
         Self::validate_id(id)?;
         let closed = self.store.close(id).await;
@@ -170,6 +217,7 @@ impl SessionManager {
         }
         Ok(closed)
     }
+
     pub async fn delete(&self, id: &str) -> Result<bool> {
         Self::validate_id(id)?;
         let deleted = self.store.delete(id).await;
@@ -179,6 +227,7 @@ impl SessionManager {
         Ok(deleted)
     }
 }
+
 #[cfg(test)]
 #[path = "test/session.rs"]
 mod tests;

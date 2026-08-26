@@ -1,7 +1,7 @@
 use super::follow_up::{request_action, FollowUpError, FollowUpOutcome};
 use agent_client_protocol::schema::v1::SessionId;
 use agent_client_protocol::{Client, ConnectionTo};
-use agent_runtime::{AgentActionHandler, Cancellation};
+use agent_runtime::{AgentActionError, AgentActionHandler, Cancellation};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -29,9 +29,11 @@ impl AgentActionHandler for AcpActionHandler {
         name: &str,
         arguments: Value,
         cancellation: Cancellation,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<String>, AgentActionError> {
         if !self.supports(name) {
-            return Err(format!("unsupported agent action: {name}"));
+            return Err(AgentActionError::InvalidInput(format!(
+                "unsupported agent action: {name}"
+            )));
         }
         let label = arguments
             .get("label")
@@ -56,9 +58,14 @@ impl AgentActionHandler for AcpActionHandler {
         {
             Ok(FollowUpOutcome::Selected(text)) => Ok(Some(text)),
             Ok(FollowUpOutcome::Rejected) => Ok(None),
-            Ok(FollowUpOutcome::Cancelled) => Err("FollowUp cancelled".to_owned()),
-            Err(FollowUpError::InvalidInput(message)) => Err(message.to_owned()),
-            Err(error) => Err(error.to_string()),
+            Ok(FollowUpOutcome::Cancelled) => Err(AgentActionError::Cancelled),
+            Err(FollowUpError::InvalidInput(message)) => {
+                Err(AgentActionError::InvalidInput(message.to_owned()))
+            }
+            Err(FollowUpError::Acp(message)) => Err(AgentActionError::Failed(message)),
+            Err(FollowUpError::UnexpectedOutcome(message)) => {
+                Err(AgentActionError::Failed(message))
+            }
         }
     }
 }

@@ -6,12 +6,13 @@ use serde_json::{json, Value};
 use tokio::sync::RwLock;
 
 use agent_runtime::{
-    ToolCallRequest, ToolCallResult, ToolProvider, ToolServerConfig, ToolUiKind, ToolUiModel,
+    ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider, ToolServerConfig,
+    ToolUiKind, ToolUiModel,
 };
 
 use crate::tools::contracts::ToolCancellation;
 use crate::tools::lifecycle::{bind_session_cancellation, unbind_session_cancellation};
-use crate::tools::mcp::{McpCatalog, McpServerConfig as ProviderMcpServerConfig};
+use crate::tools::mcp::{McpCatalog, McpError, McpServerConfig as ProviderMcpServerConfig};
 use crate::tools::registry::ToolRegistry;
 use crate::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
 
@@ -137,6 +138,19 @@ fn completed_ui_from_info(
     .with_locations(locations)
 }
 
+fn map_mcp_error(error: McpError) -> ToolConfigurationError {
+    match error {
+        McpError::Config(message) => ToolConfigurationError::InvalidConfiguration(message),
+        McpError::Transport { transport, message } => {
+            ToolConfigurationError::Transport { transport, message }
+        }
+        McpError::Protocol(message) => ToolConfigurationError::Protocol(message),
+        McpError::Remote { code, message } => ToolConfigurationError::Remote { code, message },
+        McpError::MessageTooLarge => ToolConfigurationError::MessageTooLarge,
+        McpError::PaginationLimit => ToolConfigurationError::PaginationLimit,
+    }
+}
+
 #[async_trait::async_trait]
 impl ToolProvider for DefaultToolProvider {
     async fn for_session(&self, session_id: &str) -> Arc<dyn ToolProvider> {
@@ -159,7 +173,7 @@ impl ToolProvider for DefaultToolProvider {
         session_id: &str,
         cwd: PathBuf,
         servers: Vec<ToolServerConfig>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ToolConfigurationError> {
         if servers.is_empty() {
             self.state.sessions.write().await.insert(
                 session_id.to_owned(),
@@ -177,7 +191,7 @@ impl ToolProvider for DefaultToolProvider {
             .collect::<Vec<_>>();
         let catalog = McpCatalog::from_configs(configs)
             .await
-            .map_err(|error| error.to_string())?;
+            .map_err(map_mcp_error)?;
         let mut registry = ToolRegistry::builtin();
         registry.register_mcp(Arc::new(catalog));
         self.state.sessions.write().await.insert(

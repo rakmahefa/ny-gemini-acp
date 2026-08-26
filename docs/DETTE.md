@@ -2,11 +2,9 @@
 
 ## Statut
 
-Ce document recense la dette technique identifiée sur la branche `chore/deep-audit-cleanup` et définit l'ordre de remboursement retenu pour la suite du projet.
+Ce document recense la dette technique identifiée sur la branche `chore/deep-audit-cleanup` et l'ordre de remboursement retenu.
 
-Les chantiers P1 de typage sémantique et de persistance ont été réalisés sur la branche `debt/semantic-typing`, validés localement avec `cargo fmt --check`, `cargo check --workspace` et `cargo test --workspace`, puis mergés dans `main`.
-
-L'objectif reste de traiter en priorité les dettes qui risquent de rendre les contrats internes plus difficiles à stabiliser ou qui augmentent fortement le coût des évolutions futures.
+Les chantiers de typage sémantique, persistance et orchestration des turns sont stabilisés et présents dans `main`. La branche `debt/structured-errors` a terminé le remboursement de la dette de gestion des erreurs structurées, avec validation complète locale.
 
 ---
 
@@ -16,19 +14,17 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 |---|---|---|---|
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
-| P2 | Dette d'orchestration des turns | ✅ Terminée | TurnService extrait, adaptateur découplé, tests et validations verts |
-| P2 | Dette des erreurs structurées | 🚧 Prochaine priorité | À traiter progressivement après orchestration |
-| P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
+| P2 | Dette d'orchestration des turns | ✅ Terminée | `TurnService` extrait, runtime découplé d'ACP |
+| P2 | Dette des erreurs structurées | ✅ Terminée | Contrats structurés + mappings ACP + audit des conversions terminés |
+| P2 | Dette de tests d'intégration/système | À renforcer | Prochaine dette prioritaire |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
-| P3 | CI automatisée | Hors priorité | Tests CI manuels par le mainteneur |
+| P3 | CI automatisée | Hors priorité | Validation manuelle par le mainteneur |
 
 ---
 
 # 2. Dette de typage sémantique — PRIORITÉ 1 ✅ TERMINÉE
 
-## Réalisé
-
-Les identités sémantiques centrales disposent maintenant de types forts :
+Les identités sémantiques centrales disposent de types forts :
 
 ```rust
 SessionId
@@ -36,63 +32,24 @@ TurnId
 ToolCallId
 ```
 
-Ils sont intégrés aux contrats du runtime et aux `SemanticEvent`, notamment `EventContext` et `ToolEventContext`.
+Elles sont intégrées aux contrats runtime et aux `SemanticEvent`, avec conversions protocolaires explicites aux frontières ACP.
 
-Les frontières ACP convertissent explicitement ces types vers leurs représentations protocolaires lorsque nécessaire, sans réintroduire les primitives dans le cœur du runtime.
-
-La représentation sérialisée des identités reste compatible avec les valeurs historiques grâce à des wrappers transparents `serde`.
-
-## Validation
+Validation historique :
 
 ```text
-cargo fmt --check   ✅
-cargo check --workspace   ✅
-cargo test --workspace    ✅
-cargo clippy --workspace --all-targets -- -D warnings   ✅
+cargo fmt --check                                      ✅
+cargo check --workspace                                ✅
+cargo test --workspace                                 ✅
+cargo clippy --workspace --all-targets -- -D warnings  ✅
 ```
-
-## Limite volontaire
-
-Les types `ToolName`, `ModelId` et `ServerName` restent à envisager ultérieurement si leur introduction apporte une protection réelle sans sur-typer les contrats.
-
-## Statut
-
-**✅ Terminé et mergé dans `main`.**
 
 ---
 
 # 3. Dette de persistance — PRIORITÉ 1 ✅ TERMINÉE
 
-## Réalisé
+Le modèle de persistance a été renforcé autour des écritures atomiques session/snapshot, du `sync_all()`, du nettoyage des temporaires orphelins, de la cohérence du cache live et du contrôle de génération contre les tours obsolètes.
 
-Le modèle de persistance a été renforcé autour des points suivants :
-
-- écritures session atomiques ;
-- écritures snapshot atomiques ;
-- `sync_all()` avant remplacement du fichier final ;
-- nettoyage des fichiers temporaires orphelins au démarrage ;
-- cohérence du cache live après une persistance réussie ;
-- récupération des sentinelles `.busy` orphelines lors du redémarrage ;
-- conservation du contrôle de génération pour éviter les tours obsolètes ;
-- tests couvrant les écritures atomiques et les scénarios de récupération concernés.
-
-Le cache live n'est plus considéré comme modifié avec succès tant que la persistance correspondante n'a pas elle-même réussi.
-
-## Modèle retenu
-
-La solution actuelle reste volontairement simple :
-
-```text
-état runtime
-   ↓
-persistance atomique
-   ↓
-fichier session / snapshot
-```
-
-Une journalisation complète ou une transaction multi-fichiers pourra être étudiée ultérieurement seulement si le modèle d'utilisation réel la justifie.
-
-## Validation
+Validation historique :
 
 ```text
 cargo fmt --check   ✅
@@ -100,147 +57,210 @@ cargo check --workspace   ✅
 cargo test --workspace    ✅
 ```
 
-## Statut
-
-**✅ Terminé et mergé dans `main`.**
-
 ---
 
 # 4. Dette d'orchestration des turns — PRIORITÉ 2 ✅ TERMINÉE
 
-## Constat initial
+Le traitement des turns a été déplacé vers `agent-runtime::TurnService` en conservant une frontière nette entre runtime et protocole ACP.
 
-Le `acp-adaptor` possédait un câblage important autour du traitement d'un prompt : prise de possession du turn, création du transport sémantique, projection ACP, contexte interactif et remise de la réponse.
-
-## Remboursement réalisé sur `debt/turn-orchestration`
-
-Le chantier a été traité en conservant une frontière nette entre runtime et protocole :
-
-- création de `agent_runtime::TurnService` ;
-- `TurnService` intégré à la composition root `AppState` ;
-- exécution provider-neutral déplacée de l'adaptateur vers `agent-runtime` ;
-- création et configuration de `AgentLoop` centralisées dans le service ;
-- terminalisation `SemanticEvent` regroupée dans le service ;
-- finalisation/persistance `Store::end_turn` regroupée dans le service ;
-- conservation des `AgentActionHandler` et `ToolPermissionHandler` comme dépendances injectées ;
-- suppression de l'ancien `TurnGuard` devenu redondant ;
-- extraction de l'orchestration ACP restante vers `prompt::handle_prompt` ;
-- `acp-adaptor/src/agent.rs` réduit au routage des requêtes/notifications et au délégateur de prompt ;
-- création du `turn_id` et du transport sémantique différée jusqu'à l'acceptation effective du turn ;
-- introduction de `TurnExecutionRequest` et d'un contrat explicite pour le prompt builder, sans contourner Clippy ;
-- ajout d'un test runtime couvrant `provider → AgentLoop → SemanticEvent lifecycle → Store persistence`.
-
-## Découpage final
+Le découpage final est :
 
 ```text
 ACP request
     ↓
 acp-adaptor
     ├── routage ACP
-    └── prompt::handle_prompt
-            ├── turn ownership
-            ├── projection ACP
-            ├── interaction handlers
-            └── ACP response
-                    ↓
-             agent-runtime::TurnService
-                    ├── AgentLoop
-                    ├── SemanticEvent lifecycle
-                    ├── provider/tool execution
-                    └── Store::end_turn
+    └── orchestration de présentation
+            ↓
+     agent-runtime::TurnService
+            ├── AgentLoop
+            ├── SemanticEvent lifecycle
+            ├── provider/tool execution
+            └── Store::end_turn
 ```
 
-Le runtime reste indépendant d'ACP. `TurnService` ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
-
-## Garanties de test
-
-La couverture est organisée autour de deux barrières complémentaires :
-
-```text
-provider
-   ↓
-TurnService
-   ↓
-SemanticEvent lifecycle
-   ↓
-Store persistence
-```
-
-et :
-
-```text
-SemanticEvent
-   ↓
-sequence / turn integrity
-   ↓
-ACP projection
-```
-
-Les tests de projection vérifient notamment les ruptures de séquence, les changements de turn inattendus et la conservation de l'identité des tool calls dans le modèle de présentation.
-
-## Validation finale
-
-Validation locale confirmée :
-
-```text
-cargo fmt --check   ✅
-cargo check --workspace   ✅
-cargo test --workspace    ✅
-cargo clippy --workspace --all-targets -- -D warnings   ✅
-```
-
-## Statut
-
-**✅ Terminé sur `debt/turn-orchestration`.**
-
-La branche peut maintenant être revue puis mergée dans `main`. La prochaine dette prioritaire est celle des erreurs structurées.
+Le runtime ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
 
 ---
 
-# 5. Dette de gestion des erreurs — PRIORITÉ 2 🚧 PROCHAINE PRIORITÉ
+# 5. Dette de gestion des erreurs — PRIORITÉ 2 ✅ TERMINÉE
 
-## Constat
+## Objectif
 
-Plusieurs modèles d'erreur coexistent :
+Les erreurs métier/runtime restent structurées jusqu'à la frontière applicative. Les conversions en `String` ou `AcpError` sont réservées aux façades protocolaires qui les nécessitent réellement.
 
-- `anyhow` pour certaines couches d'application ;
-- `thiserror` pour certains contrats ;
-- `Result<T, String>` pour certaines interfaces ;
-- erreurs ACP aux frontières protocolaire ;
-- erreurs provider spécifiques.
+## 5.1 Session / configuration ✅
 
-## Risque
+Le runtime utilise désormais `ToolConfigurationError` et `SessionToolConfigurationError`.
 
-Les `String` utilisés comme erreurs perdent de l'information structurée et rendent plus difficiles le traitement programmatique, les tests précis et le mapping vers les couches supérieures.
-
-## Direction retenue
-
-Introduire progressivement des erreurs métier typées, notamment autour de :
+Le contrat canonique est :
 
 ```text
-Session
-Persistence
 Tool configuration
-Tool execution
-Provider
-Turn lifecycle
+    ↓
+ToolConfigurationError
+    ↓
+SessionToolConfigurationError
+    ↓
+frontière applicative / ACP
 ```
 
-Puis convertir explicitement ces erreurs aux frontières applicatives et ACP.
+`configure_mcp_typed()` conserve l'erreur structurée. `configure_mcp()` reste une façade de compatibilité ACP qui réalise volontairement la conversion textuelle au bord du système.
 
-## Priorité
+## 5.2 Persistance / finalisation ✅
 
-**P2 — prochaine dette à rembourser.**
+La finalisation d'un tour distingue explicitement :
+
+```text
+AgentLoopError
+StoreError
+AgentAndPersistence { agent, persistence }
+```
+
+`TurnServiceError` conserve l'erreur primaire et signale séparément une défaillance de persistance lorsque les deux surviennent.
+
+## 5.3 Provider LLM ✅
+
+Le runtime expose `LlmProviderErrorKind` :
+
+```text
+Authentication
+InvalidRequest
+ModelUnavailable
+Network
+Upstream
+StreamDivergence
+Upload
+```
+
+Le mapping Gemini préserve ces catégories au lieu de réduire systématiquement les erreurs à `Provider(String)`.
+
+## 5.4 Outillage / MCP ✅
+
+`ToolConfigurationError` distingue :
+
+```text
+InvalidConfiguration
+Transport
+Protocol
+Remote { code, message }
+MessageTooLarge
+PaginationLimit
+Provider
+```
+
+Le mapping `McpError → ToolConfigurationError` conserve le code JSON-RPC, la nature du transport et les erreurs de protocole au niveau runtime.
+
+## 5.5 Actions interactives ACP ✅
+
+Les actions interactives sont structurées avec `AgentActionError` :
+
+```text
+InvalidInput
+Cancelled
+Rejected
+Failed
+```
+
+L'adaptateur ACP traduit explicitement les `FollowUpError` vers ce contrat runtime. Les erreurs d'action ne sont donc plus injectées comme une chaîne nue dans `AgentLoopError::Action`.
+
+## 5.6 Mapping ACP final ✅
+
+Les mappings ACP finaux sont réalisés.
+
+`acp-adaptor/src/prompt/turn.rs` conserve notamment :
+
+```text
+AgentLoopError
+    ↓
+agent_error_kind()
+    ↓
+AcpError + données machine-readable
+```
+
+Les erreurs LLM exposent également `llm_kind`, et les combinaisons agent/persistance conservent les deux diagnostics.
+
+Les terminaisons protocolaires (`Cancelled`, `MaxRounds`) sont séparées des erreurs internes qui doivent rester des erreurs ACP structurées plutôt que devenir silencieusement un `StopReason`.
+
+## 5.7 Audit systématique des `Result<T, String>` ✅ TERMINÉ
+
+L'audit a été réalisé avec la règle suivante :
+
+```text
+runtime / métier
+    → erreur structurée
+
+provider adapter
+    → erreur structurée provider-neutral
+
+ACP / présentation
+    → AcpError ou String uniquement lorsque le contrat l'impose
+```
+
+Une occurrence textuelle n'a pas été supprimée mécaniquement : elle a été classifiée selon son rôle.
+
+### Résultats
+
+1. Le chemin actif `acp-adaptor/src/prompt/action_typed.rs` utilise désormais :
+
+```rust
+Result<Option<String>, AgentActionError>
+```
+
+2. L'ancien `acp-adaptor/src/prompt/action.rs`, qui conservait `Result<Option<String>, String>`, était devenu un fichier de code mort : `prompt/mod.rs` redirige explicitement le module `action` vers `action_typed.rs`. Le fichier obsolète a donc été supprimé au lieu de maintenir deux contrats concurrents.
+
+3. `SessionManager::configure_mcp()` reste volontairement en :
+
+```rust
+Result<(), String>
+```
+
+Cette occurrence est une façade de compatibilité ACP documentée. Le contrat runtime canonique est `configure_mcp_typed()`, qui expose `SessionToolConfigurationError`. La conversion vers `String` est effectuée uniquement au bord du système.
+
+Aucune conversion `Result<T, String>` supplémentaire n'est conservée dans les chemins runtime/provider concernés par ce chantier.
+
+---
+
+## Validation de la branche
+
+Validation locale complète confirmée :
+
+```text
+cargo fmt --check                                      ✅
+cargo check --workspace                                ✅
+cargo test --workspace                                 ✅
+cargo clippy --workspace --all-targets -- -D warnings  ✅
+```
+
+La CI GitHub n'est pas actuellement active sur le dépôt ; la validation complète reste donc manuelle.
+
+---
+
+## Statut final de la dette d'erreurs
+
+```text
+✅ session / configuration
+✅ persistance / finalisation
+✅ provider LLM
+✅ outillage / MCP
+✅ actions interactives ACP
+✅ mappings ACP finaux
+✅ audit Result<T, String>
+✅ cargo fmt --check
+✅ cargo check --workspace
+✅ cargo test --workspace
+✅ cargo clippy --workspace --all-targets -- -D warnings
+```
+
+**La dette des erreurs structurées est entièrement remboursée et validée localement.**
 
 ---
 
 # 6. Dette de tests d'intégration — PRIORITÉ 2
 
-## Constat
+Le projet possède une base importante de tests unitaires et de tests de cycle de vie Semantic Events.
 
-Le projet dispose désormais d'une base importante de tests unitaires, notamment pour la machine d'état Semantic Events et le cycle de vie des outils.
-
-Cependant, des tests de bout en bout de la chaîne complète restent utiles à mesure que le système devient distribué entre plusieurs crates et couches :
+Il reste utile de renforcer progressivement les tests de chaîne complète :
 
 ```text
 provider
@@ -250,9 +270,7 @@ provider
 → ACP
 ```
 
-## Direction retenue
-
-Renforcer progressivement la pyramide de validation :
+Ordre cible :
 
 ```text
 unit tests
@@ -261,25 +279,15 @@ protocol tests
 end-to-end tests
 ```
 
-La validation locale et manuelle reste la méthode de validation principale du projet pour le moment.
-
-## Priorité
-
-**P2 — à renforcer après la dette des erreurs structurées.**
+**Priorité : P2, prochaine dette à rembourser.**
 
 ---
 
 # 7. CI — NON PRIORITAIRE / VALIDATION MANUELLE
 
-## Décision du projet
+La CI automatisée est volontairement différée.
 
-La CI automatisée n'est **pas considérée comme une dette prioritaire à rembourser actuellement**.
-
-Les tests et vérifications du projet sont volontairement exécutés manuellement par le mainteneur.
-
-## Validation actuelle
-
-La validation doit continuer à couvrir au minimum les vérifications pertinentes du workspace :
+Validation minimale actuelle :
 
 ```text
 cargo fmt --check
@@ -288,31 +296,15 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-ainsi que les audits spécifiques du dépôt lorsque nécessaire.
-
-## Priorité
-
-**P3 — volontairement différée.**
+**Priorité : P3.**
 
 ---
 
 # 8. Sandbox shell — DIFFÉRÉ VOLONTAIREMENT
 
-## Constat
+Le sandbox shell utilise encore des heuristiques pour classifier certaines commandes dangereuses.
 
-Le sandbox shell actuel utilise encore des heuristiques pour classifier certaines commandes et chaînes dangereuses.
-
-Cette implémentation devra être renforcée à terme, notamment pour une analyse plus correcte de la syntaxe shell.
-
-## Décision du projet
-
-Le sandbox shell **n'est pas un chantier prioritaire dans la phase actuelle**.
-
-Il doit être conservé, testé et surveillé, mais son refactor de fond est explicitement reporté afin de ne pas disperser l'effort de stabilisation du runtime.
-
-## Futur
-
-Lorsque ce chantier sera ouvert, la direction privilégiée sera :
+La direction future privilégiée reste :
 
 ```text
 commande brute
@@ -322,17 +314,11 @@ commande brute
 → décision d'exécution
 ```
 
-plutôt qu'une dépendance excessive à des recherches textuelles simples.
-
-## Priorité
-
-**P3 — à traiter plus tard.**
+**Priorité : P3.**
 
 ---
 
 # 9. Stratégie de remboursement
-
-L'ordre de travail retenu est désormais :
 
 ```text
 ✅ 1. Dette de typage sémantique
@@ -343,7 +329,14 @@ L'ordre de travail retenu est désormais :
         ↓
 ✅ 4. Orchestration des turns
         ↓
-🚧 5. Erreurs structurées
+✅ 5. Erreurs structurées
+        ├── ✅ session / configuration
+        ├── ✅ persistance / finalisation
+        ├── ✅ provider LLM
+        ├── ✅ outillage / MCP
+        ├── ✅ actions interactives ACP
+        ├── ✅ mappings ACP finaux
+        └── ✅ audit Result<T, String>
         ↓
 6. Tests d'intégration / système renforcés
         ↓
@@ -352,7 +345,7 @@ L'ordre de travail retenu est désormais :
 8. CI automatisée
 ```
 
-Cet ordre peut être révisé si un bug concret ou un changement architectural révèle une priorité supérieure.
+Cet ordre peut être révisé lorsqu'un bug concret ou un changement architectural révèle une priorité supérieure.
 
 ---
 
@@ -362,16 +355,10 @@ La dette technique ne doit pas être remboursée uniquement par refactorisation 
 
 Chaque chantier doit viser au moins l'un des bénéfices suivants :
 
-- réduire une classe d'erreurs impossible à détecter autrement ;
-- clarifier un contrat architectural ;
-- améliorer la robustesse des états persistés ;
-- réduire le couplage entre couches ;
-- faciliter les tests et la maintenance future.
+* réduire une classe d'erreurs impossible à détecter autrement ;
+* clarifier un contrat architectural ;
+* améliorer la robustesse des états persistés ;
+* réduire le couplage entre couches ;
+* faciliter les tests et la maintenance future.
 
-Les changements qui n'apportent aucun de ces bénéfices doivent être considérés comme optionnels et ne doivent pas être prioritaires face aux dettes listées ci-dessus.
-
----
-
-# 11. Point de reprise
-
-La prochaine étape est la dette des erreurs structurées. La branche `debt/turn-orchestration` peut être revue puis mergée dans `main` avant d'ouvrir le prochain chantier.
+Les changements qui n'apportent aucun de ces bénéfices restent optionnels et ne doivent pas passer avant les dettes prioritaires.

@@ -18,6 +18,18 @@ const COMPACTION_THRESHOLD_CHARS: usize = CONTEXT_WINDOW_CHARS * 9 / 10;
 const EMERGENCY_COMPACTION_CHARS: usize = CONTEXT_WINDOW_CHARS * 7 / 10;
 const PRESERVE_TURNS: usize = 10;
 
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum AgentActionError {
+    #[error("invalid agent action input: {0}")]
+    InvalidInput(String),
+    #[error("agent action cancelled")]
+    Cancelled,
+    #[error("agent action rejected: {0}")]
+    Rejected(String),
+    #[error("agent action failed: {0}")]
+    Failed(String),
+}
+
 #[async_trait::async_trait]
 pub trait AgentActionHandler: Send + Sync {
     fn supports(&self, name: &str) -> bool;
@@ -28,7 +40,7 @@ pub trait AgentActionHandler: Send + Sync {
         name: &str,
         arguments: serde_json::Value,
         cancellation: Cancellation,
-    ) -> Result<Option<String>, String>;
+    ) -> Result<Option<String>, AgentActionError>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,7 +104,7 @@ pub enum AgentLoopError {
     #[error("semantic event emission was rejected")]
     SemanticEventRejected,
     #[error("agent action failed: {0}")]
-    Action(String),
+    Action(#[source] AgentActionError),
 }
 
 /// Provider-neutral model/tool orchestration. Host-specific permission policy is injected separately.
@@ -216,7 +228,11 @@ impl AgentLoop {
                                 continue 'rounds;
                             }
                             Ok(None) => continue,
-                            Err(_error) if cancellation.is_cancelled() => {
+                            Err(AgentActionError::Cancelled) if cancellation.is_cancelled() => {
+                                let _ = sink.turn_cancelled();
+                                return Err(AgentLoopError::Cancelled);
+                            }
+                            Err(AgentActionError::Cancelled) => {
                                 let _ = sink.turn_cancelled();
                                 return Err(AgentLoopError::Cancelled);
                             }

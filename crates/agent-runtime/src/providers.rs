@@ -25,6 +25,17 @@ pub enum ModelEvent {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmProviderErrorKind {
+    Authentication,
+    InvalidRequest,
+    ModelUnavailable,
+    Network,
+    Upstream,
+    StreamDivergence,
+    Upload,
+}
+
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum LlmError {
     #[error("invalid model request: {0}")]
@@ -35,8 +46,29 @@ pub enum LlmError {
     Unavailable(String),
     #[error("provider request failed: {0}")]
     Provider(String),
+    #[error("provider network failure: {0}")]
+    Network(String),
+    #[error("provider stream diverged")]
+    StreamDivergence,
+    #[error("provider image upload failed: {0}")]
+    Upload(String),
     #[error("request cancelled")]
     Cancelled,
+}
+
+impl LlmError {
+    pub fn kind(&self) -> Option<LlmProviderErrorKind> {
+        match self {
+            Self::InvalidRequest(_) => Some(LlmProviderErrorKind::InvalidRequest),
+            Self::Authentication(_) => Some(LlmProviderErrorKind::Authentication),
+            Self::Unavailable(_) => Some(LlmProviderErrorKind::ModelUnavailable),
+            Self::Provider(_) => Some(LlmProviderErrorKind::Upstream),
+            Self::Network(_) => Some(LlmProviderErrorKind::Network),
+            Self::StreamDivergence => Some(LlmProviderErrorKind::StreamDivergence),
+            Self::Upload(_) => Some(LlmProviderErrorKind::Upload),
+            Self::Cancelled => None,
+        }
+    }
 }
 
 pub type LlmStream = mpsc::Receiver<Result<ModelEvent, LlmError>>;
@@ -64,6 +96,24 @@ pub trait LlmProvider: Send + Sync {
     async fn stream(&self, request: ModelRequest) -> Result<LlmStream, LlmError>;
     async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, LlmError>;
     fn model_info(&self, model: &str) -> LlmModelInfo;
+}
+
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum ToolConfigurationError {
+    #[error("tool configuration is invalid: {0}")]
+    InvalidConfiguration(String),
+    #[error("tool transport '{transport}' failed: {message}")]
+    Transport { transport: String, message: String },
+    #[error("tool protocol error: {0}")]
+    Protocol(String),
+    #[error("tool provider rejected request: code={code}, message={message}")]
+    Remote { code: i64, message: String },
+    #[error("tool response exceeded the configured message limit")]
+    MessageTooLarge,
+    #[error("tool pagination exceeded the configured page limit")]
+    PaginationLimit,
+    #[error("tool provider configuration failed: {0}")]
+    Provider(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -124,7 +174,7 @@ impl ToolServerConfig {
 
 #[derive(Debug)]
 pub struct ToolCallRequest {
-    /// Canonical model/tool invocation identity. Providers must preserve it for UX correlation.
+    /// Canonical semantic model/tool invocation identity. Providers must preserve it for UX correlation.
     pub call_id: String,
     pub session_id: String,
     pub name: String,
@@ -161,7 +211,7 @@ pub trait ToolProvider: Send + Sync {
         session_id: &str,
         cwd: PathBuf,
         servers: Vec<ToolServerConfig>,
-    ) -> Result<(), String>;
+    ) -> Result<(), ToolConfigurationError>;
     async fn clear_session(&self, session_id: &str);
     fn definitions(&self) -> Vec<Value>;
     fn prompt_fragment(&self) -> Option<String>;
@@ -185,7 +235,7 @@ impl ToolProvider for NullToolProvider {
         _: &str,
         _: PathBuf,
         _: Vec<ToolServerConfig>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ToolConfigurationError> {
         Ok(())
     }
     async fn clear_session(&self, _: &str) {}

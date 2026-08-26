@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentLoopError, TurnExecutionRequest};
+use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -49,13 +49,68 @@ fn agent_error_kind(error: &AgentLoopError) -> &'static str {
     }
 }
 
+fn llm_error_kind(error: &LlmError) -> &'static str {
+    match error.kind() {
+        Some(LlmProviderErrorKind::Authentication) => "authentication",
+        Some(LlmProviderErrorKind::InvalidRequest) => "invalid_request",
+        Some(LlmProviderErrorKind::ModelUnavailable) => "model_unavailable",
+        Some(LlmProviderErrorKind::Network) => "network",
+        Some(LlmProviderErrorKind::Upstream) => "upstream",
+        Some(LlmProviderErrorKind::StreamDivergence) => "stream_divergence",
+        Some(LlmProviderErrorKind::Upload) => "upload",
+        None => "cancelled",
+    }
+}
+
 fn agent_error_response(session_id: &str, error: &AgentLoopError) -> AcpError {
-    AcpError::internal_error().data(serde_json::json!({
+    let mut data = serde_json::json!({
         "error": "agent_loop_failed",
         "kind": agent_error_kind(error),
         "message": error.to_string(),
         "session_id": session_id,
-    }))
+    });
+
+    if let AgentLoopError::Llm(llm_error) = error {
+        data["llm_kind"] = serde_json::Value::String(llm_error_kind(llm_error).to_owned());
+    }
+
+    AcpError::internal_error().data(data)
+}
+
+fn turn_service_error_response(
+    session_id: &str,
+    error: &agent_runtime::TurnServiceError,
+) -> AcpError {
+    match error {
+        agent_runtime::TurnServiceError::Agent(agent_error) => {
+            agent_error_response(session_id, agent_error)
+        }
+        agent_runtime::TurnServiceError::Persistence(persistence) => {
+            AcpError::internal_error().data(serde_json::json!({
+                "error": "turn_finalization_failed",
+                "kind": "persistence",
+                "message": persistence.to_string(),
+                "session_id": session_id,
+            }))
+        }
+        agent_runtime::TurnServiceError::AgentAndPersistence {
+            agent,
+            persistence,
+        } => {
+            let mut data = serde_json::json!({
+                "error": "turn_failed_and_finalization_failed",
+                "kind": "agent_and_persistence",
+                "agent_error_kind": agent_error_kind(agent),
+                "agent_message": agent.to_string(),
+                "persistence_message": persistence.to_string(),
+                "session_id": session_id,
+            });
+            if let AgentLoopError::Llm(llm_error) = agent {
+                data["llm_kind"] = serde_json::Value::String(llm_error_kind(llm_error).to_owned());
+            }
+            AcpError::internal_error().data(data)
+        }
+    }
 }
 
 pub async fn run_turn(
@@ -151,19 +206,26 @@ pub async fn run_turn(
             }
             Ok(PromptResponse::new(StopReason::EndTurn))
         }
-        Err(agent_runtime::TurnServiceError::Agent(agent_error)) => {
-            let kind = agent_error_kind(&agent_error);
-            span.record("agent_error_kind", kind);
-            span.record("outcome", kind);
-            if let AgentLoopError::MaxRounds(limit) = &agent_error {
-                tracing::error!(session=%session_id, error_kind=%kind, max_rounds=*limit, error=%agent_error, "agent loop exhausted its round limit");
-            } else {
-                tracing::error!(session=%session_id, error_kind=%kind, error=%agent_error, "agent loop failed");
+        Err(error) => {
+            let outcome = match &error {
+                agent_runtime::TurnServiceError::Agent(agent_error) => agent_error_kind(agent_error),
+                agent_runtime::TurnServiceError::Persistence(_) => "persistence",
+                agent_runtime::TurnServiceError::AgentAndPersistence { .. } => {
+                    "agent_and_persistence"
+                }
+            };
+            span.record("outcome", outcome);
+            if let agent_runtime::TurnServiceError::Agent(agent_error) = &error {
+                span.record("agent_error_kind", agent_error_kind(agent_error));
             }
-            match map_agent_error(&agent_error) {
-                Some(reason) => Ok(PromptResponse::new(reason)),
-                None => Err(agent_error_response(&session_id.to_string(), &agent_error)),
+            tracing::error!(session=%session_id, error=%error, "turn execution failed");
+
+            if let agent_runtime::TurnServiceError::Agent(agent_error) = &error {
+                if let Some(reason) = map_agent_error(agent_error) {
+                    return Ok(PromptResponse::new(reason));
+                }
             }
+            Err(turn_service_error_response(&session_id.to_string(), &error))
         }
     }
 }
@@ -178,6 +240,7 @@ fn build_prompt_for_agent_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use agent_runtime::AgentActionError;
 
     #[test]
     fn only_protocol_level_terminations_map_to_stop_reasons() {
@@ -200,7 +263,7 @@ mod tests {
             None
         );
         assert_eq!(
-            map_agent_error(&AgentLoopError::Action("boom".into())),
+            map_agent_error(&AgentLoopError::Action(AgentActionError::Failed("boom".into()))),
             None
         );
     }
@@ -216,9 +279,26 @@ mod tests {
             agent_error_kind(&AgentLoopError::SemanticEventRejected),
             "semantic_event_rejected"
         );
+        assert_eq!(agent_error_kind(&AgentLoopError::MaxRounds(3)), "max_rounds");
+    }
+
+    #[test]
+    fn llm_error_kind_is_stable_and_machine_readable() {
         assert_eq!(
-            agent_error_kind(&AgentLoopError::MaxRounds(3)),
-            "max_rounds"
+            llm_error_kind(&LlmError::Authentication("expired".into())),
+            "authentication"
+        );
+        assert_eq!(
+            llm_error_kind(&LlmError::Unavailable("gemini-3".into())),
+            "model_unavailable"
+        );
+        assert_eq!(
+            llm_error_kind(&LlmError::Network("timeout".into())),
+            "network"
+        );
+        assert_eq!(
+            llm_error_kind(&LlmError::StreamDivergence),
+            "stream_divergence"
         );
     }
 }

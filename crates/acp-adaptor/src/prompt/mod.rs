@@ -1,3 +1,4 @@
+#[path = "action_typed.rs"]
 mod action;
 pub mod build;
 pub mod content;
