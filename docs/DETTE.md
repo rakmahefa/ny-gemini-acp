@@ -16,7 +16,7 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 |---|---|---|---|
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
-| P2 | Dette d'orchestration des turns | 🔜 Prochaine priorité | Prochain chantier |
+| P2 | Dette d'orchestration des turns | 🚧 En cours | Service runtime extrait ; intégration complète à poursuivre |
 | P2 | Dette des erreurs structurées | À traiter progressivement | Après orchestration |
 | P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
@@ -105,29 +105,54 @@ cargo test --workspace    ✅
 
 ---
 
-# 4. Dette d'orchestration des turns — PRIORITÉ 2 🔜 PROCHAINE
+# 4. Dette d'orchestration des turns — PRIORITÉ 2 🚧 EN COURS
 
 ## Constat
 
-Le `acp-adaptor` possède déjà des handlers séparés, mais le câblage du traitement d'un prompt reste concentré dans la composition ACP : création du turn, abonnement aux Semantic Events, projection ACP, contexte interactif, exécution, terminaison et conversion d'erreurs.
+Le `acp-adaptor` possède déjà des handlers séparés, mais le câblage du traitement d'un prompt restait concentré dans la composition ACP : création du turn, abonnement aux Semantic Events, projection ACP, contexte interactif, exécution, terminaison et conversion d'erreurs.
 
-## Risque
+## Travail réalisé sur `debt/turn-orchestration`
 
-À mesure que les fonctionnalités augmentent, la composition ACP peut devenir trop fortement couplée au workflow interne d'un turn.
+Le premier niveau d'extraction a été réalisé :
 
-## Direction retenue
+- création de `agent_runtime::TurnService` ;
+- exécution provider-neutral déplacée de l'adaptateur vers `agent-runtime` ;
+- création et configuration de `AgentLoop` centralisées dans le service ;
+- gestion du terminal lifecycle regroupée dans le service ;
+- finalisation/persistance `Store::end_turn` regroupée dans le service ;
+- conservation des `AgentActionHandler` et `ToolPermissionHandler` comme dépendances injectées ;
+- résultat de runtime conservé séparément des notifications ACP ;
+- suppression de l'ancien `TurnGuard` de l'adaptateur devenu redondant.
 
-Faire évoluer progressivement cette orchestration vers un service de turn clairement identifiable, capable de centraliser :
+Le découpage obtenu est maintenant :
 
 ```text
-création du turn
-→ lifecycle sémantique
-→ exécution provider
-→ projection
-→ terminalisation
+ACP request
+    ↓
+acp-adaptor
+    ├── validation / préparation
+    ├── titre / images
+    ├── handlers interactifs ACP
+    └── projection ACP
+            ↓
+      agent-runtime::TurnService
+            ├── AgentLoop
+            ├── SemanticEvent lifecycle
+            ├── provider/tool execution
+            └── Store::end_turn
 ```
 
-Le nouveau service ne doit pas absorber la responsabilité du protocole ACP. Il doit rester provider-neutral et runtime-centric, tandis que `acp-adaptor` demeure une couche de projection/protocole.
+Le runtime reste indépendant d'ACP et le service ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
+
+## Ce qui reste à faire
+
+Le chantier n'est pas encore considéré comme terminé. Il reste à :
+
+- réduire davantage le câblage de turn dans `acp-adaptor/src/agent.rs` ;
+- déterminer si `TurnService` doit devenir une dépendance explicite de `AppState` plutôt que d'être construit au niveau du prompt handler ;
+- ajouter un test d'intégration runtime couvrant `provider → runtime → SemanticEvent` ;
+- ajouter au moins un test de frontière couvrant `SemanticEvent → projection ACP` ;
+- valider localement `cargo fmt --check`, `cargo check --workspace` et `cargo test --workspace` avant merge.
 
 ## Critères de réussite
 
@@ -140,7 +165,7 @@ Le nouveau service ne doit pas absorber la responsabilité du protocole ACP. Il 
 
 ## Priorité
 
-**P2 — prochain chantier.**
+**P2 — chantier actuellement ouvert sur `debt/turn-orchestration`.**
 
 ---
 
@@ -287,7 +312,7 @@ L'ordre de travail retenu est désormais :
         ↓
 ✅ 3. Dette de persistance
         ↓
-🔜 4. Orchestration des turns
+🚧 4. Orchestration des turns
         ↓
 5. Erreurs structurées
         ↓
@@ -320,10 +345,20 @@ Les changements qui n'apportent aucun de ces bénéfices doivent être considér
 
 # 11. Point de reprise
 
-La prochaine session de travail doit repartir de `main` et ouvrir une nouvelle branche dédiée à :
+La prochaine étape doit rester sur `debt/turn-orchestration` et poursuivre l'extraction sans ouvrir la dette des erreurs structurées en parallèle.
 
 ```text
-P2 — orchestration des turns
+1. stabiliser TurnService
+        ↓
+2. intégrer TurnService au runtime composition root
+        ↓
+3. alléger acp-adaptor/src/agent.rs
+        ↓
+4. ajouter tests runtime + projection
+        ↓
+5. cargo fmt --check
+6. cargo check --workspace
+7. cargo test --workspace
+        ↓
+8. merge dans main
 ```
-
-Le premier objectif sera d'identifier précisément la composition ACP actuelle du prompt/turn et d'extraire un service runtime de turn sans casser les contrats `SemanticEvent` déjà stabilisés.
