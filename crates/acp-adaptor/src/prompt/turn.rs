@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::AgentLoopError;
+use agent_runtime::{AgentLoopError, TurnExecutionRequest};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -121,17 +121,19 @@ pub async fn run_turn(
 
     let result = ctx
         .turn_service
-        .run_started(
-            sid,
+        .run_started(TurnExecutionRequest {
+            session_id: sid.to_string(),
             session,
             generation,
-            &refs,
-            ctx.cancellation.clone(),
-            ctx.semantic,
-            Some(action_handler),
-            Some(permission_handler),
-            |session, provider| crate::prompt::build::build_prompt(session, Some(provider)),
-        )
+            references: refs,
+            cancellation: ctx.cancellation.clone(),
+            semantic: ctx.semantic,
+            action_handler: Some(action_handler),
+            permission_handler: Some(permission_handler),
+            build_prompt: |session, provider| {
+                crate::prompt::build::build_prompt(session, Some(provider))
+            },
+        })
         .await;
 
     match result {
