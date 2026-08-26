@@ -30,6 +30,7 @@ struct AttemptState<'a> {
     decoder: &'a mut GeminiFrameDecoder,
     emitted: &'a mut String,
     emitted_tools: &'a mut HashSet<String>,
+    diverged: &'a mut bool,
     tx: &'a mpsc::Sender<StreamResult>,
 }
 
@@ -44,6 +45,7 @@ impl Client {
         let attempts = self.inner.config.retry_attempts.max(1);
         let mut emitted = String::new();
         let mut emitted_tools = HashSet::new();
+        let mut diverged = false;
         let mut decoder = GeminiFrameDecoder::new();
 
         for attempt in 1..=attempts {
@@ -54,6 +56,7 @@ impl Client {
                 decoder: &mut decoder,
                 emitted: &mut emitted,
                 emitted_tools: &mut emitted_tools,
+                diverged: &mut diverged,
                 tx: &tx,
             };
             match self
@@ -69,7 +72,13 @@ impl Client {
                     {
                         return Err(e);
                     }
-                    if emitted.is_empty() && emitted_tools.is_empty() && attempt < attempts {
+                    let retryable_divergence = e
+                        .downcast_ref::<GeminiError>()
+                        .is_some_and(|error| matches!(error, GeminiError::StreamDivergence));
+                    if attempt < attempts
+                        && emitted_tools.is_empty()
+                        && (emitted.is_empty() || retryable_divergence)
+                    {
                         let base_ms = self.inner.config.retry_delay.as_millis() as u64;
                         let delay_ms =
                             std::cmp::min(base_ms.saturating_mul(1u64 << (attempt - 1)), 30_000);
@@ -83,10 +92,12 @@ impl Client {
                         debug!(
                             tentative = attempt,
                             total = attempts,
+                            divergence = retryable_divergence,
                             "tentative échouée, retry dans {}ms — {e:#}",
                             effective
                         );
                         decoder.clear();
+                        diverged = false;
                         tokio::select! {
                             _ = tx.closed() => return Ok(()),
                             _ = tokio::time::sleep(Duration::from_millis(effective)) => {}
@@ -133,11 +144,14 @@ impl Client {
                     let Some(chunk) = chunk else {
                         for frame in state.decoder.finish() {
                             validate_frame_event(&frame)?;
-                            emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
+                            emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
                         }
                         if let Some(reason) = frames::detect_safety_block(&raw_accumulator) {
                             let _ = state.tx.send(Err(reason)).await;
                             return Ok(Some(()));
+                        }
+                        if *state.diverged {
+                            return Err(GeminiError::StreamDivergence.into());
                         }
                         if state.emitted.is_empty() && state.emitted_tools.is_empty() && frames::is_empty_stream(&raw_accumulator) {
                             let _ = state.tx.send(Err("Gemini n'a produit aucune réponse exploitable.".to_string())).await;
@@ -174,7 +188,7 @@ impl Client {
                     }
                     for frame in state.decoder.feed(&text) {
                         validate_frame_event(&frame)?;
-                        emit_frame(frame, state.emitted, state.emitted_tools, state.tx).await?;
+                        emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
                     }
                 }
             }
@@ -340,22 +354,27 @@ async fn emit_frame(
     frame: GeminiFrameEvent,
     emitted: &mut String,
     emitted_tools: &mut HashSet<String>,
+    diverged: &mut bool,
     tx: &mpsc::Sender<StreamResult>,
 ) -> anyhow::Result<()> {
     match frame {
         GeminiFrameEvent::Text(candidate) => {
-            if candidate == *emitted || emitted.starts_with(&candidate) {
+            if candidate == *emitted {
+                *diverged = false;
                 return Ok(());
             }
             if !candidate.starts_with(emitted.as_str()) {
-                if emitted.is_empty() {
-                    *emitted = candidate;
-                    return Ok(());
-                }
-                bail!("Gemini stream content changed during retry");
+                *diverged = true;
+                tracing::warn!(
+                    emitted_bytes = emitted.len(),
+                    candidate_bytes = candidate.len(),
+                    "Gemini stream candidate diverged; waiting for a compatible snapshot"
+                );
+                return Ok(());
             }
             let delta = frames::clean_text(&candidate[emitted.len()..], false);
             *emitted = candidate;
+            *diverged = false;
             if !delta.is_empty() {
                 tx.send(Ok(StreamItem::Text(delta)))
                     .await
@@ -384,4 +403,68 @@ async fn emit_frame(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn divergent_snapshot_is_recoverable_before_stream_end() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let mut emitted = "Bonjour".to_string();
+        let mut tools = HashSet::new();
+        let mut diverged = false;
+
+        emit_frame(
+            GeminiFrameEvent::Text("Bonjouir".into()),
+            &mut emitted,
+            &mut tools,
+            &mut diverged,
+            &tx,
+        )
+        .await
+        .unwrap();
+        assert!(diverged);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(emitted, "Bonjour");
+
+        emit_frame(
+            GeminiFrameEvent::Text("Bonjour, monde".into()),
+            &mut emitted,
+            &mut tools,
+            &mut diverged,
+            &tx,
+        )
+        .await
+        .unwrap();
+        assert!(!diverged);
+        assert_eq!(emitted, "Bonjour, monde");
+        assert!(matches!(rx.try_recv().unwrap(), Ok(StreamItem::Text(text)) if text == ", monde"));
+    }
+
+    #[tokio::test]
+    async fn unrecoverable_divergence_remains_distinguishable() {
+        let (tx, _rx) = mpsc::channel(8);
+        let mut emitted = "Bonjour".to_string();
+        let mut tools = HashSet::new();
+        let mut diverged = false;
+
+        emit_frame(
+            GeminiFrameEvent::Text("Bonsoir".into()),
+            &mut emitted,
+            &mut tools,
+            &mut diverged,
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        assert!(diverged);
+        assert_eq!(emitted, "Bonjour");
+        let error = GeminiError::StreamDivergence;
+        assert!(matches!(error, GeminiError::StreamDivergence));
+        let _ = json!({"kind": "stream_divergence"});
+    }
 }
