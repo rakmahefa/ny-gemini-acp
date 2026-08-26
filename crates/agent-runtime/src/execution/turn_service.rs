@@ -43,9 +43,9 @@ impl TurnService {
     }
 
     /// Executes one already-acquired turn.
-    pub async fn run_started<'a>(
+    pub async fn run_started(
         &self,
-        request: TurnExecutionRequest<'a>,
+        request: TurnExecutionRequest<'_>,
     ) -> Result<TurnExecutionResult, TurnServiceError> {
         let TurnExecutionRequest {
             session_id,
