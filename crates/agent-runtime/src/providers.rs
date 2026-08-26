@@ -66,6 +66,14 @@ pub trait LlmProvider: Send + Sync {
     fn model_info(&self, model: &str) -> LlmModelInfo;
 }
 
+#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+pub enum ToolConfigurationError {
+    #[error("tool configuration is invalid: {0}")]
+    InvalidConfiguration(String),
+    #[error("tool provider configuration failed: {0}")]
+    Provider(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolTransportKind {
     Process,
@@ -124,7 +132,7 @@ impl ToolServerConfig {
 
 #[derive(Debug)]
 pub struct ToolCallRequest {
-    /// Canonical model/tool invocation identity. Providers must preserve it for UX correlation.
+    /// Canonical semantic model/tool invocation identity. Providers must preserve it for UX correlation.
     pub call_id: String,
     pub session_id: String,
     pub name: String,
@@ -161,7 +169,7 @@ pub trait ToolProvider: Send + Sync {
         session_id: &str,
         cwd: PathBuf,
         servers: Vec<ToolServerConfig>,
-    ) -> Result<(), String>;
+    ) -> Result<(), ToolConfigurationError>;
     async fn clear_session(&self, session_id: &str);
     fn definitions(&self) -> Vec<Value>;
     fn prompt_fragment(&self) -> Option<String>;
@@ -185,7 +193,7 @@ impl ToolProvider for NullToolProvider {
         _: &str,
         _: PathBuf,
         _: Vec<ToolServerConfig>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ToolConfigurationError> {
         Ok(())
     }
     async fn clear_session(&self, _: &str) {}
