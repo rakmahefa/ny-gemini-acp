@@ -16,7 +16,7 @@ L'objectif reste de traiter en priorité les dettes qui risquent de rendre les c
 |---|---|---|---|
 | P1 | Dette de typage sémantique | ✅ Terminée | Stabilisée et mergée dans `main` |
 | P1 | Dette de persistance | ✅ Terminée | Stabilisée et mergée dans `main` |
-| P2 | Dette d'orchestration des turns | 🚧 En cours | Service runtime extrait ; intégration complète à poursuivre |
+| P2 | Dette d'orchestration des turns | 🚧 En cours | TurnService extrait, câblage ACP réduit, tests runtime ajoutés |
 | P2 | Dette des erreurs structurées | À traiter progressivement | Après orchestration |
 | P2 | Dette de tests d'intégration/système | À renforcer | Validation manuelle conservée |
 | P3 | Sandbox shell | Différé volontairement | À traiter plus tard |
@@ -109,11 +109,11 @@ cargo test --workspace    ✅
 
 ## Constat
 
-Le `acp-adaptor` possède déjà des handlers séparés, mais le câblage du traitement d'un prompt restait concentré dans la composition ACP : création du turn, abonnement aux Semantic Events, projection ACP, contexte interactif, exécution, terminaison et conversion d'erreurs.
+Le `acp-adaptor` possédait encore un câblage important autour du traitement d'un prompt : prise de possession du turn, création du transport sémantique, projection ACP, contexte interactif et remise de la réponse.
 
 ## Travail réalisé sur `debt/turn-orchestration`
 
-Le premier niveau d'extraction a été réalisé :
+Le remboursement a progressé sur deux niveaux :
 
 - création de `agent_runtime::TurnService` ;
 - `TurnService` intégré à la composition root `AppState` ;
@@ -122,8 +122,11 @@ Le premier niveau d'extraction a été réalisé :
 - gestion du terminal lifecycle regroupée dans le service ;
 - finalisation/persistance `Store::end_turn` regroupée dans le service ;
 - conservation des `AgentActionHandler` et `ToolPermissionHandler` comme dépendances injectées ;
-- résultat de runtime conservé séparément des notifications ACP ;
-- suppression de l'ancien `TurnGuard` de l'adaptateur devenu redondant.
+- suppression de l'ancien `TurnGuard` de l'adaptateur devenu redondant ;
+- extraction de l'orchestration ACP restante vers `prompt::handle_prompt` ;
+- `acp-adaptor/src/agent.rs` réduit à l'enregistrement des handlers et au délégateur de prompt ;
+- création du transport sémantique et du `turn_id` différée jusqu'à l'acceptation effective du turn ;
+- ajout d'un test runtime vérifiant `provider → AgentLoop → SemanticEvent lifecycle → Store persistence`.
 
 Le découpage obtenu est maintenant :
 
@@ -131,28 +134,36 @@ Le découpage obtenu est maintenant :
 ACP request
     ↓
 acp-adaptor
-    ├── validation / préparation
-    ├── titre / images
-    ├── handlers interactifs ACP
-    └── projection ACP
-            ↓
-      agent-runtime::TurnService
-            ├── AgentLoop
-            ├── SemanticEvent lifecycle
-            ├── provider/tool execution
-            └── Store::end_turn
+    ├── routage ACP
+    └── prompt::handle_prompt
+            ├── turn ownership
+            ├── projection ACP
+            └── handlers interactifs
+                    ↓
+             agent-runtime::TurnService
+                    ├── AgentLoop
+                    ├── SemanticEvent lifecycle
+                    ├── provider/tool execution
+                    └── Store::end_turn
 ```
 
-Le runtime reste indépendant d'ACP et le service ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
+Le runtime reste indépendant d'ACP et le `TurnService` ne connaît ni `PromptRequest`, ni `ConnectionTo<Client>`, ni les types de présentation ACP.
+
+## Garanties supplémentaires
+
+Le test runtime ajouté couvre le chemin provider → runtime et vérifie que :
+
+- la sortie du provider devient le résultat du turn ;
+- le lifecycle sémantique atteint un état terminal ;
+- la session finale est persistée avec le message assistant produit par le runtime.
 
 ## Ce qui reste à faire
 
 Le chantier n'est pas encore considéré comme terminé. Il reste à :
 
-- réduire davantage le câblage de turn dans `acp-adaptor/src/agent.rs` ;
-- ajouter un test d'intégration runtime couvrant `provider → runtime → SemanticEvent` ;
 - ajouter au moins un test de frontière couvrant `SemanticEvent → projection ACP` ;
-- valider localement `cargo fmt --check`, `cargo check --workspace` et `cargo test --workspace` avant merge.
+- valider localement les nouveaux changements avec `cargo fmt --check`, `cargo check --workspace` et `cargo test --workspace` ;
+- effectuer une dernière revue du contrat `TurnService` avant merge.
 
 ## Critères de réussite
 
@@ -345,18 +356,16 @@ Les changements qui n'apportent aucun de ces bénéfices doivent être considér
 
 # 11. Point de reprise
 
-La prochaine étape doit rester sur `debt/turn-orchestration` et poursuivre l'extraction sans ouvrir la dette des erreurs structurées en parallèle.
+La prochaine étape doit rester sur `debt/turn-orchestration` et terminer ce chantier avant d'ouvrir la dette des erreurs structurées en parallèle.
 
 ```text
-1. stabiliser TurnService
+1. ajouter le test SemanticEvent → projection ACP
         ↓
-2. alléger acp-adaptor/src/agent.rs
+2. cargo fmt --check
+3. cargo check --workspace
+4. cargo test --workspace
         ↓
-3. ajouter tests runtime + projection
+5. dernière revue du TurnService
         ↓
-4. cargo fmt --check
-5. cargo check --workspace
-6. cargo test --workspace
-        ↓
-7. merge dans main
+6. merge dans main
 ```
