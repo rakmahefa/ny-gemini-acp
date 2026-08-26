@@ -102,11 +102,11 @@ fn event_turn_id(event: &SemanticEvent) -> &str {
         | SemanticEvent::ThinkingCompleted { context }
         | SemanticEvent::TurnCancelled { context }
         | SemanticEvent::TurnFailed { context }
-        | SemanticEvent::TurnCompleted { context } => &context.turn_id,
+        | SemanticEvent::TurnCompleted { context } => context.turn_id.as_str(),
         SemanticEvent::ToolCallRequested { context, .. }
         | SemanticEvent::PermissionRequested { context }
         | SemanticEvent::ToolExecutionStarted { context, .. }
-        | SemanticEvent::ToolResultReceived { context, .. } => &context.event.turn_id,
+        | SemanticEvent::ToolResultReceived { context, .. } => context.event.turn_id.as_str(),
     }
 }
 

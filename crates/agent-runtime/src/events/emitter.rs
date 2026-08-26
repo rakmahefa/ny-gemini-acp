@@ -2,37 +2,37 @@ use std::collections::{HashMap, HashSet};
 
 use super::integrity::{IntegrityError, ToolTerminalReason, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
-use crate::ToolUiModel;
+use crate::{SessionId, ToolCallId, ToolUiModel, TurnId};
 
 #[derive(Clone)]
 pub struct TurnEventEmitter {
     bus: EventBus,
-    session_id: String,
-    turn_id: String,
+    session_id: SessionId,
+    turn_id: TurnId,
     next_sequence: u64,
     integrity: TurnIntegrity,
-    tool_bindings: HashMap<String, String>,
-    seen_tool_ids: HashSet<String>,
+    tool_bindings: HashMap<ToolCallId, ToolCallId>,
+    seen_tool_ids: HashSet<ToolCallId>,
     require_transport: bool,
 }
 
 impl TurnEventEmitter {
-    pub fn new(bus: EventBus, session_id: impl Into<String>, turn_id: impl Into<String>) -> Self {
+    pub fn new(bus: EventBus, session_id: impl Into<SessionId>, turn_id: impl Into<TurnId>) -> Self {
         Self::build(bus, session_id, turn_id, false)
     }
 
     pub fn new_with_required_transport(
         bus: EventBus,
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
+        session_id: impl Into<SessionId>,
+        turn_id: impl Into<TurnId>,
     ) -> Self {
         Self::build(bus, session_id, turn_id, true)
     }
 
     fn build(
         bus: EventBus,
-        session_id: impl Into<String>,
-        turn_id: impl Into<String>,
+        session_id: impl Into<SessionId>,
+        turn_id: impl Into<TurnId>,
         require_transport: bool,
     ) -> Self {
         Self {
@@ -66,7 +66,7 @@ impl TurnEventEmitter {
     }
 
     fn transport_ready(&self) -> bool {
-        if !self.require_transport || self.bus.has_turn_subscriber(&self.turn_id) {
+        if !self.require_transport || self.bus.has_turn_subscriber(self.turn_id.as_str()) {
             true
         } else {
             self.reject(IntegrityError::new(format!(
@@ -83,10 +83,10 @@ impl TurnEventEmitter {
         EventContext::new(self.session_id.clone(), self.turn_id.clone(), sequence)
     }
 
-    fn tool_context(&mut self, tool_call_id: impl Into<String>) -> ToolEventContext {
+    fn tool_context(&mut self, tool_call_id: ToolCallId) -> ToolEventContext {
         ToolEventContext {
             event: self.context(),
-            tool_call_id: tool_call_id.into(),
+            tool_call_id,
         }
     }
 
@@ -107,7 +107,7 @@ impl TurnEventEmitter {
             }
         } else {
             self.bus.publish_global(event.clone());
-            if self.bus.has_turn_subscriber(&self.turn_id) {
+            if self.bus.has_turn_subscriber(self.turn_id.as_str()) {
                 if let Err(error) = self.bus.publish_turn(event) {
                     tracing::debug!(session=%self.session_id, turn=%self.turn_id, error=%error, "best-effort semantic turn transport failed");
                 }
@@ -116,28 +116,27 @@ impl TurnEventEmitter {
         }
     }
 
-    fn bind_tool_identity(&mut self, upstream_id: &str) -> Result<String, IntegrityError> {
-        if !self.seen_tool_ids.insert(upstream_id.to_owned()) {
+    fn bind_tool_identity(&mut self, upstream_id: ToolCallId) -> Result<ToolCallId, IntegrityError> {
+        if !self.seen_tool_ids.insert(upstream_id.clone()) {
             return Err(IntegrityError::new(format!(
                 "tool_call_id {upstream_id} was already used in this turn"
             )));
         }
-        let semantic_id = upstream_id.to_owned();
-        self.tool_bindings
-            .insert(upstream_id.to_owned(), semantic_id.clone());
+        let semantic_id = upstream_id.clone();
+        self.tool_bindings.insert(upstream_id, semantic_id.clone());
         Ok(semantic_id)
     }
 
-    fn rollback_tool_binding(&mut self, upstream_id: &str) {
+    fn rollback_tool_binding(&mut self, upstream_id: &ToolCallId) {
         self.tool_bindings.remove(upstream_id);
         self.seen_tool_ids.remove(upstream_id);
     }
 
-    fn resolve_tool_identity(&self, upstream_id: &str) -> Option<&str> {
-        self.tool_bindings.get(upstream_id).map(String::as_str)
+    fn resolve_tool_identity(&self, upstream_id: &ToolCallId) -> Option<&ToolCallId> {
+        self.tool_bindings.get(upstream_id)
     }
 
-    fn release_tool_identity(&mut self, upstream_id: &str) {
+    fn release_tool_identity(&mut self, upstream_id: &ToolCallId) {
         self.tool_bindings.remove(upstream_id);
     }
 
@@ -226,7 +225,7 @@ impl TurnEventEmitter {
 
     pub fn tool_call_requested(
         &mut self,
-        upstream_id: impl Into<String>,
+        upstream_id: impl Into<ToolCallId>,
         name: impl Into<String>,
     ) -> bool {
         self.tool_call_requested_with_ui(upstream_id, name, None)
@@ -234,7 +233,7 @@ impl TurnEventEmitter {
 
     pub fn tool_call_requested_with_ui(
         &mut self,
-        upstream_id: impl Into<String>,
+        upstream_id: impl Into<ToolCallId>,
         name: impl Into<String>,
         ui: Option<ToolUiModel>,
     ) -> bool {
@@ -245,11 +244,11 @@ impl TurnEventEmitter {
         if upstream_id.is_empty() {
             return self.reject(IntegrityError::new("tool call identity must be non-empty"));
         }
-        let semantic_id = match self.bind_tool_identity(&upstream_id) {
+        let semantic_id = match self.bind_tool_identity(upstream_id.clone()) {
             Ok(id) => id,
             Err(error) => return self.reject(error),
         };
-        if let Err(e) = self.integrity.tool_call_requested(&semantic_id) {
+        if let Err(e) = self.integrity.tool_call_requested(semantic_id.as_str()) {
             self.rollback_tool_binding(&upstream_id);
             return self.reject(e);
         }
@@ -266,42 +265,42 @@ impl TurnEventEmitter {
         }
     }
 
-    pub fn permission_requested(&mut self, upstream_id: impl Into<String>) -> bool {
+    pub fn permission_requested(&mut self, upstream_id: impl Into<ToolCallId>) -> bool {
         if !self.transport_ready() {
             return false;
         }
         let upstream_id = upstream_id.into();
-        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
+        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else {
             return self.reject(IntegrityError::new(format!(
                 "permission_requested references unknown upstream tool {upstream_id}"
             )));
         };
-        if let Err(e) = self.integrity.permission_requested(&semantic_id) {
+        if let Err(e) = self.integrity.permission_requested(semantic_id.as_str()) {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
         self.publish(SemanticEvent::PermissionRequested { context })
     }
 
-    pub fn tool_execution_started(&mut self, upstream_id: impl Into<String>) -> bool {
+    pub fn tool_execution_started(&mut self, upstream_id: impl Into<ToolCallId>) -> bool {
         self.tool_execution_started_with_ui(upstream_id, None)
     }
 
     pub fn tool_execution_started_with_ui(
         &mut self,
-        upstream_id: impl Into<String>,
+        upstream_id: impl Into<ToolCallId>,
         ui: Option<ToolUiModel>,
     ) -> bool {
         if !self.transport_ready() {
             return false;
         }
         let upstream_id = upstream_id.into();
-        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
+        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else {
             return self.reject(IntegrityError::new(format!(
                 "tool_execution_started references unknown upstream tool {upstream_id}"
             )));
         };
-        if let Err(e) = self.integrity.tool_execution_started(&semantic_id) {
+        if let Err(e) = self.integrity.tool_execution_started(semantic_id.as_str()) {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);
@@ -310,7 +309,7 @@ impl TurnEventEmitter {
 
     pub fn tool_result_received(
         &mut self,
-        upstream_id: impl Into<String>,
+        upstream_id: impl Into<ToolCallId>,
         result: impl Into<String>,
     ) -> bool {
         self.tool_result_received_with_ui(upstream_id, result, None)
@@ -318,7 +317,7 @@ impl TurnEventEmitter {
 
     pub fn tool_result_received_with_ui(
         &mut self,
-        upstream_id: impl Into<String>,
+        upstream_id: impl Into<ToolCallId>,
         result: impl Into<String>,
         ui: Option<ToolUiModel>,
     ) -> bool {
@@ -326,12 +325,12 @@ impl TurnEventEmitter {
             return false;
         }
         let upstream_id = upstream_id.into();
-        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).map(str::to_owned) else {
+        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else {
             return self.reject(IntegrityError::new(format!(
                 "tool_result_received references unknown upstream tool {upstream_id}"
             )));
         };
-        if let Err(e) = self.integrity.tool_result_received(&semantic_id) {
+        if let Err(e) = self.integrity.tool_result_received(semantic_id.as_str()) {
             return self.reject(e);
         }
         let context = self.tool_context(semantic_id);

@@ -83,3 +83,42 @@ async fn generation_rejects_stale_turn_finish() {
     assert!(store.end_turn(&s.id, session2, generation1).await.is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn failed_persist_does_not_corrupt_live_session() {
+    let dir = std::env::temp_dir().join(format!(
+        "acp-persist-failure-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let store = Store::open(&dir).await.unwrap();
+    let session = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+
+    let result = store
+        .update_session(&session.id, |current| {
+            current.title = Some("should-not-be-live".into());
+        })
+        .await;
+    assert!(result.is_err());
+
+    let live = store.get(&session.id).await.unwrap();
+    assert_eq!(live.title, None);
+}
+
+#[tokio::test]
+async fn open_removes_orphan_busy_sentinel() {
+    let dir = std::env::temp_dir().join(format!(
+        "acp-busy-recovery-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sess_orphan.busy"), b"").unwrap();
+
+    let _store = Store::open(&dir).await.unwrap();
+    assert!(!dir.join("sess_orphan.busy").exists());
+
+    std::fs::remove_dir_all(&dir).ok();
+}

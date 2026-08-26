@@ -2,6 +2,7 @@
 
 pub mod events;
 mod execution;
+pub mod identity;
 pub mod persona;
 pub mod prompt;
 pub mod providers;
@@ -21,6 +22,7 @@ pub use execution::{
     AgentTurnHandle, Cancellation, RuntimeError, ToolPermissionDecision, ToolPermissionHandler,
     ToolPermissionRequest, TurnManager, TurnState,
 };
+pub use identity::{SessionId, ToolCallId, TurnId};
 pub use prompt::{
     format_tool_call, format_tool_result, TOOL_CALL_CLOSE, TOOL_CALL_OPEN, TOOL_RESULT_PREFIX,
 };
