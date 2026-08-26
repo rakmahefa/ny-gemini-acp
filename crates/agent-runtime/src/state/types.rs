@@ -141,6 +141,14 @@ pub enum TurnError {
     AlreadyRunning,
 }
 
+#[derive(Debug, Error)]
+pub enum StoreError {
+    #[error("persisted session write failed: {0}")]
+    Persistence(String),
+    #[error("stale turn generation: expected {expected}, current {current}")]
+    StaleGeneration { expected: u64, current: u64 },
+}
+
 /// Runtime session cache. Turn concurrency and cancellation are owned by `TurnManager`.
 pub struct Live {
     pub session: Session,
