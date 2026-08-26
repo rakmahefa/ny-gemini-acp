@@ -16,6 +16,7 @@ pub async fn handle_prompt(
 ) -> Result<(), AcpError> {
     let session_id = req.session_id.clone();
     let sid = session_id.0.to_string();
+    let turn_sid = sid.clone();
     let turn_service = state.turn_service.clone();
     let turn_manager = state.turns.clone();
     let events = state.events.clone();
@@ -49,7 +50,7 @@ pub async fn handle_prompt(
             interactive::scope(interactive_context, async move {
                 let mut semantic = TurnEventEmitter::new_with_required_transport(
                     events.clone(),
-                    sid.clone(),
+                    turn_sid.clone(),
                     turn_id.clone(),
                 );
                 let turn_context = prompt::TurnContext {
