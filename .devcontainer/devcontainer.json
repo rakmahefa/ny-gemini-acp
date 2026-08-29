@@ -22,5 +22,10 @@
     }
   },
   "postCreateCommand": "rustup component add rustfmt clippy",
-  "postStartCommand": "bash .devcontainer/setup-codespace-runner.sh"
+  "postStartCommand": "bash .devcontainer/setup-codespace-runner.sh",
+  "features": {
+  "ghcr.io/devcontainers/features/rust:1": {
+    "version": "1.82"
+  },
+  "ghcr.io/devcontainers/features/github-cli:1": {}
 }
