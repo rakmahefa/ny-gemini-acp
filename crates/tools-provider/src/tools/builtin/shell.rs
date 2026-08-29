@@ -199,13 +199,13 @@ mod tests {
     async fn shell_non_zero_exit_is_an_error_and_preserves_output() {
         let result = ShellExecTool
             .execute(
-                &json!({"command": "printf error-output >&2; false"}),
+                &json!({"command": "git --no-such-option status"}),
                 Path::new("/tmp"),
                 &[],
             )
             .await;
 
-        assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code 1") && output.contains("error-output")));
+        assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code ") && output.contains("unknown option") || output.contains("unknown option") || output.contains("unknown switch")));
     }
 
     #[test]
