@@ -177,9 +177,17 @@ impl AgentLoop {
                 },
                 references: references.to_vec(),
             };
-            let stream = match self.llm.stream(request).await {
+            let stream = match self
+                .llm
+                .stream_with_cancellation(request, cancellation.subscribe())
+                .await
+            {
                 Ok(stream) => stream,
                 Err(error) => {
+                    if matches!(error, LlmError::Cancelled) || cancellation.is_cancelled() {
+                        let _ = sink.turn_cancelled();
+                        return Err(AgentLoopError::Cancelled);
+                    }
                     if is_context_error(&error) && !overflow_retry {
                         compact_messages(&mut session.messages, EMERGENCY_COMPACTION_CHARS);
                         overflow_retry = true;
