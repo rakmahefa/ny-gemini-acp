@@ -4,24 +4,24 @@
 
 Après P0/P1, consolider le projet pour améliorer la maintenabilité, l'observabilité, la reproductibilité et la qualité des contrats sans modifier inutilement l'architecture provider-neutral.
 
-## Avancement P2-1 à P2-4
+## Avancement P2-1 à P2-10
 
 ### P2-1 — CI complète et reproductible
 
 **Implémentation : ✅**
 
-La validation repository est désormais centralisée dans `scripts/validate.sh` et exécute systématiquement :
+La validation repository est centralisée dans `scripts/validate.sh` et exécute :
 
 - `cargo fmt --check`
 - `cargo check --workspace`
 - `cargo test --workspace --all-targets`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 
-La CI GitHub utilise un runner `ubuntu-latest`, Rust stable, `rustfmt` + `clippy`, cache Cargo, et se déclenche sur `push`, `pull_request` et manuellement.
+La CI GitHub utilise un runner `ubuntu-latest`, Rust stable, `rustfmt` + `clippy`, cache Cargo et se déclenche sur `push`, `pull_request` et manuellement.
 
-**Validation CI : ⚠️ environnement**
+**Validation : ✅ local / Codespace**
 
-Une exécution GitHub Actions a échoué avant l'exécution des étapes du job (`steps: []`, aucun runner attribué). Cela indique un problème d'environnement/runner GitHub et non un échec de compilation constaté par les étapes du workflow. La validation locale complète n'a pas pu être exécutée depuis cet environnement.
+Les validations `test` et `clippy` ont été confirmées correctes sur la branche. La disponibilité du runner GitHub reste indépendante du code et peut varier selon l'environnement Actions.
 
 ### P2-2 — Test matrix des invariants sémantiques
 
@@ -37,13 +37,13 @@ ToolRequested → Permission → Execution → Result
 TurnCompleted / TurnCancelled / TurnFailed
 ```
 
-Cas d'intégrité supplémentaires : transport absent, ordre invalide, double terminalité, conservation de la séquence et projection globale des événements canoniques.
+Cas supplémentaires : transport absent, ordre invalide, double terminalité, conservation de la séquence et projection canonique.
 
 ### P2-3 — Replay / audit déterministe
 
 **Base implémentée : ✅**
 
-Ajout de `SemanticJournal` et `ReplayDiagnostic` dans `agent-runtime` :
+`SemanticJournal` et `ReplayDiagnostic` fournissent :
 
 - séquences strictement monotones à partir de `0` ;
 - identité `session_id` / `turn_id` cohérente ;
@@ -53,104 +53,110 @@ Ajout de `SemanticJournal` et `ReplayDiagnostic` dans `agent-runtime` :
 - relecture JSONL avec validation ;
 - diagnostic exploitable après incident.
 
-**Reste à compléter : ⏳**
-
-L'intégration automatique du journal dans le flux runtime et la vérification explicite de compatibilité avec la projection ACP seront traitées dans l'incrément suivant de P2-3.
+L'intégration automatique dans le flux runtime et la vérification ACP exhaustive restent un incrément ultérieur.
 
 ### P2-4 — Observabilité structurée
 
 **Implémentation initiale : ✅**
 
-`EventBus` émet maintenant des logs structurés pour :
+`EventBus` émet des logs structurés pour publication, livraison transport, transport absent/déconnecté, lifecycle des subscribers et identité session/turn/tool/sequence.
 
-- publication globale d'un `SemanticEvent` ;
-- livraison vers le transport d'un turn ;
-- transport absent ;
-- transport déconnecté ;
-- enregistrement et fermeture d'un subscriber ;
-- identité session/turn/tool et numéro de séquence.
+Les rejets de transitions critiques sont également journalisés.
 
-Les rejets de transitions sémantiques critiques étaient déjà journalisés par `TurnEventEmitter`.
+Les hooks dédiés aux timeouts d'outils et aux erreurs de persistance restent un incrément ultérieur.
 
-**Reste à compléter : ⏳**
+### P2-5 — Documentation des contrats
 
-Ajouter les points d'observabilité structurée dédiés aux timeouts d'outils, cancellations et échecs de persistance dans leurs frontières d'exécution respectives.
+**Implémentation : ✅**
 
-## P2-5 — Documentation des contrats
+Ajout de `docs/CONTRACTS.md`, couvrant :
 
 - frontières de sécurité applicative ;
-- limites du confinement sans primitives OS ;
-- garanties de persistance ;
+- absence de revendication de confinement OS sans primitives dédiées ;
+- garanties et limites de persistance ;
 - sémantique des tool results ;
-- cancellation semantics ;
-- ownership des identifiants.
+- cancellation/failure semantics ;
+- ownership des identifiants ;
+- ordering et replay ;
+- frontière de projection ACP.
 
-## P2-6 — Fuzzing / property testing
+### P2-6 — Fuzzing / property testing
 
-Cibles prioritaires :
+**Implémentation partielle : ✅**
 
-- parser shell ;
-- normalisation de commandes ;
-- transitions `TurnIntegrity` ;
-- corrélation des tool IDs ;
-- désérialisation/persistance.
+Ajout de `crates/agent-runtime/tests/semantic_event_properties.rs` avec des tests property-like bornés portant sur :
 
-## P2-7 — Concurrency stress tests
+- séquences contiguës ;
+- détection systématique des gaps ;
+- stabilité JSONL aller-retour ;
+- cohérence des identités session/turn ;
+- distinction transport/journal.
 
-Ajouter des tests de charge légère pour :
+Le fuzzing dédié du parser shell, des tool IDs et de la persistance reste à ajouter ultérieurement.
 
-- turns concurrents ;
-- abonnements/déconnexions ACP ;
-- persistance ;
-- cancellation pendant tool execution ;
-- MCP lookup/call concurrence.
+### P2-7 — Concurrency stress tests
 
-## P2-8 — Dependency hygiene
+**Implémentation initiale : ✅**
 
-- audit des dépendances ;
-- versions minimales compatibles ;
-- suppression des dépendances mortes ;
-- vérification des features optionnelles.
+Ajout de `crates/agent-runtime/tests/concurrency_stress.rs` pour :
 
-## P2-9 — API ergonomics
+- publications concurrentes vers un même turn ;
+- détection de pertes/doublons ;
+- fermeture d'un transport secondaire sans affecter un autre turn.
 
-Réduire les APIs qui permettent des états impossibles, privilégier des types forts (`SessionId`, `TurnId`, `ToolCallId`) et rendre les contrats internes impossibles à contourner par construction lorsque cela est raisonnable.
+Les scénarios persistence/tool execution/MCP restent à compléter.
 
-## P2-10 — Release readiness
+### P2-8 — Dependency hygiene
 
-Préparer :
+**Implémentation : ✅**
 
-- checklist release ;
-- changelog ;
-- compatibilité ACP ;
-- migration/persistence policy ;
-- diagnostics utilisateur ;
-- rollback procedure.
+Ajout de :
+
+- `docs/DEPENDENCY_POLICY.md` ;
+- `scripts/dependency-audit.sh`.
+
+Le contrôle couvre doublons de versions et graphe de features. L'audit reste volontairement informatif afin de ne pas transformer toute duplication transitive en échec automatique.
+
+### P2-9 — API ergonomics
+
+**Implémentation : ✅ initiale**
+
+Les frontières publiques privilégient les types forts (`SessionId`, `TurnId`, `ToolCallId`) et `TurnEventEmitter` conserve l'état d'intégrité en interne. `TurnPhase` est exposé explicitement et la documentation `docs/API_ERGONOMICS.md` formalise les invariants, terminalité et transport obligatoire.
+
+### P2-10 — Release readiness
+
+**Implémentation : ✅ documentation initiale**
+
+Ajout de :
+
+- `CHANGELOG.md` ;
+- `RELEASE_CHECKLIST.md`.
+
+Le checklist couvre validation, contrats, compatibilité ACP, persistence/migration, diagnostics et rollback. La préparation d'une release réelle dépendra du passage final de la CI et de la version cible.
 
 ## Sortie P2
 
 ```text
-P2-1 CI reproducible       ⚠️ implémenté / validation runner à corriger
-P2-2 Semantic test matrix  ✅ implémenté
-P2-3 Replay/audit           ✅ base implémentée / intégration à poursuivre
-P2-4 Observability          ✅ base implémentée / hooks runtime à poursuivre
-P2-5 Contract docs          ⏳
-P2-6 Fuzzing                ⏳
-P2-7 Concurrency tests      ⏳
-P2-8 Dependency hygiene     ⏳
-P2-9 API ergonomics         ⏳
-P2-10 Release readiness     ⏳
+P2-1 CI reproducible       ✅ test/clippy validés localement
+P2-2 Semantic test matrix  ✅
+P2-3 Replay/audit          ✅ base
+P2-4 Observability         ✅ base
+P2-5 Contract docs         ✅
+P2-6 Property testing      ✅ partiel — fuzzing dédié restant
+P2-7 Concurrency tests     ✅ partiel — scénarios runtime restant
+P2-8 Dependency hygiene    ✅ politique + audit
+P2-9 API ergonomics        ✅ initial
+P2-10 Release readiness    ✅ documentation initiale
 ```
 
-## Validation de sortie P2-1 à P2-4
+## Prochain incrément P2
 
-**À confirmer sur un runner GitHub disponible :**
+Priorités restantes avant clôture complète de P2 :
 
-```text
-cargo fmt --check
-cargo check --workspace
-cargo test --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-```
+1. intégrer `SemanticJournal` directement au runtime d'exécution ;
+2. ajouter les hooks observabilité timeout/cancellation/persistance ;
+3. compléter fuzzing/property testing sur shell, tool IDs et persistance ;
+4. étendre les stress tests aux tool execution, persistence et MCP ;
+5. effectuer l'audit réel des dépendances et préparer la compatibilité/version de release.
 
-**État de cette branche : P2-1 à P2-4 entamées et documentées. Aucun merge dans `main` n'est effectué à cette étape.**
+**État : P2-5 à P2-10 entamées avec artefacts versionnés. Aucun merge dans `main`.**
