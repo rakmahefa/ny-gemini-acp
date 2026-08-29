@@ -10,6 +10,8 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use agent_runtime::ToolConfigurationError;
+
 use super::mcp::McpCatalog;
 
 #[derive(Debug, Clone)]
@@ -125,21 +127,32 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
-    pub fn register_mcp(&mut self, catalog: Arc<McpCatalog>) {
+    pub fn register_mcp(
+        &mut self,
+        catalog: Arc<McpCatalog>,
+    ) -> Result<(), ToolConfigurationError> {
         let builtin_names: std::collections::HashSet<&str> =
             self.tools.iter().map(|tool| tool.definition().name).collect();
         let conflicts: Vec<String> = catalog
             .definitions()
             .into_iter()
-            .filter_map(|definition| definition.get("name").and_then(Value::as_str).map(str::to_owned))
+            .filter_map(|definition| {
+                definition
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .filter(|name| builtin_names.contains(name.as_str()))
             .collect();
         if !conflicts.is_empty() {
-            tracing::error!(?conflicts, "MCP registration rejected because it collides with builtin tool identities");
-            return;
+            return Err(ToolConfigurationError::InvalidConfiguration(format!(
+                "MCP tool identity collision with builtin(s): {}",
+                conflicts.join(", ")
+            )));
         }
         tracing::info!(tools = catalog.definitions().len(), "MCP tools registered");
         self.mcp = Some(catalog);
+        Ok(())
     }
 
     fn register_builtins(&mut self) {
@@ -262,7 +275,12 @@ mod tests {
         let names: Vec<String> = reg
             .definitions()
             .iter()
-            .filter_map(|definition| definition.get("name").and_then(Value::as_str).map(str::to_owned))
+            .filter_map(|definition| {
+                definition
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
             .collect();
         let mut sorted = names.clone();
         sorted.sort();
