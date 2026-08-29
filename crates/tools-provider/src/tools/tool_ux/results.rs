@@ -1,8 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::display::{truncate, ux_card};
 use super::types::{CardBodyKind, ResultUpdate, MAX_DIFF_OLD_TEXT_BYTES, MAX_RESULT_LOCATIONS, MAX_RESULT_PREVIEW_CHARS};
@@ -17,7 +16,7 @@ pub fn result_update(
     cwd: &Path,
     terminal_id: Option<&str>,
 ) -> ResultUpdate {
-    let status = if is_ok { ToolCallStatus::Completed } else { ToolCallStatus::Failed };
+    let status = if is_ok { "completed" } else { "failed" };
     let phase = if is_ok { "🟢 completed" } else { "🔴 failed" };
     match tool_name {
         "file_read" => {
@@ -33,13 +32,11 @@ pub fn result_update(
             content: vec![ux_card(tool_name, phase, args, Some((result.trim_end(), CardBodyKind::Output, !is_ok)), terminal_id)],
             locations: filesystem_result_locations(tool_name, result, cwd),
         },
-        "shell_exec" => {
-            let mut content = vec![ux_card(tool_name, phase, args, Some((result.trim_end(), CardBodyKind::Output, !is_ok)), terminal_id)];
-            if let Some(id) = terminal_id {
-                content.push(ToolCallContent::Terminal(agent_client_protocol::schema::v1::Terminal::new(id.to_owned())));
-            }
-            ResultUpdate { status, content, locations: vec![] }
-        }
+        "shell_exec" => ResultUpdate {
+            status,
+            content: vec![ux_card(tool_name, phase, args, Some((result.trim_end(), CardBodyKind::Output, !is_ok)), terminal_id)],
+            locations: vec![],
+        },
         "file_write" | "file_edit" | "replace_in_file" => ResultUpdate {
             status,
             content: vec![ux_card(tool_name, phase, args, Some((result.trim_end(), CardBodyKind::Output, !is_ok)), terminal_id)],
@@ -137,19 +134,19 @@ fn format_numbered_read(result: &str, args: &Value) -> String {
     result.trim_end_matches('\n').split('\n').enumerate().map(|(idx, line)| format!("{}\t{}", start + idx, line)).collect::<Vec<_>>().join("\n")
 }
 
-fn file_location(args: &Value, cwd: &Path) -> Vec<ToolCallLocation> {
-    arg_str(args, "path").map(|path| vec![ToolCallLocation::new(resolve_path(path, cwd))]).unwrap_or_default()
+fn file_location(args: &Value, cwd: &Path) -> Vec<Value> {
+    arg_str(args, "path").map(|path| vec![json!({ "path": resolve_path(path, cwd) })]).unwrap_or_default()
 }
 
-fn filesystem_result_locations(tool_name: &str, result: &str, cwd: &Path) -> Vec<ToolCallLocation> {
+fn filesystem_result_locations(tool_name: &str, result: &str, cwd: &Path) -> Vec<Value> {
     if tool_name == "list_directory" { return vec![]; }
     result.lines().take(MAX_RESULT_LOCATIONS).filter_map(|line| {
         let path = line.trim();
-        if path.is_empty() { None } else { Some(ToolCallLocation::new(resolve_path(path, cwd))) }
+        if path.is_empty() { None } else { Some(json!({ "path": resolve_path(path, cwd) })) }
     }).collect()
 }
 
-fn search_result_locations(result: &str, cwd: &Path) -> Vec<ToolCallLocation> {
+fn search_result_locations(result: &str, cwd: &Path) -> Vec<Value> {
     let mut locations = Vec::new();
     let mut seen = BTreeSet::new();
     for line in result.lines() {
@@ -157,7 +154,7 @@ fn search_result_locations(result: &str, cwd: &Path) -> Vec<ToolCallLocation> {
         let Some((path, line_number, _)) = split_path_line(candidate) else { continue; };
         let resolved = resolve_path(path, cwd);
         let key = format!("{}:{line_number}", resolved.display());
-        if seen.insert(key) { locations.push(ToolCallLocation::new(resolved).line(line_number)); }
+        if seen.insert(key) { locations.push(json!({ "path": resolved, "line": line_number })); }
         if locations.len() >= MAX_RESULT_LOCATIONS { break; }
     }
     locations
