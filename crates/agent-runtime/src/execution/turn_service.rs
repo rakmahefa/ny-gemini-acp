@@ -94,6 +94,35 @@ impl TurnService {
             }
         };
 
+        // A turn has already been acquired by the store at this point. A
+        // pre-existing cancellation therefore still requires a coherent
+        // semantic lifecycle: TurnStarted followed exactly once by
+        // TurnCancelled, without entering the model/tool loop.
+        if cancellation.is_cancelled() {
+            let semantic_ok = if semantic.is_terminal() {
+                true
+            } else {
+                semantic.turn_started() && semantic.turn_cancelled()
+            };
+            let finalization = self.finish(&session_id, session, generation).await;
+            if !semantic_ok {
+                return match finalization {
+                    Ok(()) => Err(AgentLoopError::SemanticEventRejected.into()),
+                    Err(persistence) => Err(TurnServiceError::AgentAndPersistence {
+                        agent: AgentLoopError::SemanticEventRejected,
+                        persistence,
+                    }),
+                };
+            }
+            return match finalization {
+                Ok(()) => Err(AgentLoopError::Cancelled.into()),
+                Err(persistence) => Err(TurnServiceError::AgentAndPersistence {
+                    agent: AgentLoopError::Cancelled,
+                    persistence,
+                }),
+            };
+        }
+
         let result = agent_loop
             .run(
                 &mut session,
@@ -230,6 +259,56 @@ mod tests {
         }));
 
         bus.close_turn("turn-test");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn pre_cancelled_turn_has_started_and_cancelled_semantics() {
+        let dir = std::env::temp_dir().join(format!(
+            "acp-turn-service-pre-cancel-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let store = Arc::new(Store::open(&dir).await.unwrap());
+        let session = store.create("/tmp".into(), vec![], "test-model").await.unwrap();
+        let (started, generation) = store.begin_turn(&session.id).await.unwrap();
+        let bus = EventBus::new();
+        let mut receiver = bus.subscribe_turn("turn-pre-cancel");
+        let mut semantic = TurnEventEmitter::new_with_required_transport(
+            bus.clone(),
+            session.id.clone(),
+            "turn-pre-cancel",
+        );
+        let service = TurnService::new(
+            store.clone(),
+            Arc::new(TextProvider),
+            Arc::new(crate::NullToolProvider),
+            AgentLoopConfig::default(),
+        );
+        let cancellation = crate::Cancellation::new();
+        cancellation.cancel();
+
+        let result = service
+            .run_started(TurnExecutionRequest {
+                session_id: session.id.clone(),
+                session: started,
+                generation,
+                references: Vec::new(),
+                cancellation,
+                semantic: &mut semantic,
+                action_handler: None,
+                permission_handler: None,
+                build_prompt: build_prompt_empty,
+            })
+            .await;
+
+        assert!(matches!(result, Err(TurnServiceError::Agent(AgentLoopError::Cancelled))));
+        assert!(semantic.is_terminal());
+        let first = receiver.recv().await.unwrap();
+        let second = receiver.recv().await.unwrap();
+        assert!(matches!(first, crate::events::SemanticEvent::TurnStarted { .. }));
+        assert!(matches!(second, crate::events::SemanticEvent::TurnCancelled { .. }));
+
+        bus.close_turn("turn-pre-cancel");
         std::fs::remove_dir_all(&dir).ok();
     }
 }
