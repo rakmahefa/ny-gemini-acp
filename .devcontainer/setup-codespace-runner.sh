@@ -16,8 +16,10 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-GH_TOKEN="${CODESPACE_RUNNER_PAT:-${GH_TOKEN:-}}"
+GH_TOKEN_RAW="${CODESPACE_RUNNER_PAT:-${GH_TOKEN:-}}"
+GH_TOKEN="$(printf '%s' "$GH_TOKEN_RAW" | tr -d '\r\n')"
 export GH_TOKEN
+unset GH_TOKEN_RAW
 
 if [[ -z "$GH_TOKEN" ]] && ! gh auth status >/dev/null 2>&1; then
   echo "Codespace runner is not registered: set the CODESPACE_RUNNER_PAT Codespaces secret or authenticate gh." >&2
