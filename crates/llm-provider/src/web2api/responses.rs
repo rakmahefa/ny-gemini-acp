@@ -19,7 +19,7 @@ use super::http::{json_body, json_ok, json_response, sse, sse_channel, sse_event
 pub async fn handler(State(state): State<AppState>, req: axum::extract::Request) -> Response {
     let body = match json_body(req).await {
         Ok(b) => b,
-        Err(e) => return e,
+        Err(e) => return *e,
     };
 
     let model_name = body

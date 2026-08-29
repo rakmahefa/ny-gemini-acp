@@ -119,21 +119,21 @@ fn authorized(req: &Request, config: &Config) -> bool {
     }
     false
 }
-pub async fn json_body(req: Request) -> Result<Value, Response> {
+pub async fn json_body(req: Request) -> Result<Value, Box<Response>> {
     let bytes = match axum::body::to_bytes(req.into_body(), MAX_BODY).await {
         Ok(b) => b,
         Err(_) => {
-            return Err(json_response(
+            return Err(Box::new(json_response(
                 StatusCode::BAD_REQUEST,
                 serde_json::json!({"error":{"message":"corps illisible"}}),
-            ))
+            )))
         }
     };
     serde_json::from_slice(&bytes).map_err(|_| {
-        json_response(
+        Box::new(json_response(
             StatusCode::BAD_REQUEST,
             serde_json::json!({"error":{"message":"corps JSON invalide"}}),
-        )
+        ))
     })
 }
 

@@ -28,12 +28,10 @@ impl EventBus {
         }
     }
 
-    /// Best-effort diagnostic fan-out. No protocol invariant depends on delivery here.
     pub fn publish_global(&self, event: SemanticEvent) -> usize {
         self.sender.send(event).unwrap_or(0)
     }
 
-    /// Returns whether the mandatory ACP turn transport is currently connected.
     pub fn has_turn_subscriber(&self, turn_id: &str) -> bool {
         self.turn_senders
             .lock()
@@ -41,8 +39,6 @@ impl EventBus {
             .unwrap_or(false)
     }
 
-    /// Mandatory per-turn transport used by ACP semantic projection.
-    /// The event is considered emitted only when a live turn consumer accepts it.
     pub fn publish_turn(&self, event: SemanticEvent) -> Result<(), String> {
         let turn_id = event_turn_id(&event).to_owned();
         let sender = self
@@ -64,10 +60,13 @@ impl EventBus {
         }
     }
 
-    /// Compatibility helper: best-effort broadcast plus mandatory turn delivery.
+    /// Compatibility helper: mandatory turn delivery occurs before best-effort global fan-out.
+    /// This preserves the invariant that a successful return means the protocol transport
+    /// accepted the event before diagnostic consumers observe it.
     pub fn publish(&self, event: SemanticEvent) -> Result<(), String> {
-        self.publish_global(event.clone());
-        self.publish_turn(event)
+        self.publish_turn(event.clone())?;
+        self.publish_global(event);
+        Ok(())
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {
@@ -183,8 +182,7 @@ mod tests {
         let mut global = bus.subscribe();
         let mut turn = bus.subscribe_turn("turn");
         let value = event("turn", 0);
-        bus.publish_global(value.clone());
-        bus.publish_turn(value).unwrap();
+        bus.publish(value).unwrap();
         assert_eq!(event_turn_id(&global.recv().await.unwrap()), "turn");
         assert_eq!(event_turn_id(&turn.recv().await.unwrap()), "turn");
     }

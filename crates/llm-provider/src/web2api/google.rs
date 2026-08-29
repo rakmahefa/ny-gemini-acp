@@ -23,7 +23,7 @@ pub async fn generate(
 ) -> Response {
     let body = match json_body(req).await {
         Ok(b) => b,
-        Err(e) => return e,
+        Err(e) => return *e,
     };
     let (model_name, stream) = if let Some(n) = model_path.strip_suffix(":streamGenerateContent") {
         (n.to_string(), true)

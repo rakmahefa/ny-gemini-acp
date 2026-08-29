@@ -15,7 +15,7 @@ use llm_provider::core::models::Resolved;
 pub async fn handler(State(state): State<AppState>, req: axum::extract::Request) -> Response {
     let body = match json_body(req).await {
         Ok(b) => b,
-        Err(e) => return e,
+        Err(error) => return *error,
     };
     let model_name = body
         .get("model")

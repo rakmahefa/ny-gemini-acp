@@ -104,21 +104,33 @@ impl ShellSandbox {
             let program = command_name(&segment.program)?;
             let args = &segment.args;
 
-            if matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash" | "ksh") {
+            if dynamic_capability_program(program.as_str()) {
                 return Err(SecurityError(format!(
-                    "interpréteur shell '{program}' interdit dans la sandbox"
+                    "programme '{program}' interdit sans confinement OS : la politique applicative ne peut pas garantir son périmètre"
                 )));
             }
 
-            if matches!(
-                program.as_str(),
-                "python" | "python2" | "python3" | "perl" | "ruby" | "node"
-            ) && args
-                .iter()
-                .any(|arg| matches!(arg.as_str(), "-c" | "-e" | "-E"))
-            {
+            if args.iter().any(|arg| {
+                arg == "/" || arg.starts_with('/') || arg.starts_with('~') || arg.contains("../")
+            }) {
+                return Err(SecurityError(
+                    "chemin absolu ou traversal hors périmètre interdit dans une commande shell sans confinement OS".into(),
+                ));
+            }
+
+            if args.iter().any(|arg| {
+                arg.split_once('=').is_some_and(|(_, value)| {
+                    value.starts_with('/') || value.starts_with('~') || value.contains("../")
+                })
+            }) {
+                return Err(SecurityError(
+                    "option contenant un chemin absolu ou hors périmètre interdite dans la sandbox".into(),
+                ));
+            }
+
+            if matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash" | "ksh") {
                 return Err(SecurityError(format!(
-                    "exécution de code inline interdite pour '{program}'"
+                    "interpréteur shell '{program}' interdit dans la sandbox"
                 )));
             }
 
@@ -131,24 +143,15 @@ impl ShellSandbox {
                 ));
             }
 
-            if matches!(program.as_str(), "xargs")
-                && args.iter().any(|arg| {
-                    matches!(
-                        arg.as_str(),
-                        "sh" | "bash" | "zsh" | "dash" | "ksh" | "python" | "python3"
-                    )
-                })
-            {
-                return Err(SecurityError("xargs vers un interpréteur est interdit".into()));
+            if matches!(program.as_str(), "xargs") {
+                return Err(SecurityError(
+                    "xargs interdit sans confinement OS : il peut déléguer l'exécution à des programmes arbitraires".into(),
+                ));
             }
 
-            if matches!(program.as_str(), "rm" | "rmdir" | "chmod" | "chown")
-                && args
-                    .iter()
-                    .any(|arg| arg == "/" || is_absolute_path(arg) || arg.contains("../"))
-            {
+            if matches!(program.as_str(), "rm" | "rmdir" | "chmod" | "chown") {
                 return Err(SecurityError(format!(
-                    "cible absolue ou hors périmètre interdite pour '{program}'"
+                    "commande mutante '{program}' interdite sans confinement OS"
                 )));
             }
 
@@ -160,6 +163,17 @@ impl ShellSandbox {
         }
         Ok(())
     }
+}
+
+fn dynamic_capability_program(program: &str) -> bool {
+    matches!(
+        program,
+        "python" | "python2" | "python3" | "perl" | "ruby" | "node" | "nodejs"
+            | "awk" | "lua" | "php" | "java" | "js" | "deno" | "bun" | "cargo"
+            | "rustc" | "rustup" | "go" | "gcc" | "g++" | "clang" | "make" | "cmake"
+            | "npm" | "npx" | "pnpm" | "yarn" | "pip" | "pip3" | "docker"
+            | "docker-compose" | "podman" | "uv"
+    )
 }
 
 fn command_name(program: &str) -> Result<String, SecurityError> {
@@ -179,20 +193,13 @@ fn command_name(program: &str) -> Result<String, SecurityError> {
     Ok(program.to_owned())
 }
 
-fn is_absolute_path(value: &str) -> bool {
-    value.starts_with('/') || value.starts_with('~')
-}
-
 fn allowed_programs() -> HashSet<&'static str> {
     [
-        "cat", "head", "tail", "less", "ls", "find", "tree", "grep", "rg", "ag", "awk",
-        "sed", "echo", "printf", "cd", "pwd", "mkdir", "cp", "mv", "rm", "touch", "chmod",
-        "chown", "git", "gh", "cargo", "rustc", "rustup", "node", "npm", "npx", "pnpm",
-        "yarn", "bun", "python", "python3", "pip", "pip3", "go", "gcc", "g++", "clang", "make",
-        "cmake", "docker", "docker-compose", "podman", "jq", "yq", "wc", "sort", "uniq", "tr",
-        "cut", "xargs", "date", "whoami", "id", "env", "printenv", "basename", "dirname",
-        "realpath", "readlink", "diff", "patch", "tar", "zip", "unzip", "gzip", "gunzip", "which",
-        "command", "type", "file", "stat", "sleep", "uv", "test", "true", "false",
+        "cat", "head", "tail", "less", "ls", "find", "tree", "grep", "rg", "ag", "sed", "echo",
+        "printf", "cd", "pwd", "mkdir", "cp", "mv", "git", "gh", "jq", "yq", "wc", "sort", "uniq",
+        "tr", "cut", "date", "whoami", "id", "printenv", "basename", "dirname", "realpath", "readlink",
+        "diff", "patch", "tar", "zip", "unzip", "gzip", "gunzip", "which", "file", "stat", "sleep",
+        "test", "true", "false",
     ]
     .into_iter()
     .collect()
@@ -202,8 +209,27 @@ fn blocked_programs() -> HashSet<&'static str> {
     [
         "sudo", "su", "doas", "mkfs", "dd", "shutdown", "reboot", "halt", "poweroff", "mount",
         "umount", "kill", "curl", "wget", "nc", "ncat", "socat", "crontab", "systemctl", "service",
-        "eval", "exec",
+        "eval", "exec", "env", "command", "type",
     ]
     .into_iter()
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dynamic_programs_fail_closed() {
+        for command in ["python script.py", "node script.js", "awk '{print $1}'", "cargo test"] {
+            assert!(ShellSandbox::new().validate(command).is_err(), "must reject {command}");
+        }
+    }
+
+    #[test]
+    fn direct_path_escape_is_rejected() {
+        for command in ["cat /etc/passwd", "cat ../secret", "git --git-dir=/etc status"] {
+            assert!(ShellSandbox::new().validate(command).is_err(), "must reject {command}");
+        }
+    }
 }

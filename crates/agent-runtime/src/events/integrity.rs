@@ -300,7 +300,7 @@ impl TurnIntegrity {
         event: &str,
     ) -> Result<(), IntegrityError> {
         self.ensure_active(event)?;
-        if !self.work_started {
+        if event == "turn_completed" && !self.work_started {
             return Err(IntegrityError::new(format!(
                 "{event} requires at least one assistant or tool lifecycle event"
             )));
@@ -395,6 +395,22 @@ mod tests {
             .unwrap();
         s.finish_terminal_after_scopes("turn_cancelled").unwrap();
         assert!(s.open_tool_ids().is_empty());
+        assert_eq!(s.phase, TurnPhase::Terminal);
+    }
+
+    #[test]
+    fn cancellation_can_terminalize_immediately_after_turn_start() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.finish_terminal_after_scopes("turn_cancelled").unwrap();
+        assert_eq!(s.phase, TurnPhase::Terminal);
+    }
+
+    #[test]
+    fn failure_can_terminalize_immediately_after_turn_start() {
+        let mut s = TurnIntegrity::default();
+        s.turn_started().unwrap();
+        s.finish_terminal_after_scopes("turn_failed").unwrap();
         assert_eq!(s.phase, TurnPhase::Terminal);
     }
 
