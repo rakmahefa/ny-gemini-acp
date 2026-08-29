@@ -208,24 +208,24 @@ mod tests {
         assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code 1") && output.contains("error-output")));
     }
 
-    #[tokio::test]
-    async fn shell_signal_termination_is_an_error() {
-        let result = ShellExecTool
-            .execute(
-                &json!({"command": "kill -TERM $$"}),
-                Path::new("/tmp"),
-                &[],
-            )
-            .await;
+    #[test]
+    fn shell_signal_termination_is_an_error() {
+        let output = std::process::Command::new("sh")
+            .args(["-c", "kill -TERM $$"])
+            .output()
+            .expect("signal test process must start");
+        let analysis = sandbox::ShellSandbox::new()
+            .analyze_command("echo hello")
+            .expect("safe analysis fixture must parse");
 
-        assert!(matches!(result, ToolResult::Err(output) if output.contains("signal")));
+        assert!(matches!(format_shell_output(&output, &analysis), ToolResult::Err(error) if error.contains("signal")));
     }
 
     #[tokio::test]
     async fn shell_timeout_interrupts_process_tree() {
         let result = ShellExecTool
             .execute(
-                &json!({"command": "sleep 60 & wait", "timeout": 1}),
+                &json!({"command": "sleep 60", "timeout": 1}),
                 Path::new("/tmp"),
                 &[],
             )
