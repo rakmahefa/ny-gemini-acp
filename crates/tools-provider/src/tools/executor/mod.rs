@@ -17,7 +17,8 @@ use super::lifecycle::{
     bind_session_cancellation, session_cancelled, unbind_session_cancellation,
     wait_for_session_cancel, ToolLifecycle, ToolLifecycleState,
 };
-use super::tool_ux::{classify_risk, result_update, ToolInfo};
+use super::tool_ux::{bounded_raw_input, classify_risk, result_update, ToolInfo};
+use crate::tools::executor::notifications::{project_content, project_locations, project_tool_kind};
 
 pub use mapping::map_stop_reason;
 pub use notifications::{emit_error_chunk, safe_session_update};
@@ -31,11 +32,7 @@ pub struct ToolResult {
 }
 impl ToolResult {
     pub fn err(content: impl Into<String>) -> Self {
-        Self {
-            content: content.into(),
-            is_ok: false,
-            executed: false,
-        }
+        Self { content: content.into(), is_ok: false, executed: false }
     }
 }
 
@@ -80,19 +77,8 @@ impl<'a> ToolExecutor<'a> {
         get_mode: &'a (dyn Fn() -> ToolPermissionMode + Send + Sync),
         cancellation: watch::Receiver<bool>,
     ) -> Self {
-        bind_session_cancellation(
-            session_id.0.as_ref(),
-            ToolCancellation::from_receiver(cancellation.clone()),
-        );
-        Self {
-            cx,
-            session_id,
-            registry,
-            cwd,
-            additional_dirs,
-            get_mode,
-            cancellation,
-        }
+        bind_session_cancellation(session_id.0.as_ref(), ToolCancellation::from_receiver(cancellation.clone()));
+        Self { cx, session_id, registry, cwd, additional_dirs, get_mode, cancellation }
     }
 
     pub async fn execute_with_call_id_and_events(
@@ -102,25 +88,20 @@ impl<'a> ToolExecutor<'a> {
         arguments: &Value,
         semantic: &mut dyn TurnEventSink,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, Some(semantic))
-            .await
+        self.execute_inner(call_id, tool_name, arguments, Some(semantic)).await
     }
+
     pub async fn execute_with_call_id(
         &self,
         call_id: ToolCallId,
         tool_name: &str,
         arguments: &Value,
     ) -> ToolResult {
-        self.execute_inner(call_id, tool_name, arguments, None)
-            .await
+        self.execute_inner(call_id, tool_name, arguments, None).await
     }
+
     pub async fn execute(&self, tool_name: &str, arguments: &Value) -> ToolResult {
-        self.execute_with_call_id(
-            ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple())),
-            tool_name,
-            arguments,
-        )
-        .await
+        self.execute_with_call_id(ToolCallId::from(format!("call_{}", uuid::Uuid::new_v4().simple())), tool_name, arguments).await
     }
 
     fn finish_terminal(
@@ -128,50 +109,28 @@ impl<'a> ToolExecutor<'a> {
         r: TerminalFinish<'_>,
         mut semantic: Option<&mut dyn TurnEventSink>,
     ) -> ToolResult {
-        let TerminalFinish {
-            call_id,
-            lifecycle,
-            tool_name,
-            arguments,
-            content,
-            is_ok,
-            cancelled,
-            reason,
-            terminal_id,
-            terminal_meta,
-        } = r;
+        let TerminalFinish { call_id, lifecycle, tool_name, arguments, content, is_ok, cancelled, reason, terminal_id, terminal_meta } = r;
         let executed = matches!(lifecycle.state(), ToolLifecycleState::Executing);
-        let envelope = lifecycle
-            .finish_with_result(tool_name, content.clone(), is_ok, cancelled)
-            .expect("terminal tool path must finalize exactly once");
-        let rendered = result_update(
-            tool_name,
-            arguments,
-            &envelope.content,
-            envelope.status == ToolCallStatus::Completed,
-            self.cwd,
-            terminal_id,
-        );
+        let envelope = lifecycle.finish_with_result(tool_name, content.clone(), is_ok, cancelled).expect("terminal tool path must finalize exactly once");
+        let rendered = result_update(tool_name, arguments, &envelope.content, envelope.status == ToolCallStatus::Completed, self.cwd, terminal_id);
         let meta = mapping::lifecycle_meta(tool_name, lifecycle, reason, terminal_meta);
-        self.emit_update(
-            call_id,
-            envelope.status,
-            rendered.content,
-            rendered.locations,
-            Some(meta),
-        );
+        self.emit_update(call_id, envelope.status, project_content(&rendered.content), project_locations(&rendered.locations), Some(meta));
         if let Some(e) = semantic.as_mut() {
-            e.tool_result_received(
-                call_id.to_string(),
-                content.clone(),
-                Some(ToolUiModel::generic(tool_name, arguments.clone())),
-            );
+            let info = ToolInfo::build(tool_name, arguments, self.cwd, terminal_id);
+            let mut ui = info.into_ui_model(bounded_raw_input(arguments));
+            ui.status = if cancelled {
+                agent_runtime::ToolUiStatus::Cancelled
+            } else if is_ok {
+                agent_runtime::ToolUiStatus::Succeeded
+            } else {
+                agent_runtime::ToolUiStatus::Failed
+            };
+            ui.output = Some(serde_json::json!({ "text": content }));
+            ui.content.extend(rendered.content);
+            ui.locations = rendered.locations;
+            e.tool_result_received(call_id.to_string(), content.clone(), Some(ui));
         }
-        ToolResult {
-            content,
-            is_ok: envelope.status == ToolCallStatus::Completed,
-            executed,
-        }
+        ToolResult { content, is_ok: envelope.status == ToolCallStatus::Completed, executed }
     }
 
     async fn execute_inner(
@@ -183,240 +142,79 @@ impl<'a> ToolExecutor<'a> {
     ) -> ToolResult {
         let info = ToolInfo::build(tool_name, arguments, self.cwd, None);
         let mut lifecycle = ToolLifecycle::new();
-        self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
-        let ui = Some(ToolUiModel::generic(tool_name, arguments.clone()));
+        if semantic.is_none() {
+            self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
+        }
+        let ui = Some(info.clone().into_ui_model(bounded_raw_input(arguments)));
         if let Some(e) = semantic.as_mut() {
             e.tool_call_requested(call_id.to_string(), tool_name.to_owned(), ui.clone());
         }
         if *self.cancellation.borrow() {
-            return self.finish_terminal(
-                TerminalFinish {
-                    call_id: &call_id,
-                    lifecycle: &mut lifecycle,
-                    tool_name,
-                    arguments,
-                    content: "outil annulé avant son démarrage".into(),
-                    is_ok: false,
-                    cancelled: true,
-                    reason: Some("cancelled"),
-                    terminal_id: None,
-                    terminal_meta: None,
-                },
-                semantic,
-            );
+            return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: "outil annulé avant son démarrage".into(), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic);
         }
         let mode = (self.get_mode)();
         let needs_permission = match info.kind {
-            agent_client_protocol::schema::v1::ToolKind::Edit
-            | agent_client_protocol::schema::v1::ToolKind::Execute => match mode {
+            agent_runtime::ToolUiKind::FileWrite
+            | agent_runtime::ToolUiKind::FileEdit
+            | agent_runtime::ToolUiKind::ReplaceInFile
+            | agent_runtime::ToolUiKind::Shell => match mode {
                 ToolPermissionMode::BypassPermissions => false,
-                ToolPermissionMode::AcceptEdits => {
-                    info.kind == agent_client_protocol::schema::v1::ToolKind::Execute
-                        && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High
-                }
+                ToolPermissionMode::AcceptEdits => matches!(info.kind, agent_runtime::ToolUiKind::Shell) && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High,
                 ToolPermissionMode::Default => true,
             },
             _ => false,
         };
         if needs_permission {
-            lifecycle
-                .transition(ToolLifecycleState::Permission)
-                .expect("pending -> permission must be legal");
+            lifecycle.transition(ToolLifecycleState::Permission).expect("pending -> permission must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
-            if let Some(e) = semantic.as_mut() {
-                e.permission_requested(call_id.to_string());
-            }
+            if let Some(e) = semantic.as_mut() { e.permission_requested(call_id.to_string()); }
             let request = PermissionRequest::from_tool_call(tool_name, arguments, self.cwd);
             match self.request_permission(&request, &call_id).await {
                 PermissionResult::Allow => {
                     if *self.cancellation.borrow() {
-                        return self.finish_terminal(
-                            TerminalFinish {
-                                call_id: &call_id,
-                                lifecycle: &mut lifecycle,
-                                tool_name,
-                                arguments,
-                                content: format!(
-                                    "{} ({}) annulé avant le démarrage de l'exécution.",
-                                    request.kind.label(),
-                                    request.summary
-                                ),
-                                is_ok: false,
-                                cancelled: true,
-                                reason: Some("cancelled"),
-                                terminal_id: None,
-                                terminal_meta: None,
-                            },
-                            semantic,
-                        );
+                        return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: format!("{} ({}) annulé avant le démarrage de l'exécution.", request.kind.label(), request.summary), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic);
                     }
-                    lifecycle
-                        .transition(ToolLifecycleState::Executing)
-                        .expect("permission -> executing must be legal");
+                    lifecycle.transition(ToolLifecycleState::Executing).expect("permission -> executing must be legal");
                     self.emit_lifecycle(&call_id, &lifecycle, tool_name);
-                    if let Some(e) = semantic.as_mut() {
-                        e.tool_execution_started(call_id.to_string(), ui.clone());
-                    }
+                    if let Some(e) = semantic.as_mut() { e.tool_execution_started(call_id.to_string(), ui.clone()); }
                 }
-                PermissionResult::Reject => {
-                    return self.finish_terminal(
-                        TerminalFinish {
-                            call_id: &call_id,
-                            lifecycle: &mut lifecycle,
-                            tool_name,
-                            arguments,
-                            content: format!(
-                                "{} ({}) refusé par l'utilisateur.",
-                                request.kind.label(),
-                                request.summary
-                            ),
-                            is_ok: false,
-                            cancelled: false,
-                            reason: Some("user-rejected"),
-                            terminal_id: None,
-                            terminal_meta: None,
-                        },
-                        semantic,
-                    )
-                }
-                PermissionResult::Cancelled => {
-                    return self.finish_terminal(
-                        TerminalFinish {
-                            call_id: &call_id,
-                            lifecycle: &mut lifecycle,
-                            tool_name,
-                            arguments,
-                            content: format!(
-                                "{} ({}) annulé pendant la demande d'autorisation.",
-                                request.kind.label(),
-                                request.summary
-                            ),
-                            is_ok: false,
-                            cancelled: true,
-                            reason: Some("cancelled"),
-                            terminal_id: None,
-                            terminal_meta: None,
-                        },
-                        semantic,
-                    )
-                }
-                PermissionResult::TransportError(error) => {
-                    return self.finish_terminal(
-                        TerminalFinish {
-                            call_id: &call_id,
-                            lifecycle: &mut lifecycle,
-                            tool_name,
-                            arguments,
-                            content: format!("Échec de la demande de permission ACP : {error}"),
-                            is_ok: false,
-                            cancelled: false,
-                            reason: Some("permission-error"),
-                            terminal_id: None,
-                            terminal_meta: None,
-                        },
-                        semantic,
-                    )
-                }
+                PermissionResult::Reject => return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: format!("{} ({}) refusé par l'utilisateur.", request.kind.label(), request.summary), is_ok: false, cancelled: false, reason: Some("user-rejected"), terminal_id: None, terminal_meta: None }, semantic),
+                PermissionResult::Cancelled => return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: format!("{} ({}) annulé pendant la demande d'autorisation.", request.kind.label(), request.summary), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic),
+                PermissionResult::TransportError(error) => return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: format!("Échec de la demande de permission ACP : {error}"), is_ok: false, cancelled: false, reason: Some("permission-error"), terminal_id: None, terminal_meta: None }, semantic),
             }
         } else {
             if *self.cancellation.borrow() {
-                return self.finish_terminal(
-                    TerminalFinish {
-                        call_id: &call_id,
-                        lifecycle: &mut lifecycle,
-                        tool_name,
-                        arguments,
-                        content: "outil annulé avant son exécution".into(),
-                        is_ok: false,
-                        cancelled: true,
-                        reason: Some("cancelled"),
-                        terminal_id: None,
-                        terminal_meta: None,
-                    },
-                    semantic,
-                );
+                return self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: "outil annulé avant son exécution".into(), is_ok: false, cancelled: true, reason: Some("cancelled"), terminal_id: None, terminal_meta: None }, semantic);
             }
-            lifecycle
-                .transition(ToolLifecycleState::Executing)
-                .expect("pending -> executing must be legal");
+            lifecycle.transition(ToolLifecycleState::Executing).expect("pending -> executing must be legal");
             self.emit_lifecycle(&call_id, &lifecycle, tool_name);
-            if let Some(e) = semantic.as_mut() {
-                e.tool_execution_started(call_id.to_string(), ui.clone());
-            }
+            if let Some(e) = semantic.as_mut() { e.tool_execution_started(call_id.to_string(), ui.clone()); }
         }
         let outcome = if tool_name == "shell_exec" {
-            match self
-                .execute_shell_via_acp_terminal(arguments, &call_id, &lifecycle)
-                .await
-            {
+            match self.execute_shell_via_acp_terminal(arguments, &call_id, &lifecycle).await {
                 Ok(o) => o,
                 Err(error) => {
                     tracing::debug!(session = %self.session_id, error = %error, "terminal ACP indisponible avant exécution, fallback shell local");
                     self.execute_registry(&call_id, tool_name, arguments).await
                 }
             }
-        } else {
-            self.execute_registry(&call_id, tool_name, arguments).await
-        };
-        self.finish_terminal(
-            TerminalFinish {
-                call_id: &call_id,
-                lifecycle: &mut lifecycle,
-                tool_name,
-                arguments,
-                content: outcome.result.content,
-                is_ok: outcome.result.is_ok,
-                cancelled: outcome.cancelled,
-                reason: if outcome.cancelled {
-                    Some("cancelled")
-                } else {
-                    None
-                },
-                terminal_id: outcome.terminal_id.as_deref(),
-                terminal_meta: outcome.terminal_meta,
-            },
-            semantic,
-        )
+        } else { self.execute_registry(&call_id, tool_name, arguments).await };
+        self.finish_terminal(TerminalFinish { call_id: &call_id, lifecycle: &mut lifecycle, tool_name, arguments, content: outcome.result.content, is_ok: outcome.result.is_ok, cancelled: outcome.cancelled, reason: if outcome.cancelled { Some("cancelled") } else { None }, terminal_id: outcome.terminal_id.as_deref(), terminal_meta: outcome.terminal_meta }, semantic)
     }
 
-    async fn execute_registry(
-        &self,
-        call_id: &ToolCallId,
-        tool_name: &str,
-        arguments: &Value,
-    ) -> ExecutionOutcome {
-        let request = ToolCallRequest {
-            call_id: call_id.to_string(),
-            session_id: self.session_id.0.to_string(),
-            name: tool_name.to_owned(),
-            arguments: arguments.clone(),
-            cwd: self.cwd.to_path_buf(),
-            additional_dirs: self.additional_dirs.to_vec(),
-            cancellation: self.cancellation.clone(),
-        };
+    async fn execute_registry(&self, call_id: &ToolCallId, tool_name: &str, arguments: &Value) -> ExecutionOutcome {
+        let request = ToolCallRequest { call_id: call_id.to_string(), session_id: self.session_id.0.to_string(), name: tool_name.to_owned(), arguments: arguments.clone(), cwd: self.cwd.to_path_buf(), additional_dirs: self.additional_dirs.to_vec(), cancellation: self.cancellation.clone() };
         let result = tokio::select! {
             value = self.registry.call(request) => value,
             _ = wait_for_session_cancel(self.session_id.0.as_ref()) => return ExecutionOutcome { result: ToolResult::err("outil annulé pendant son exécution"), terminal_id: None, terminal_meta: None, cancelled: true }
         };
-        let cancelled =
-            session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
-        ExecutionOutcome {
-            result: ToolResult {
-                content: result.content,
-                is_ok: result.is_ok,
-                executed: result.executed,
-            },
-            terminal_id: None,
-            terminal_meta: None,
-            cancelled,
-        }
+        let cancelled = session_cancelled(self.session_id.0.as_ref()) || *self.cancellation.borrow();
+        ExecutionOutcome { result: ToolResult { content: result.content, is_ok: result.is_ok, executed: result.executed }, terminal_id: None, terminal_meta: None, cancelled }
     }
 }
 
 impl Drop for ToolExecutor<'_> {
-    fn drop(&mut self) {
-        unbind_session_cancellation(self.session_id.0.as_ref());
-    }
+    fn drop(&mut self) { unbind_session_cancellation(self.session_id.0.as_ref()); }
 }
 
 #[cfg(test)]
@@ -436,14 +234,8 @@ mod tests {
     }
     #[test]
     fn cancelled_terminal_preserves_partial_output() {
-        assert_eq!(
-            terminal::terminal_output_text(("partial output".into(), false)),
-            "partial output"
-        );
-        assert_eq!(
-            terminal::terminal_output_text(("partial output".into(), true)),
-            "partial output\n… (sortie tronquée par le client ACP)"
-        );
+        assert_eq!(terminal::terminal_output_text(("partial output".into(), false)), "partial output");
+        assert_eq!(terminal::terminal_output_text(("partial output".into(), true)), "partial output\n… (sortie tronquée par le client ACP)");
     }
     #[test]
     fn empty_cancelled_terminal_output_stays_empty() {
@@ -451,8 +243,7 @@ mod tests {
     }
     #[test]
     fn terminal_metadata_shape() {
-        let meta =
-            terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
+        let meta = terminal::terminal_lifecycle_meta("term-1", Some("hello"), Some((Some(0), None)));
         assert_eq!(meta["terminal_info"]["terminal_id"], "term-1");
         assert_eq!(meta["terminal_output"]["data"], "hello");
         assert_eq!(meta["terminal_exit"]["exit_code"], 0);
