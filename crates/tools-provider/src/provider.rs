@@ -75,18 +75,11 @@ fn ui_kind(name: &str) -> ToolUiKind {
     }
 }
 
-fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
-    values
-        .iter()
-        .filter_map(|value| serde_json::to_value(value).ok())
-        .collect()
-}
-
 fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
     ToolInfo::build(name, arguments, cwd, None)
 }
 
-fn pending_ui(_call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
+fn pending_ui(name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
     let info = presentation_info(name, arguments, cwd);
     ToolUiModel::pending(
         ui_kind(name),
@@ -94,8 +87,8 @@ fn pending_ui(_call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> Tool
         info.title,
         bounded_raw_input(arguments),
     )
-    .with_content(rich_values(&info.content))
-    .with_locations(rich_values(&info.locations))
+    .with_content(info.content)
+    .with_locations(info.locations)
 }
 
 fn completed_ui_from_info(
@@ -107,27 +100,8 @@ fn completed_ui_from_info(
     info: &ToolInfo,
 ) -> ToolUiModel {
     let rendered = result_update(name, arguments, content, is_ok, cwd, None);
-
-    // Contract visuel: l'Input appartient uniquement au ToolCall initial.
-    // Les résultats restent des ToolCallContent textuels/diff structurés; aucun
-    // terminal ACP n'est injecté par le shell_exec actuel.
-    let mut rich_content = info
-        .content
-        .iter()
-        .filter_map(|item| {
-            let value = serde_json::to_value(item).ok()?;
-            let kind = value.get("type").and_then(Value::as_str)?;
-            (kind != "terminal").then_some(value)
-        })
-        .collect::<Vec<_>>();
-    rich_content.extend(rich_values(&rendered.content));
-
-    let locations = rendered
-        .locations
-        .iter()
-        .filter(|location| location.path.exists())
-        .filter_map(|location| serde_json::to_value(location).ok())
-        .collect::<Vec<_>>();
+    let mut rich_content = info.content.clone();
+    rich_content.extend(rendered.content);
 
     ToolUiModel::pending(
         ui_kind(name),
@@ -137,7 +111,7 @@ fn completed_ui_from_info(
     )
     .completed(is_ok, Some(json!({ "text": content })))
     .with_content(rich_content)
-    .with_locations(locations)
+    .with_locations(rendered.locations)
 }
 
 fn map_mcp_error(error: McpError) -> ToolConfigurationError {
@@ -219,9 +193,9 @@ impl ToolProvider for DefaultToolProvider {
         self.registry.has_tools()
     }
 
-    fn ui_model(&self, call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> {
+    fn ui_model(&self, _call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> {
         let cwd = self.cwd.as_deref().unwrap_or_else(|| Path::new("."));
-        Some(pending_ui(call_id, name, arguments, cwd))
+        Some(pending_ui(name, arguments, cwd))
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
