@@ -91,7 +91,6 @@ impl Tool for ShellExecTool {
 
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             command_builder.process_group(0);
         }
 
@@ -205,11 +204,7 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(
-            result,
-            ToolResult::Err(output)
-                if output.contains("exit code") && output.contains("[stderr]")
-        ));
+        assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code ") && (output.contains("unknown option") || output.contains("unknown switch") || output.contains("no-such-option"))));
     }
 
     #[test]
