@@ -23,11 +23,13 @@ pub struct Store {
 
 impl Store {
     pub async fn begin_turn(&self, id: &str) -> Result<(Session, u64), TurnError> {
-        let mut live = self.live.write().await;
+        // The filesystem sentinel is the inter-process ownership boundary. Do
+        // not hold the global in-memory write lock across filesystem I/O.
         self.acquire_busy(id)
             .await
             .map_err(|_| TurnError::AlreadyRunning)?;
 
+        let mut live = self.live.write().await;
         if let Some(entry) = live.get_mut(id) {
             entry.generation = entry.generation.saturating_add(1);
             return Ok((entry.session.clone(), entry.generation));
@@ -36,6 +38,7 @@ impl Store {
         let session = match self.read(id).await {
             Some(session) => session,
             None => {
+                drop(live);
                 self.release_busy(id).await;
                 return Err(TurnError::NotFound(id.to_string()));
             }
@@ -94,24 +97,34 @@ impl Store {
         final_session.updated_at = crate::time::now_iso();
         final_session.turn_count = final_session.turn_count.saturating_add(1);
 
-        if !final_session.messages.is_empty() {
-            let snap_n = final_session.messages.len();
-            if let Ok(raw) = serde_json::to_vec_pretty(&final_session) {
-                if let Err(error) = self.persist_snapshot(id, snap_n, &raw).await {
-                    tracing::error!(session = %id, snapshot = snap_n, error = %error, "snapshot persist failed");
-                }
-            }
-            self.prune_snapshots(id, MAX_SNAPSHOTS).await;
-        }
-
+        // Commit the canonical session first. A snapshot is an auxiliary
+        // recovery artifact and must never become newer than the canonical
+        // state while the canonical write is failing.
         let persist_result = self.persist(&final_session).await.map_err(|error| {
             StoreError::Persistence(error.to_string())
         });
+
         if persist_result.is_ok() {
-            if let Some(entry) = self.live.write().await.get_mut(id) {
+            if !final_session.messages.is_empty() {
+                let snap_n = final_session.messages.len();
+                match serde_json::to_vec_pretty(&final_session) {
+                    Ok(raw) => {
+                        if let Err(error) = self.persist_snapshot(id, snap_n, &raw).await {
+                            tracing::warn!(session = %id, snapshot = snap_n, error = %error, "snapshot persist failed after canonical session commit");
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(session = %id, snapshot = snap_n, error = %error, "snapshot serialization failed after canonical session commit");
+                    }
+                }
+                self.prune_snapshots(id, MAX_SNAPSHOTS).await;
+            }
+            let mut live = self.live.write().await;
+            if let Some(entry) = live.get_mut(id) {
                 entry.session = final_session;
             }
         }
+
         self.release_busy(id).await;
         persist_result
     }

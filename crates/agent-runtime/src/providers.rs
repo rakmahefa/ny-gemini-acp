@@ -94,6 +94,31 @@ pub struct LlmModelInfo {
 #[async_trait::async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn stream(&self, request: ModelRequest) -> Result<LlmStream, LlmError>;
+
+    /// Cancellation-aware boundary for establishing the provider stream.
+    ///
+    /// Implementations keep the stable `stream()` contract while the runtime
+    /// prevents a provider blocked before stream creation from holding a
+    /// cancelled turn indefinitely.
+    async fn stream_with_cancellation(
+        &self,
+        request: ModelRequest,
+        mut cancellation: watch::Receiver<bool>,
+    ) -> Result<LlmStream, LlmError> {
+        loop {
+            if *cancellation.borrow() {
+                return Err(LlmError::Cancelled);
+            }
+            tokio::select! {
+                result = self.stream(request.clone()) => return result,
+                changed = cancellation.changed() => match changed {
+                    Ok(()) => continue,
+                    Err(_) => return Err(LlmError::Cancelled),
+                },
+            }
+        }
+    }
+
     async fn upload_image(&self, base64: &str, mime: &str) -> Result<String, LlmError>;
     fn model_info(&self, model: &str) -> LlmModelInfo;
 }

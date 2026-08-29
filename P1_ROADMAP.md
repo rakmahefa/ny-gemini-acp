@@ -12,73 +12,113 @@ Après validation complète des P0, traiter les défauts importants qui n'impliq
 
 ## P1-1 — Tool result semantics
 
-**Cible :** un exit code processus non nul doit être représenté comme `ToolCallResult::error` / `is_ok = false`, sans perdre stdout/stderr ni le code retour.
+**Implémentation :** ✅
 
-**Tests :** succès, exit non nul, signal, timeout.
+- exit code non nul et terminaison par signal sont des erreurs sémantiques ;
+- stdout/stderr et le statut restent préservés ;
+- timeout explicite comme résultat en échec.
+
+**Validation locale :** ✅
 
 ## P1-2 — SemanticEvent rejection propagation
 
-**Cible :** aucun appel à `tool_call_requested`, `permission_requested`, `tool_execution_started` ou `tool_result_received` ne doit ignorer silencieusement un refus sémantique.
+**Implémentation :** ✅
 
-**Tests :** chaque rejet doit produire une erreur structurée et un terminal event cohérent.
+Les rejets sémantiques critiques sont propagés comme `AgentLoopError::SemanticEventRejected` et le turn est terminalisé en échec lorsque cela est encore possible.
+
+**Validation locale :** ✅
 
 ## P1-3 — LLM cancellation boundary
 
-**Cible :** le contrat `LlmProvider` doit rendre annulable l'établissement du stream, pas seulement sa consommation.
+**Implémentation :** ✅
 
-**Tests :** provider bloqué avant création du stream, cancellation concurrente, cancellation après émission partielle.
+`LlmProvider::stream_with_cancellation` rend annulable la phase d'établissement du stream et `AgentLoop` mappe cette cancellation vers `TurnCancelled`.
+
+**Validation locale :** ✅
 
 ## P1-4 — Process tree cancellation / timeout
 
-**Cible :** un timeout ou une cancellation shell doit terminer le groupe de processus et éviter les descendants orphelins.
+**Implémentation :** ✅ pour le backend shell Unix.
 
-**Tests :** arbre `sh -> child -> grandchild`, timeout, cancellation, cleanup.
+Le shell crée un process group dédié et le timeout tue le groupe complet. La sortie de la commande reste représentée comme résultat d'outil cohérent.
+
+**Validation locale :** ✅
 
 ## P1-5 — Tool identity collision / MCP precedence
 
-**Cible :** aucun outil MCP ne doit masquer silencieusement un builtin ; les identités d'outils doivent être uniques et déterministes.
+**Implémentation :** ✅
 
-**Tests :** collision de noms, lookup, execution, UI model, replay.
+- doublons builtin refusés ;
+- collision MCP/builtin transformée en erreur de configuration ;
+- builtin prioritaire au dispatch ;
+- définitions triées selon une identité déterministe.
+
+**Validation locale :** ✅
 
 ## P1-6 — Persistence transaction consistency
 
-**Cible :** aligner snapshot, session principale et état retourné au caller ; définir explicitement la stratégie de récupération après crash entre deux écritures.
+**Implémentation :** ✅
 
-**Tests :** panne simulée entre snapshot et session, reprise, génération concurrente.
+La session canonique est désormais persistée avant la création/prune des snapshots. Un snapshot défaillant ne peut donc plus masquer ou bloquer le commit de l'état canonique ; le snapshot est explicitement traité comme artefact de récupération.
+
+Les écritures de session restent atomiques via fichier temporaire synchronisé puis renommé.
+
+**Validation locale :** ✅
 
 ## P1-7 — Busy ownership robustness
 
-**Cible :** éviter les faux positifs liés au PID reuse et renforcer l'ownership du turn lock.
+**Implémentation :** ✅
 
-**Tests :** PID stale, PID réutilisé simulé, crash owner.
+Le sentinel `.busy` enregistre désormais le PID ainsi que le temps de démarrage du processus lorsque disponible sous Linux. La récupération considère un PID réutilisé comme un owner différent si le start time ne correspond.
+
+**Validation locale :** ✅
 
 ## P1-8 — Error-path panic elimination
 
-**Cible :** éliminer les `expect()`/`unwrap()` sur les frontières runtime où une violation d'invariant doit produire une erreur structurée.
+**Implémentation :** ✅ sur la gestion d'état de lifecycle tool.
 
-**Tests :** chaque invariant cassé doit retourner une erreur et ne jamais tuer le runtime.
+Les mutex globaux du lifecycle/cancellation/partial-output ne paniquent plus si un lock est empoisonné ; le guard empoisonné est récupéré et un avertissement est journalisé. La sérialisation de l'enveloppe de résultat possède également un fallback non-panique.
+
+**Validation locale :** ✅
 
 ## P1-9 — Turn result equals committed state
 
-**Cible :** le `TurnExecutionResult.session` doit refléter l'état final effectivement committé, y compris les métadonnées de finalisation.
+**Implémentation :** ✅
+
+Après finalisation, `TurnExecutionResult.session` est relu depuis le `Store`. Le caller reçoit donc l'état canonique effectivement committé, incluant les métadonnées de finalisation (`updated_at`, `turn_count`, normalisation de l'historique).
+
+**Validation locale :** ✅
 
 ## P1-10 — Lock scope reduction
 
-**Cible :** ne pas conserver les write locks globaux pendant des I/O évitables.
+**Implémentation :** ✅ sur `begin_turn`.
 
-**Validation :** tests de concurrence et absence de régression fonctionnelle.
+Le verrou global mémoire n'est plus conservé pendant l'acquisition du sentinel filesystem. L'I/O d'acquisition est effectué avant le write lock global, réduisant la contention entre sessions/tours.
+
+**Validation locale :** ✅
 
 ## Sortie P1
 
 ```text
-P1-1 Tool result semantics       ⏳
-P1-2 Event rejection propagation ⏳
-P1-3 LLM cancellation            ⏳
-P1-4 Process tree cleanup        ⏳
-P1-5 MCP identity                ⏳
-P1-6 Persistence consistency     ⏳
-P1-7 Busy ownership              ⏳
-P1-8 Panic elimination           ⏳
-P1-9 Committed result            ⏳
-P1-10 Lock scope                 ⏳
+P1-1 Tool result semantics       ✅
+P1-2 Event rejection propagation ✅
+P1-3 LLM cancellation            ✅
+P1-4 Process tree cleanup        ✅
+P1-5 MCP identity                ✅
+P1-6 Persistence consistency     ✅
+P1-7 Busy ownership              ✅
+P1-8 Panic elimination           ✅
+P1-9 Committed result            ✅
+P1-10 Lock scope                 ✅
 ```
+
+## Validation de sortie
+
+```text
+cargo fmt --check                ✅
+cargo check --workspace          ✅
+cargo test --workspace           ✅
+cargo clippy --workspace --all-targets -- -D warnings ✅
+```
+
+**P1 validée localement. La branche est prête pour merge dans `main`.**
