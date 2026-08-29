@@ -2,7 +2,7 @@
 
 ## Objectif
 
-Corriger les vulnérabilités et incohérences P0 identifiées lors de l'audit statique de `main`, sans élargir le périmètre aux dettes P1/P2 tant que les invariants P0 ne sont pas validés.
+Corriger les vulnérabilités et incohérences P0 identifiées lors de l'audit statique de `main`, sans considérer les invariants comme validés tant que la validation locale complète n'est pas verte.
 
 ## Branche
 
@@ -14,69 +14,65 @@ Chaque correctif doit :
 
 1. ajouter ou renforcer les tests couvrant le défaut réel ;
 2. préserver l'architecture provider-neutral ;
-3. passer au minimum `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace` et `cargo clippy --workspace --all-targets -- -D warnings` lorsque l'environnement d'exécution local est disponible ;
-4. mettre à jour ce document immédiatement après validation ;
+3. passer `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace` et `cargo clippy --workspace --all-targets -- -D warnings` ;
+4. mettre à jour ce document après validation ;
 5. ne pas masquer une erreur d'intégrité par un fallback silencieux.
 
 ## P0-1 — Identité de session / chemins de persistance
 
 **Problème :** certaines entrées ACP peuvent atteindre `Store` sans validation canonique de `SessionId`, alors que les chemins de persistance sont dérivés directement de l'identifiant.
 
-**État :** ⚠️ À revalider après le reset de la branche ; la protection précédemment implémentée n'est pas considérée comme présente tant que le code et les tests n'ont pas été revérifiés sur cette base.
+**État :** ⚠️ À revalider sur la base actuelle de la branche.
 
 ## Correctif de compilation Clippy — `llm-provider/web2api`
 
-**Problème :** `json_body()` retournait `Result<Value, Response>`, déclenchant `clippy::result-large-err` avec `-D warnings`.
+**Problème :** `json_body()` retournait `Result<Value, Response>`, déclenchant `clippy::result-large-err`.
 
-**Correctif appliqué :** l'erreur est maintenant `Box<Response>`, avec adaptation explicite des handlers Google et Responses via `return *e`.
+**Correctif :** erreur boxée via `Box<Response>` et adaptation explicite des handlers.
 
-**Commits :** `e458f13`, `9b4a569`, `cd248d4`.
-
-**État :** ✅ Corrigé selon la validation locale fournie (`test + clippy` verts).
+**État :** ✅ Validé selon la validation locale fournie (`test + clippy` verts).
 
 ## P0-2 — Transaction d'intégrité `SemanticEvent` → transport
 
-**Problème :** l'état d'intégrité était commité avant la publication obligatoire ; une panne de transport pouvait laisser un état terminal/avancé sans événement correspondant.
+**Problème :** l'état d'intégrité pouvait être commité avant la publication obligatoire.
 
-**Correctif appliqué :** le transport obligatoire est tenté avant le fan-out global et l'état modifié par les transitions est préparé avant commit dans `TurnEventEmitter`.
+**Correctif :** transport obligatoire avant fan-out global et commit de l'état uniquement après succès de publication. `emitter.rs` a été remis en forme lisible pour respecter les règles Clippy, sans changement de logique.
 
-**État :** ⚠️ Implémenté — validation locale globale en attente.
-
-**Note :** `emitter.rs` provient d'une première réécriture fonctionnelle (`5cf1819`) dont le diff est trop large ; cette forme doit être reformatée et resserrée avant merge même si les tests passent.
+**État :** ⚠️ Implémenté — validation locale complète en attente.
 
 ## P0-3 — Cancellation avant `TurnStarted`
 
-**Problème :** une cancellation déjà active pouvait provoquer un `TurnCancelled` rejeté parce que l'intégrité attend d'abord un turn actif.
+**Problème :** une cancellation déjà active pouvait provoquer un `TurnCancelled` rejeté.
 
-**Correctif appliqué :** `TurnService` traite explicitement le chemin pré-cancel : `TurnStarted → TurnCancelled`, finalisation de la session, puis retour `Cancelled`, sans entrer dans la boucle modèle/outils.
+**Correctif :** séquence explicite `TurnStarted → TurnCancelled`, sans exécution modèle/outils ; `TurnIntegrity` accepte désormais une terminaison précoce légitime après démarrage du turn.
 
-**Test ajouté :** `pre_cancelled_turn_has_started_and_cancelled_semantics`.
+**Test :** `pre_cancelled_turn_has_started_and_cancelled_semantics`.
 
-**État :** ⚠️ Implémenté — validation locale globale en attente.
+**État :** ⚠️ Implémenté — validation locale complète en attente.
 
 ## P0-4 — Sandbox shell / exécution réelle
 
-**Problème :** la politique autorisait des programmes capables d'exécuter du code arbitraire alors que le shell utilisait `sh -c` sans confinement OS.
+**Problème :** la politique autorisait des capacités dynamiques et l'exécution passait par `sh -c` sans confinement OS.
 
-**Correctif appliqué :** fail-closed pour les capacités dynamiques/build/runtime (`python`, `node`, `awk`, `cargo`, compilateurs, package managers, containers, etc.), interdiction des commandes mutantes sans confinement OS, interdiction des chemins absolus/traversal dans les arguments shell et extension du blocage `xargs`/méta-commandes.
+**Correctif :** fail-closed pour les programmes/capacités dynamiques, build/runtime, commandes mutantes, `xargs` et chemins absolus/traversal ; protection contre des options de type `--git-dir=/etc`.
 
-**Tests ajoutés :** rejet des programmes dynamiques et des chemins directs hors périmètre.
+**Tests :** rejet des programmes dynamiques, chemins directs et options portant des chemins hors périmètre. Les tests de risque distinguent désormais classification et autorisation d'exécution.
 
-**État :** ⚠️ Implémenté — validation locale globale en attente.
+**État :** ⚠️ Implémenté — validation locale complète en attente.
 
-**Limite explicitement conservée :** le confinement OS complet reste nécessaire pour offrir une vraie sandbox de processus/filesystem.
+**Limite :** le confinement OS complet reste nécessaire pour une vraie isolation de processus/filesystem.
 
 ## P0-5 — Scope filesystem / symlink / TOCTOU
 
-**Problème :** la validation de chemin pouvait suivre des liens symboliques et déclarer sûr un chemin dont la résolution pouvait sortir du périmètre.
+**Problème :** la validation de chemin pouvait être contournée via des liens symboliques et la séparation validation/accès reste sensible au TOCTOU.
 
-**Correctif appliqué :** inspection `symlink_metadata()` de chaque composant existant, rejet explicite de tout lien symbolique dans le chemin, et refus si un composant existant ne peut pas être inspecté. Les chemins non existants restent supportés uniquement après validation de leurs ancêtres existants.
+**Correctif :** inspection `symlink_metadata()` des composants existants, rejet des symlinks dans le chemin et validation renforcée des ancêtres.
 
-**Test ajouté :** `existing_symlink_component_is_rejected`.
+**Test :** `existing_symlink_component_is_rejected`.
 
-**État :** ⚠️ Implémenté — validation locale globale en attente.
+**État :** ⚠️ Implémenté — validation locale complète en attente.
 
-**Limite explicitement conservée :** ceci ferme le bypass symlink immédiat, mais ne constitue pas à lui seul une garantie TOCTOU atomique ; un mécanisme OS de type `openat`/`O_NOFOLLOW`/équivalent reste la cible définitive.
+**Limite :** la garantie TOCTOU atomique nécessite encore une primitive OS appropriée (`openat`/`O_NOFOLLOW` ou équivalent).
 
 ## Statut global P0
 
@@ -88,4 +84,11 @@ P0-4 Shell boundary         ⚠️ implémenté / validation en attente
 P0-5 Filesystem scope       ⚠️ implémenté / validation en attente
 ```
 
-Le lot P0-2 → P0-5 est préparé sur `fix/p0-integrity`. Aucun P1/P2 ne doit être traité avant validation locale complète de ce lot.
+## Roadmaps suivantes
+
+```text
+P1_ROADMAP.md  → robustesse runtime après validation P0
+P2_ROADMAP.md  → consolidation, qualité et opérabilité après P1
+```
+
+Aucun P0 ne doit être déclaré validé avant une exécution locale verte de toute la suite demandée.
