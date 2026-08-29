@@ -29,7 +29,17 @@ impl EventBus {
     }
 
     pub fn publish_global(&self, event: SemanticEvent) -> usize {
-        self.sender.send(event).unwrap_or(0)
+        let subscribers = self.sender.send(event.clone()).unwrap_or(0);
+        tracing::debug!(
+            event = event_kind(&event),
+            session = %event_session_id(&event),
+            turn = %event_turn_id(&event),
+            sequence = event_sequence(&event),
+            tool_call_id = event_tool_call_id(&event).unwrap_or(""),
+            subscribers,
+            "published semantic event globally"
+        );
+        subscribers
     }
 
     pub fn has_turn_subscriber(&self, turn_id: &str) -> bool {
@@ -48,14 +58,33 @@ impl EventBus {
             .and_then(|senders| senders.get(&turn_id).cloned());
 
         let Some(sender) = sender else {
+            tracing::warn!(
+                event = event_kind(&event),
+                turn = %turn_id,
+                "semantic event rejected: turn transport is absent"
+            );
             return Err(format!("no ACP subscriber for turn {turn_id}"));
         };
-        if sender.send(event).is_ok() {
+
+        if sender.send(event.clone()).is_ok() {
+            tracing::debug!(
+                event = event_kind(&event),
+                session = %event_session_id(&event),
+                turn = %turn_id,
+                sequence = event_sequence(&event),
+                tool_call_id = event_tool_call_id(&event).unwrap_or(""),
+                "delivered semantic event to turn transport"
+            );
             Ok(())
         } else {
             if let Ok(mut senders) = self.turn_senders.lock() {
                 senders.remove(&turn_id);
             }
+            tracing::warn!(
+                event = event_kind(&event),
+                turn = %turn_id,
+                "semantic event rejected: turn transport disconnected"
+            );
             Err(format!("ACP subscriber for turn {turn_id} disconnected"))
         }
     }
@@ -80,6 +109,7 @@ impl EventBus {
             .lock()
             .expect("event bus turn sender registry poisoned");
         senders.insert(turn_id.to_owned(), sender);
+        tracing::debug!(turn = turn_id, "registered turn transport subscriber");
         receiver
     }
 
@@ -87,6 +117,7 @@ impl EventBus {
         if let Ok(mut senders) = self.turn_senders.lock() {
             senders.remove(turn_id);
         }
+        tracing::debug!(turn = turn_id, "closed turn transport subscriber");
     }
 }
 
@@ -106,6 +137,73 @@ fn event_turn_id(event: &SemanticEvent) -> &str {
         | SemanticEvent::PermissionRequested { context }
         | SemanticEvent::ToolExecutionStarted { context, .. }
         | SemanticEvent::ToolResultReceived { context, .. } => context.event.turn_id.as_str(),
+    }
+}
+
+fn event_session_id(event: &SemanticEvent) -> &str {
+    match event {
+        SemanticEvent::TurnStarted { context }
+        | SemanticEvent::AssistantStarted { context }
+        | SemanticEvent::AssistantDelta { context, .. }
+        | SemanticEvent::AssistantCompleted { context }
+        | SemanticEvent::ThinkingStarted { context }
+        | SemanticEvent::ThinkingDelta { context, .. }
+        | SemanticEvent::ThinkingCompleted { context }
+        | SemanticEvent::TurnCancelled { context }
+        | SemanticEvent::TurnFailed { context }
+        | SemanticEvent::TurnCompleted { context } => context.session_id.as_str(),
+        SemanticEvent::ToolCallRequested { context, .. }
+        | SemanticEvent::PermissionRequested { context }
+        | SemanticEvent::ToolExecutionStarted { context, .. }
+        | SemanticEvent::ToolResultReceived { context, .. } => context.event.session_id.as_str(),
+    }
+}
+
+fn event_sequence(event: &SemanticEvent) -> u64 {
+    match event {
+        SemanticEvent::TurnStarted { context }
+        | SemanticEvent::AssistantStarted { context }
+        | SemanticEvent::AssistantDelta { context, .. }
+        | SemanticEvent::AssistantCompleted { context }
+        | SemanticEvent::ThinkingStarted { context }
+        | SemanticEvent::ThinkingDelta { context, .. }
+        | SemanticEvent::ThinkingCompleted { context }
+        | SemanticEvent::TurnCancelled { context }
+        | SemanticEvent::TurnFailed { context }
+        | SemanticEvent::TurnCompleted { context } => context.sequence,
+        SemanticEvent::ToolCallRequested { context, .. }
+        | SemanticEvent::PermissionRequested { context }
+        | SemanticEvent::ToolExecutionStarted { context, .. }
+        | SemanticEvent::ToolResultReceived { context, .. } => context.event.sequence,
+    }
+}
+
+fn event_tool_call_id(event: &SemanticEvent) -> Option<&str> {
+    match event {
+        SemanticEvent::ToolCallRequested { context, .. }
+        | SemanticEvent::PermissionRequested { context }
+        | SemanticEvent::ToolExecutionStarted { context, .. }
+        | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
+        _ => None,
+    }
+}
+
+fn event_kind(event: &SemanticEvent) -> &'static str {
+    match event {
+        SemanticEvent::TurnStarted { .. } => "turn_started",
+        SemanticEvent::AssistantStarted { .. } => "assistant_started",
+        SemanticEvent::AssistantDelta { .. } => "assistant_delta",
+        SemanticEvent::AssistantCompleted { .. } => "assistant_completed",
+        SemanticEvent::ThinkingStarted { .. } => "thinking_started",
+        SemanticEvent::ThinkingDelta { .. } => "thinking_delta",
+        SemanticEvent::ThinkingCompleted { .. } => "thinking_completed",
+        SemanticEvent::ToolCallRequested { .. } => "tool_call_requested",
+        SemanticEvent::PermissionRequested { .. } => "permission_requested",
+        SemanticEvent::ToolExecutionStarted { .. } => "tool_execution_started",
+        SemanticEvent::ToolResultReceived { .. } => "tool_result_received",
+        SemanticEvent::TurnCancelled { .. } => "turn_cancelled",
+        SemanticEvent::TurnFailed { .. } => "turn_failed",
+        SemanticEvent::TurnCompleted { .. } => "turn_completed",
     }
 }
 
