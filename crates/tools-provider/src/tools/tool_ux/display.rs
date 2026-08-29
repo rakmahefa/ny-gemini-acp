@@ -1,5 +1,5 @@
-use agent_client_protocol::schema::v1::{Content, ContentBlock, TextContent, ToolCallContent};
 use serde_json::Value;
+use serde_json::json;
 
 use super::types::{CardBodyKind, ToolVisual, MAX_CARD_BODY_CHARS, MAX_RAW_INPUT_CHARS};
 
@@ -20,7 +20,7 @@ pub fn bounded_raw_input(args: &Value) -> Value {
     }
     let preview: String = content.chars().take(MAX_RAW_INPUT_CHARS).collect();
     *content_value = Value::String(format!(
-        "{preview}\n… [{} chars omitted from ACP display]",
+        "{preview}\n… [{} chars omitted from display]",
         count - MAX_RAW_INPUT_CHARS
     ));
     value
@@ -32,7 +32,7 @@ pub(crate) fn ux_card(
     args: &Value,
     body: Option<(&str, CardBodyKind, bool)>,
     terminal: Option<&str>,
-) -> ToolCallContent {
+) -> Value {
     let visual = ToolVisual::for_tool(tool_name, args);
     let mut text = format!(
         "**{} {}**\n{}  ·  {}  ·  {} {}",
@@ -96,13 +96,33 @@ pub(crate) fn permission_label(name: &str) -> &'static str {
     }
 }
 
-pub(crate) fn text_content(text: &str, error: bool) -> ToolCallContent {
+pub(crate) fn text_content(text: &str, error: bool) -> Value {
     let rendered = if error {
         format!("⚠️ {text}")
     } else {
         text.to_owned()
     };
-    ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(rendered))))
+    json!({"type": "content", "text": rendered})
+}
+
+pub(crate) fn diff_content(path: &std::path::Path, old_text: Option<String>, new_text: String) -> Value {
+    json!({
+        "type": "diff",
+        "path": path,
+        "oldText": old_text,
+        "newText": new_text,
+    })
+}
+
+pub(crate) fn terminal_content(id: &str) -> Value {
+    json!({"type": "terminal", "id": id})
+}
+
+pub(crate) fn location(path: &std::path::Path, line: Option<u32>) -> Value {
+    json!({
+        "path": path,
+        "line": line,
+    })
 }
 
 pub(crate) fn truncate(value: &str, max: usize) -> String {
