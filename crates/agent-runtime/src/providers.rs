@@ -98,39 +98,23 @@ pub trait LlmProvider: Send + Sync {
     /// Cancellation-aware boundary for establishing the provider stream.
     ///
     /// Implementations keep the stable `stream()` contract while the runtime
-    /// prevents a provider that is blocked before stream creation from holding
-    /// a cancelled turn indefinitely.
+    /// prevents a provider blocked before stream creation from holding a
+    /// cancelled turn indefinitely.
     async fn stream_with_cancellation(
         &self,
         request: ModelRequest,
-        mut cancellation: watch::Receiver<bool>,
-    ) -> Result<LlmStream, LlmError> {
-        if *cancellation.borrow() {
-            return Err(LlmError::Cancelled);
-        }
-        tokio::select! {
-            result = self.stream(request) => result,
-            changed = cancellation.changed() => {
-                match changed {
-                    Ok(()) if *cancellation.borrow() => Err(LlmError::Cancelled),
-                    Ok(()) => self.stream_with_cancellation_after_change(cancellation).await,
-                    Err(_) => Err(LlmError::Cancelled),
-                }
-            }
-        }
-    }
-
-    async fn stream_with_cancellation_after_change(
-        &self,
         mut cancellation: watch::Receiver<bool>,
     ) -> Result<LlmStream, LlmError> {
         loop {
             if *cancellation.borrow() {
                 return Err(LlmError::Cancelled);
             }
-            match cancellation.changed().await {
-                Ok(()) => continue,
-                Err(_) => return Err(LlmError::Cancelled),
+            tokio::select! {
+                result = self.stream(request.clone()) => return result,
+                changed = cancellation.changed() => match changed {
+                    Ok(()) => continue,
+                    Err(_) => return Err(LlmError::Cancelled),
+                },
             }
         }
     }
