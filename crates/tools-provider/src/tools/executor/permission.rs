@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{
-    ContentBlock, Diff, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
+    Content, ContentBlock, Diff, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
     RequestPermissionRequest, TextContent, ToolCall as AcpToolCall, ToolCallContent, ToolCallId,
     ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
@@ -136,13 +136,21 @@ impl<'a> ToolExecutor<'a> {
         let content = info
             .content
             .iter()
-            .filter_map(|value| project_permission_content(value).ok())
-            .collect::<Vec<_>>();
+            .map(project_permission_content)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = %error, "permission content projection failed");
+                Vec::new()
+            });
         let locations = info
             .locations
             .iter()
-            .filter_map(|value| project_permission_location(value).ok())
-            .collect::<Vec<_>>();
+            .map(project_permission_location)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = %error, "permission location projection failed");
+                Vec::new()
+            });
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(permission_tool_kind(request.kind))
             .status(ToolCallStatus::Pending)
@@ -205,8 +213,8 @@ fn project_permission_content(value: &Value) -> anyhow::Result<ToolCallContent> 
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("permission text content missing text"))?;
-            Ok(ToolCallContent::Content(ContentBlock::Text(TextContent::new(
-                text.to_owned(),
+            Ok(ToolCallContent::Content(Content::new(ContentBlock::Text(
+                TextContent::new(text.to_owned()),
             ))))
         }
         "diff" => {
@@ -216,11 +224,9 @@ fn project_permission_content(value: &Value) -> anyhow::Result<ToolCallContent> 
                 .ok_or_else(|| anyhow::anyhow!("permission diff missing path"))?;
             let old_text = value.get("old_text").and_then(Value::as_str).unwrap_or("");
             let new_text = value.get("new_text").and_then(Value::as_str).unwrap_or("");
-            Ok(ToolCallContent::Diff(Diff::new(
-                path.to_owned(),
-                old_text.to_owned(),
-                new_text.to_owned(),
-            )))
+            Ok(ToolCallContent::Diff(
+                Diff::new(path.to_owned(), new_text.to_owned()).old_text(old_text.to_owned()),
+            ))
         }
         other => Err(anyhow::anyhow!("unsupported permission content kind: {other}")),
     }
