@@ -205,7 +205,11 @@ mod tests {
             )
             .await;
 
-        assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code ") && output.contains("unknown option") || output.contains("unknown option") || output.contains("unknown switch")));
+        assert!(matches!(
+            result,
+            ToolResult::Err(output)
+                if output.contains("exit code") && output.contains("[stderr]")
+        ));
     }
 
     #[test]
