@@ -94,10 +94,6 @@ impl TurnService {
             }
         };
 
-        // A turn has already been acquired by the store at this point. A
-        // pre-existing cancellation therefore still requires a coherent
-        // semantic lifecycle: TurnStarted followed exactly once by
-        // TurnCancelled, without entering the model/tool loop.
         if cancellation.is_cancelled() {
             let semantic_ok = if semantic.is_terminal() {
                 true
@@ -135,12 +131,20 @@ impl TurnService {
 
         match result {
             Ok(outcome) => {
-                let result = TurnExecutionResult {
-                    outcome,
-                    session: session.clone(),
-                };
                 self.finish(&session_id, session, generation).await?;
-                Ok(result)
+                // Read back the canonical state after commit so callers never
+                // observe a pre-finalization snapshot (turn_count/updated_at
+                // and any normalized history changes are included).
+                let committed = self.store.get(&session_id).await.ok_or_else(|| {
+                    StoreError::Persistence(format!(
+                        "session {} disappeared after successful turn commit",
+                        session_id
+                    ))
+                })?;
+                Ok(TurnExecutionResult {
+                    outcome,
+                    session: committed,
+                })
             }
             Err(error) => {
                 if !semantic.is_terminal() {
@@ -252,11 +256,14 @@ mod tests {
         assert_eq!(result.outcome.output, "hello from runtime");
         assert_eq!(result.outcome.rounds, 1);
         assert!(semantic.is_terminal());
+        assert_eq!(result.session.turn_count, 1);
 
         let persisted = store.get(&session.id).await.unwrap();
         assert!(persisted.messages.entries().iter().any(|entry| {
             matches!(entry, HistoryEntry::Assistant { content } if content == "hello from runtime")
         }));
+        assert_eq!(result.session.updated_at, persisted.updated_at);
+        assert_eq!(result.session.turn_count, persisted.turn_count);
 
         bus.close_turn("turn-test");
         std::fs::remove_dir_all(&dir).ok();
