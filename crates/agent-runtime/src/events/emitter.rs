@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::integrity::{IntegrityError, ToolTerminalReason, TurnIntegrity, TurnPhase};
+use super::integrity::{IntegrityError, TurnIntegrity, TurnPhase};
 use super::{EventBus, EventContext, SemanticEvent, ToolEventContext};
 use crate::{SessionId, ToolCallId, ToolUiModel, TurnId};
 
