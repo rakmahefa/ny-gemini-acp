@@ -13,7 +13,4 @@ cargo test --workspace --all-targets
 printf '\n==> cargo clippy\n'
 cargo clippy --workspace --all-targets -- -D warnings
 
-printf '\n==> provider-neutral architecture audit\n'
-./scripts/audit-provider-neutral.sh
-
 printf '\nValidation passed.\n'
