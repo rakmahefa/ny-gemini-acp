@@ -1,6 +1,6 @@
 use agent_client_protocol::schema::v1::{
     CreateTerminalRequest, ReleaseTerminalRequest, TerminalId, TerminalOutputRequest,
-    ToolCallId,
+    ToolCallId, WaitForTerminalExitRequest,
 };
 use serde_json::{Map, Value};
 
