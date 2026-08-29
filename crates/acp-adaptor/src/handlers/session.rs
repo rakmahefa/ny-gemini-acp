@@ -12,8 +12,8 @@ use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 use crate::config::config_options::build_config_options;
 use crate::config::mcp::normalize_servers;
 use agent_runtime::state::{HistoryEntry, SessionMode as AcpSessionMode};
-use agent_runtime::AppState;
-use tools_provider::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
+use agent_runtime::{AppState, ToolUiModel};
+use tools_provider::tools::tool_ux::{result_update, ToolInfo};
 
 fn is_valid_session_id(id: &str) -> bool {
     let Some(rest) = id.strip_prefix("sess_") else {
@@ -109,7 +109,6 @@ fn replay_tool_result(
     session_id: &SessionId,
     replay: ReplayTool<'_>,
 ) -> Result<(), AcpError> {
-    let call_id = ToolCallId::from(replay.id.to_owned());
     let info = ToolInfo::build(replay.name, replay.arguments, replay.cwd, None);
     let is_ok = replay.result_ok.unwrap_or_else(|| {
         replay
@@ -118,25 +117,21 @@ fn replay_tool_result(
             .unwrap_or(false)
     });
 
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::ToolCall(
-            ToolCall::new(call_id.clone(), info.title.clone())
-                .kind(info.kind)
-                .status(if replay.result_text.is_some() {
-                    if is_ok {
-                        ToolCallStatus::Completed
-                    } else {
-                        ToolCallStatus::Failed
-                    }
-                } else {
-                    ToolCallStatus::InProgress
-                })
-                .content(info.content.clone())
-                .locations(info.locations.clone())
-                .raw_input(bounded_raw_input(replay.arguments)),
-        ),
-    ))?;
+    let initial = ToolUiModel::pending(
+        info.kind,
+        info.title.clone(),
+        info.title.clone(),
+        replay.arguments.clone(),
+    )
+    .with_content(info.content.clone())
+    .with_locations(info.locations.clone());
+    let initial = if replay.result_text.is_some() {
+        initial.completed(is_ok, None)
+    } else {
+        initial.running()
+    };
+
+    crate::prompt::notify::notify_tool_call(cx, session_id, replay.id, &initial)?;
 
     if let Some(result_text) = replay.result_text {
         let rendered = result_update(
@@ -147,16 +142,22 @@ fn replay_tool_result(
             replay.cwd,
             None,
         );
-        cx.send_notification(SessionNotification::new(
-            session_id.clone(),
-            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                call_id,
-                ToolCallUpdateFields::new()
-                    .status(rendered.status)
-                    .content(rendered.content)
-                    .locations(rendered.locations),
-            )),
-        ))?;
+        let result_ui = ToolUiModel::pending(
+            info.kind,
+            info.title,
+            "tool result",
+            replay.arguments.clone(),
+        )
+        .with_content(rendered.content)
+        .with_locations(rendered.locations)
+        .completed(is_ok, Some(serde_json::json!({ "text": result_text })));
+
+        crate::prompt::notify::notify_tool_call_update(
+            cx,
+            session_id,
+            replay.id,
+            &result_ui,
+        )?;
     }
     Ok(())
 }
