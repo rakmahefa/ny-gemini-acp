@@ -14,13 +14,18 @@ pub struct EventBus {
 }
 
 impl Default for EventBus {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EventBus {
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(DEFAULT_CAPACITY);
-        Self { sender, turn_senders: Arc::new(Mutex::new(HashMap::new())) }
+        Self {
+            sender,
+            turn_senders: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 
     pub fn publish_global(&self, event: SemanticEvent) -> usize {
@@ -38,16 +43,29 @@ impl EventBus {
     }
 
     pub fn has_turn_subscriber(&self, turn_id: &str) -> bool {
-        self.turn_senders.lock().map(|senders| senders.contains_key(turn_id)).unwrap_or(false)
+        self.turn_senders
+            .lock()
+            .map(|senders| senders.contains_key(turn_id))
+            .unwrap_or(false)
     }
 
     pub fn publish_turn(&self, event: SemanticEvent) -> Result<(), String> {
         let turn_id = event_turn_id(&event).to_owned();
-        let sender = self.turn_senders.lock().ok().and_then(|senders| senders.get(&turn_id).cloned());
+        let sender = self
+            .turn_senders
+            .lock()
+            .ok()
+            .and_then(|senders| senders.get(&turn_id).cloned());
+
         let Some(sender) = sender else {
-            tracing::warn!(event = event_kind(&event), turn = %turn_id, "semantic event rejected: turn transport is absent");
+            tracing::warn!(
+                event = event_kind(&event),
+                turn = %turn_id,
+                "semantic event rejected: turn transport is absent"
+            );
             return Err(format!("no ACP subscriber for turn {turn_id}"));
         };
+
         if sender.send(event.clone()).is_ok() {
             tracing::debug!(
                 event = event_kind(&event),
@@ -59,23 +77,37 @@ impl EventBus {
             );
             Ok(())
         } else {
-            if let Ok(mut senders) = self.turn_senders.lock() { senders.remove(&turn_id); }
-            tracing::warn!(event = event_kind(&event), turn = %turn_id, "semantic event rejected: turn transport disconnected");
+            if let Ok(mut senders) = self.turn_senders.lock() {
+                senders.remove(&turn_id);
+            }
+            tracing::warn!(
+                event = event_kind(&event),
+                turn = %turn_id,
+                "semantic event rejected: turn transport disconnected"
+            );
             Err(format!("ACP subscriber for turn {turn_id} disconnected"))
         }
     }
 
+    /// Compatibility helper: mandatory turn delivery occurs before best-effort global fan-out.
+    /// This preserves the invariant that a successful return means the protocol transport
+    /// accepted the event before diagnostic consumers observe it.
     pub fn publish(&self, event: SemanticEvent) -> Result<(), String> {
         self.publish_turn(event.clone())?;
         self.publish_global(event);
         Ok(())
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> { self.sender.subscribe() }
+    pub fn subscribe(&self) -> broadcast::Receiver<SemanticEvent> {
+        self.sender.subscribe()
+    }
 
     pub fn subscribe_turn(&self, turn_id: &str) -> mpsc::UnboundedReceiver<SemanticEvent> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let mut senders = self.turn_senders.lock().expect("event bus turn sender registry poisoned");
+        let mut senders = self
+            .turn_senders
+            .lock()
+            .expect("event bus turn sender registry poisoned");
         senders.insert(turn_id.to_owned(), sender);
         tracing::debug!(turn = turn_id, "registered turn transport subscriber");
         receiver
@@ -181,7 +213,9 @@ mod tests {
     use crate::events::EventContext;
 
     fn event(turn_id: &str, sequence: u64) -> SemanticEvent {
-        SemanticEvent::TurnStarted { context: EventContext::new("session", turn_id, sequence) }
+        SemanticEvent::TurnStarted {
+            context: EventContext::new("session", turn_id, sequence),
+        }
     }
 
     #[tokio::test]
@@ -199,15 +233,26 @@ mod tests {
     async fn turn_transport_does_not_lag_under_a_burst() {
         let bus = EventBus::new();
         let mut receiver = bus.subscribe_turn("burst");
-        for sequence in 0..10_000u64 { bus.publish_turn(event("burst", sequence)).unwrap(); }
+        for sequence in 0..10_000u64 {
+            bus.publish_turn(event("burst", sequence)).unwrap();
+        }
         for sequence in 0..10_000u64 {
             let received = receiver.recv().await.unwrap();
-            assert_eq!(sequence, match received { SemanticEvent::TurnStarted { context } => context.sequence, _ => unreachable!() });
+            assert_eq!(
+                sequence,
+                match received {
+                    SemanticEvent::TurnStarted { context } => context.sequence,
+                    _ => unreachable!(),
+                }
+            );
         }
     }
 
     #[test]
-    fn global_broadcast_is_best_effort_without_subscribers() { assert_eq!(EventBus::new().publish_global(event("turn", 0)), 0); }
+    fn global_broadcast_is_best_effort_without_subscribers() {
+        let bus = EventBus::new();
+        assert_eq!(bus.publish_global(event("turn", 0)), 0);
+    }
 
     #[test]
     fn turn_transport_is_mandatory() {
@@ -234,7 +279,8 @@ mod tests {
         let bus = EventBus::new();
         let mut global = bus.subscribe();
         let mut turn = bus.subscribe_turn("turn");
-        bus.publish(event("turn", 0)).unwrap();
+        let value = event("turn", 0);
+        bus.publish(value).unwrap();
         assert_eq!(event_turn_id(&global.recv().await.unwrap()), "turn");
         assert_eq!(event_turn_id(&turn.recv().await.unwrap()), "turn");
     }
