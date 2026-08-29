@@ -1,3 +1,4 @@
+use agent_runtime::ToolUiKind;
 use serde_json::Value;
 
 use super::super::sandbox::RiskLevel;
@@ -12,9 +13,24 @@ pub(crate) const MAX_CARD_BODY_CHARS: usize = 8 * 1024;
 /// Host-neutral semantic tool presentation produced by `tool_ux`.
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
+    pub kind: ToolUiKind,
     pub title: String,
     pub content: Vec<Value>,
     pub locations: Vec<Value>,
+}
+
+impl ToolInfo {
+    /// Convert the tool builder result into the canonical runtime presentation model.
+    pub fn into_ui_model(self, input: Value) -> agent_runtime::ToolUiModel {
+        agent_runtime::ToolUiModel::pending(
+            self.kind,
+            self.title.clone(),
+            self.title,
+            input,
+        )
+        .with_content(self.content)
+        .with_locations(self.locations)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
