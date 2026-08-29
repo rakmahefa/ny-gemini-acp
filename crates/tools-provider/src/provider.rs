@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 
 use agent_runtime::{
     ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider, ToolServerConfig,
-    ToolUiKind, ToolUiModel,
+    ToolUiModel,
 };
 
 use crate::tools::contracts::ToolCancellation;
@@ -58,41 +58,13 @@ impl DefaultToolProvider {
     }
 }
 
-fn ui_kind(name: &str) -> ToolUiKind {
-    match name {
-        "file_read" => ToolUiKind::FileRead,
-        "file_write" => ToolUiKind::FileWrite,
-        "file_edit" => ToolUiKind::FileEdit,
-        "glob" => ToolUiKind::Glob,
-        "list_directory" => ToolUiKind::DirectoryList,
-        "search" => ToolUiKind::Search,
-        "search_and_read" => ToolUiKind::SearchAndRead,
-        "shell_exec" => ToolUiKind::Shell,
-        "replace_in_file" => ToolUiKind::ReplaceInFile,
-        "AskUserQuestion" => ToolUiKind::AskUserQuestion,
-        "FollowUp" => ToolUiKind::Generic,
-        _ => ToolUiKind::Generic,
-    }
-}
-
-fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
-    values.iter().filter_map(|value| serde_json::to_value(value).ok()).collect()
-}
-
 fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
     ToolInfo::build(name, arguments, cwd, None)
 }
 
-fn pending_ui(_call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
+fn pending_ui(name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
     let info = presentation_info(name, arguments, cwd);
-    ToolUiModel::pending(
-        ui_kind(name),
-        info.title.clone(),
-        info.title,
-        bounded_raw_input(arguments),
-    )
-    .with_content(info.content)
-    .with_locations(info.locations)
+    info.into_ui_model(bounded_raw_input(arguments))
 }
 
 fn completed_ui_from_info(
@@ -105,18 +77,15 @@ fn completed_ui_from_info(
 ) -> ToolUiModel {
     let rendered = result_update(name, arguments, content, is_ok, cwd, None);
 
-    // Keep rich semantic invocation affordances (Diff/Terminal/etc.) and append
-    // the semantic result card. ACP-native rendering is owned by acp-adaptor.
-    let mut rich_content = info
-        .content
-        .iter()
-        .filter(|item| item.get("type").and_then(Value::as_str) != Some("text"))
-        .cloned()
-        .collect::<Vec<_>>();
+    // Contract visuel: l'Input appartient uniquement au ToolCall initial.
+    // Les résultats restent des données sémantiques; la conversion ACP est faite
+    // à la frontière protocolaire. Les affordances d'invocation (diff/terminal)
+    // produites par tool_ux sont conservées sans leur dépendance au protocole.
+    let mut rich_content = info.content.clone();
     rich_content.extend(rendered.content);
 
     ToolUiModel::pending(
-        ui_kind(name),
+        info.kind,
         info.title.clone(),
         info.title.clone(),
         bounded_raw_input(arguments),
@@ -195,22 +164,19 @@ impl ToolProvider for DefaultToolProvider {
     async fn clear_session(&self, session_id: &str) {
         self.state.sessions.write().await.remove(session_id);
     }
-
     fn definitions(&self) -> Vec<Value> {
         self.registry.definitions()
     }
-
     fn prompt_fragment(&self) -> Option<String> {
         crate::tools::prompt::tools_section(&self.registry)
     }
-
     fn has_tools(&self) -> bool {
         self.registry.has_tools()
     }
 
-    fn ui_model(&self, call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> {
+    fn ui_model(&self, _call_id: &str, name: &str, arguments: &Value) -> Option<ToolUiModel> {
         let cwd = self.cwd.as_deref().unwrap_or_else(|| Path::new("."));
-        Some(pending_ui(call_id, name, arguments, cwd))
+        Some(pending_ui(name, arguments, cwd))
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
