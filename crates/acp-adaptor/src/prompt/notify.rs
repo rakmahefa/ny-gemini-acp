@@ -1,11 +1,14 @@
 //! ACP notifications: messages, reasoning, tool UI and usage.
+use std::path::PathBuf;
+
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
-    TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
+    ContentBlock, ContentChunk, Diff, MessageId, SessionId, SessionNotification, SessionUpdate,
+    Terminal, TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
     ToolCallUpdate, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
+use serde_json::Value;
 
 use tools_provider::tools::lifecycle::record_partial_output;
 
@@ -48,23 +51,23 @@ fn tool_call_notification(
     session_id: &SessionId,
     tool_call_id: &str,
     ui: &ToolUiModel,
-) -> SessionNotification {
-    SessionNotification::new(
+) -> Result<SessionNotification, AcpError> {
+    Ok(SessionNotification::new(
         session_id.clone(),
-        SessionUpdate::ToolCall(tool_call_from_ui(tool_call_id, ui)),
-    )
+        SessionUpdate::ToolCall(tool_call_from_ui(tool_call_id, ui)?),
+    ))
 }
 
 fn tool_call_update_notification(
     session_id: &SessionId,
     tool_call_id: &str,
     ui: &ToolUiModel,
-) -> SessionNotification {
-    let update = ToolCallUpdate::from(tool_call_from_ui(tool_call_id, ui));
-    SessionNotification::new(
+) -> Result<SessionNotification, AcpError> {
+    let update = ToolCallUpdate::from(tool_call_from_ui(tool_call_id, ui)?);
+    Ok(SessionNotification::new(
         session_id.clone(),
         SessionUpdate::ToolCallUpdate(update),
-    )
+    ))
 }
 
 fn usage_notification(
@@ -136,7 +139,7 @@ fn tool_status(status: ToolUiStatus) -> ToolCallStatus {
     }
 }
 
-fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> {
+fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, Value> {
     serde_json::json!({
         "geminiAcp": {
             "toolUi": {
@@ -152,53 +155,84 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
     .unwrap_or_default()
 }
 
-fn rich_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
-    ui.content
-        .iter()
-        .filter_map(|value| serde_json::from_value(value.clone()).ok())
-        .collect()
+fn projection_error() -> AcpError {
+    AcpError::internal_error()
 }
 
-fn rich_locations(ui: &ToolUiModel) -> Vec<ToolCallLocation> {
-    ui.locations
-        .iter()
-        .filter_map(|value| serde_json::from_value(value.clone()).ok())
-        .collect()
+fn rich_content(ui: &ToolUiModel) -> Result<Vec<ToolCallContent>, AcpError> {
+    ui.content.iter().map(project_content).collect()
+}
+
+fn project_content(value: &Value) -> Result<ToolCallContent, AcpError> {
+    let kind = value.get("type").and_then(Value::as_str).ok_or_else(projection_error)?;
+    match kind {
+        "content" => {
+            let text = value.get("text").and_then(Value::as_str).ok_or_else(projection_error)?;
+            Ok(ToolCallContent::from(ContentBlock::Text(TextContent::new(text.to_owned()))))
+        }
+        "diff" => {
+            let path = value.get("path").and_then(Value::as_str).ok_or_else(projection_error)?;
+            let new_text = value.get("newText").and_then(Value::as_str).ok_or_else(projection_error)?;
+            let old_text = value.get("oldText").and_then(Value::as_str).map(str::to_owned);
+            Ok(ToolCallContent::Diff(
+                Diff::new(PathBuf::from(path), new_text.to_owned()).old_text(old_text),
+            ))
+        }
+        "terminal" => {
+            let id = value.get("id").and_then(Value::as_str).ok_or_else(projection_error)?;
+            Ok(ToolCallContent::Terminal(Terminal::new(id.to_owned())))
+        }
+        _ => Err(projection_error()),
+    }
+}
+
+fn rich_locations(ui: &ToolUiModel) -> Result<Vec<ToolCallLocation>, AcpError> {
+    ui.locations.iter().map(project_location).collect()
+}
+
+fn project_location(value: &Value) -> Result<ToolCallLocation, AcpError> {
+    let path = value.get("path").and_then(Value::as_str).ok_or_else(projection_error)?;
+    let location = ToolCallLocation::new(PathBuf::from(path));
+    match value.get("line").and_then(Value::as_u64) {
+        Some(line) => {
+            let line = u32::try_from(line).map_err(|_| projection_error())?;
+            Ok(location.line(line))
+        }
+        None => Ok(location),
+    }
 }
 
 fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
     ui.output
         .as_ref()
         .and_then(|value| value.get("text"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
         .map(|text| {
             vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(
-                text,
+                text.to_owned(),
             )))]
         })
         .unwrap_or_default()
 }
 
-fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> ToolCall {
-    let content = {
-        let rich = rich_content(ui);
-        if rich.is_empty() {
-            fallback_text_content(ui)
-        } else {
-            rich
-        }
+fn tool_call_from_ui(tool_call_id: &str, ui: &ToolUiModel) -> Result<ToolCall, AcpError> {
+    let rich = rich_content(ui)?;
+    let content = if rich.is_empty() {
+        fallback_text_content(ui)
+    } else {
+        rich
     };
-    let locations = rich_locations(ui);
+    let locations = rich_locations(ui)?;
 
-    ToolCall::new(ToolCallId::from(tool_call_id.to_owned()), ui.title.clone())
+    Ok(ToolCall::new(ToolCallId::from(tool_call_id.to_owned()), ui.title.clone())
         .kind(tool_kind(ui.kind))
         .status(tool_status(ui.status))
         .content(content)
         .locations(locations)
         .raw_input(ui.input.clone())
         .raw_output(ui.output.clone())
-        .meta(tool_ui_meta(ui))
+        .meta(tool_ui_meta(ui)))
 }
 
 pub fn notify_tool_call(
@@ -207,7 +241,7 @@ pub fn notify_tool_call(
     tool_call_id: &str,
     ui: &ToolUiModel,
 ) -> Result<(), AcpError> {
-    cx.send_notification(tool_call_notification(session_id, tool_call_id, ui))
+    cx.send_notification(tool_call_notification(session_id, tool_call_id, ui)?)
 }
 
 pub fn notify_tool_call_update(
@@ -216,7 +250,7 @@ pub fn notify_tool_call_update(
     tool_call_id: &str,
     ui: &ToolUiModel,
 ) -> Result<(), AcpError> {
-    cx.send_notification(tool_call_update_notification(session_id, tool_call_id, ui))
+    cx.send_notification(tool_call_update_notification(session_id, tool_call_id, ui)?)
 }
 
 pub fn notify_usage(
