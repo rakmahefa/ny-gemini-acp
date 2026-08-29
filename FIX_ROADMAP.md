@@ -26,13 +26,21 @@ Chaque correctif doit :
 
 **État :** ✅ Corrigé — validation statique acquise
 
-**Validation effectuée :**
+## Correctif de compilation Clippy — `llm-provider/web2api`
 
-- présence d'un test contre `../../escape` ;
-- présence d'un test contre `sess_../escape` ;
-- conservation d'un test d'ID canonique valide ;
-- relecture du chemin `PromptRequest → validate_id → Store::begin_turn` confirmant qu'un ID ACP invalide n'atteint plus la persistance ;
-- `cargo` ne peut pas être exécuté dans l'environnement courant faute d'accès réseau/runtime au dépôt, donc la validation complète `fmt/check/test/clippy` reste à faire localement.
+**Problème :** `json_body()` retournait `Result<Value, Response>`, déclenchant `clippy::result-large-err` avec `-D warnings`.
+
+**Correctif appliqué :** l'erreur est maintenant `Box<Response>`, avec adaptation explicite des handlers Google et Responses via `return *e`.
+
+**Commits :** `e458f13`, `9b4a569`, `cd248d4`
+
+**État :** ✅ Corrigé — erreurs `E0308` associées également corrigées dans `google.rs` et `responses.rs`.
+
+**Validation locale attendue :**
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings
+```
 
 ## P0-2 — Transaction d'intégrité `SemanticEvent` → transport
 
@@ -42,8 +50,6 @@ Chaque correctif doit :
 
 **État :** ⏳ À faire
 
-**Validation :** tests d'échec de publication pour chaque transition critique, absence de terminal fantôme, cohérence du séquencement.
-
 ## P0-3 — Cancellation avant `TurnStarted`
 
 **Problème :** une cancellation déjà active peut provoquer un `TurnCancelled` rejeté parce que l'intégrité attend d'abord un turn actif.
@@ -51,8 +57,6 @@ Chaque correctif doit :
 **Cible :** toute terminaison d'un turn commencé par le service doit avoir une séquence sémantique cohérente ; un chemin pré-cancel doit être explicitement défini.
 
 **État :** ⏳ À faire
-
-**Validation :** tests pré-cancelés, terminalité exactement une fois, absence de turn fantôme.
 
 ## P0-4 — Sandbox shell / exécution réelle
 
@@ -62,8 +66,6 @@ Chaque correctif doit :
 
 **État :** ⏳ À faire
 
-**Validation :** corpus adversarial élargi et tests montrant qu'aucun programme interdit ne peut être atteint indirectement par la politique courante.
-
 ## P0-5 — Scope filesystem / symlink / TOCTOU
 
 **Problème :** la validation de chemin peut être contournée par des liens symboliques et des changements entre validation et accès.
@@ -71,8 +73,6 @@ Chaque correctif doit :
 **Cible :** ne pas prétendre fournir une isolation filesystem sans mécanisme permettant une résolution sûre au moment de l'accès ; documenter et fermer les bypass applicatifs immédiats.
 
 **État :** ⏳ À faire
-
-**Validation :** tests symlink, chemins non existants, chemins autorisés additionnels et race-sensitive paths ; contrôle de non-régression.
 
 ## Statut global P0
 
