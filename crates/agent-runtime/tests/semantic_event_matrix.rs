@@ -43,6 +43,32 @@ fn valid_tool_permission_execution_result_sequence_is_accepted() {
 }
 
 #[test]
+fn tool_lifecycle_events_keep_the_same_call_id() {
+    let (bus, mut emitter) = emitter();
+    let mut receiver = bus.subscribe();
+    let call_id = "tool-42";
+    assert!(emitter.turn_started());
+    assert!(emitter.tool_call_requested(call_id, "file_edit"));
+    assert!(emitter.permission_requested(call_id));
+    assert!(emitter.tool_execution_started(call_id));
+    assert!(emitter.tool_result_received(call_id, "updated"));
+
+    let mut ids = Vec::new();
+    while let Ok(event) = receiver.try_recv() {
+        match event {
+            SemanticEvent::ToolCallRequested { context, .. }
+            | SemanticEvent::PermissionRequested { context }
+            | SemanticEvent::ToolExecutionStarted { context, .. }
+            | SemanticEvent::ToolResultReceived { context, .. } => {
+                ids.push(context.tool_call_id.to_string());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(ids, vec![call_id.to_owned(); 4]);
+}
+
+#[test]
 fn cancellation_is_terminal_and_closes_open_scopes() {
     let (_bus, mut emitter) = emitter();
     assert!(emitter.turn_started());
