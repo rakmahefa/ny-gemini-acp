@@ -1,14 +1,48 @@
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
     ToolCall as AcpToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Client, ConnectionTo};
+use agent_runtime::{ToolUiKind, ToolUiStatus};
 use serde_json::{Map, Value};
 
 use super::super::lifecycle::ToolLifecycle;
 use super::super::tool_ux::{bounded_raw_input, ToolInfo};
 use super::{mapping, ToolExecutor};
+
+pub(super) fn project_content(values: &[Value]) -> Vec<ToolCallContent> {
+    values
+        .iter()
+        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .collect()
+}
+
+pub(super) fn project_locations(values: &[Value]) -> Vec<ToolCallLocation> {
+    values
+        .iter()
+        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .collect()
+}
+
+pub(super) fn project_tool_kind(kind: ToolUiKind) -> ToolKind {
+    match kind {
+        ToolUiKind::FileRead | ToolUiKind::DirectoryList => ToolKind::Read,
+        ToolUiKind::FileWrite | ToolUiKind::FileEdit | ToolUiKind::ReplaceInFile => ToolKind::Edit,
+        ToolUiKind::Search | ToolUiKind::Glob | ToolUiKind::SearchAndRead => ToolKind::Search,
+        ToolUiKind::Shell => ToolKind::Execute,
+        ToolUiKind::AskUserQuestion | ToolUiKind::Generic => ToolKind::Other,
+    }
+}
+
+pub(super) fn project_tool_status(status: ToolUiStatus) -> ToolCallStatus {
+    match status {
+        ToolUiStatus::Pending => ToolCallStatus::Pending,
+        ToolUiStatus::Running => ToolCallStatus::InProgress,
+        ToolUiStatus::Succeeded => ToolCallStatus::Completed,
+        ToolUiStatus::Failed | ToolUiStatus::Cancelled => ToolCallStatus::Failed,
+    }
+}
 
 impl<'a> ToolExecutor<'a> {
     pub(super) fn emit_tool_call(
@@ -19,10 +53,10 @@ impl<'a> ToolExecutor<'a> {
         raw_input: &Value,
     ) {
         let tool = AcpToolCall::new(call_id.clone(), info.title.clone())
-            .kind(info.kind)
+            .kind(project_tool_kind(info.kind))
             .status(lifecycle.state().wire_status())
-            .content(info.content.clone())
-            .locations(info.locations.clone())
+            .content(project_content(&info.content))
+            .locations(project_locations(&info.locations))
             .raw_input(bounded_raw_input(raw_input))
             .meta(mapping::lifecycle_meta(&info.title, lifecycle, None, None));
         let _ = self.cx.send_notification(SessionNotification::new(
