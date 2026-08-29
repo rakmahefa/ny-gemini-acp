@@ -1,76 +1,130 @@
 # Tool UX / UI Model
 
-This document defines the host-neutral presentation contract for agent tools.
+This document defines the host-neutral presentation contract for agent tools. It is the canonical semantic visual model used by the runtime; ACP is only one downstream renderer.
 
-The tool result must remain data. The UI must never infer meaning by parsing strings such as `[exit code 0]`, `[tool_result ...]`, or Markdown headings.
-
-## Conceptual form
+## Responsibility boundaries
 
 ```text
-ToolCard
-├── identity
-│   ├── semantic tool call id
-│   └── tool kind
-├── lifecycle
+tool_ux
+    = rich semantic visual builder
+
+ToolUiModel
+    = canonical runtime visual contract
+
+SemanticEvent
+    = canonical lifecycle/event transport
+
+acp-adaptor
+    = only ACP visual renderer
+```
+
+The unique end-to-end pipeline is:
+
+```text
+Tool implementation
+    ↓
+tool_ux
+    ↓
+ToolUiModel
+    ↓
+SemanticEvent
+    ↓
+integrity
+    ↓
+acp-adaptor
+    ↓
+ACP
+    ↓
+Zed thread
+```
+
+`tool_ux` decides **what** the user should see. It must remain host-neutral and must not construct ACP presentation values. `ToolUiModel` carries that meaning in structured runtime data. `SemanticEvent` carries the lifecycle with the same `ToolCallId`. The ACP adaptor decides **how** to express the model through ACP.
+
+The following is explicitly forbidden:
+
+```text
+tool_ux
+   ↓
+ACP ToolKind / ToolCallContent / ToolCallLocation
+   ↓
+ToolUiModel
+   ↓
+ACP again
+```
+
+## Canonical model
+
+```text
+ToolUiModel
+├── kind
+├── title
+├── summary
+├── status
 │   ├── Pending
 │   ├── Running
 │   ├── Succeeded
 │   ├── Failed
 │   └── Cancelled
-├── primary
-│   ├── title
-│   └── short user-facing summary
 ├── input
-│   └── small structured facts safe for display
 ├── output
-│   └── optional structured facts + raw data
-└── details
-    └── collapsible verbose output
+├── content
+├── locations
+└── expandable
 ```
 
-## Rules
+The model must remain structured. Hosts must never recover semantic meaning by parsing formatted result strings, Markdown headings, exit-code decorations, or provider-specific prefixes.
 
-1. **Semantic first.** The runtime carries `ToolUiModel`; the ACP adapter or future UI maps it to widgets.
-2. **No text parsing.** Tool names, statuses, file paths, commands, matches, and counts are structured fields.
-3. **Small primary surface.** The title and summary must be readable in a compact card. Large stdout, file contents, and diffs belong in expandable details.
-4. **Mutation clarity.** `file_write`, `file_edit`, and `replace_in_file` must communicate what changed, not only that execution succeeded.
-5. **Execution clarity.** `shell_exec` must distinguish command, running state, exit status, timeout, policy denial, and output.
-6. **Search clarity.** `search`, `glob`, and `list_directory` should expose counts and paths without forcing the host to parse lines.
-7. **Safety clarity.** A blocked or denied action must have a distinct failure state and a structured reason; it must not look like an ordinary provider error.
-8. **Privacy by construction.** Large replacement strings, raw prompts, and verbose outputs should not be duplicated into primary UI metadata.
+## Rich presentation surface
 
-## Shell safety semantics
+`tool_ux` owns the rich semantic vocabulary required by the current experience, including:
 
-The shell policy is a semantic execution gate, not an OS isolation mechanism.
+- semantic tool kind and human-readable title/summary;
+- lifecycle presentation, permission state, and risk level;
+- bounded input/output previews and rich cards;
+- file diffs for writes and edits;
+- terminal references for shell execution;
+- structured source locations for reads, searches, and filesystem results;
+- distinct user-interaction presentations for `AskUserQuestion` and `FollowUp`.
 
-The UI may distinguish these outcomes:
+The existing visual identities remain semantic concepts:
 
 ```text
-Allowed
-Running
-Succeeded
-Failed
-Cancelled
-PolicyDenied
-ConfinementUnavailable
+📖 File Read
+📝 File Write
+✏️ File Edit
+🧭 Glob
+📁 Directory
+🔎 Search
+▣ Shell
+⚙️ Ask User
+↪ Follow-up
 ```
 
-`PolicyDenied` means the command was rejected before execution by the application policy. `ConfinementUnavailable` is reserved for a future execution backend when OS-level confinement is required but unavailable. The current shell policy does **not** claim host isolation.
+## Tool-result contract
 
-## Builtin mapping
+A final tool result remains associated with the same `ToolCallId` established by the request. Its `ToolUiModel` preserves status, output, rich content, locations, and applicable terminal metadata.
 
-| Tool | UI kind | Primary surface | Details |
-|---|---|---|---|
-| `file_read` | `FileRead` | file + requested range | file contents |
-| `file_write` | `FileWrite` | created/updated file | content statistics |
-| `file_edit` | `FileEdit` | edited file + replacement count | diff/details |
-| `replace_in_file` | `ReplaceInFile` | edited file | diff/details |
-| `glob` | `Glob` | pattern + match count | paths |
-| `list_directory` | `DirectoryList` | directory + entry count | entries |
-| `search` | `Search` | pattern + match count | matches |
-| `search_and_read` | `SearchAndRead` | pattern + excerpts | excerpts |
-| `shell_exec` | `Shell` | command + lifecycle + safety outcome | stdout/stderr/exit status/reason |
-| `AskUserQuestion` | `AskUserQuestion` | question state | response form |
+Representative projections are:
+
+```text
+FileRead
+    ToolUiModel(kind=FileRead, locations=[...], output=...)
+        → ACP ToolKind::Read + ToolCallLocation + output/content
+
+FileEdit / FileWrite
+    ToolUiModel(kind=FileEdit|FileWrite, content=[card,diff], locations=[...])
+        → ACP ToolKind::Edit + Diff + ToolCallLocation
+
+Shell
+    ToolUiModel(kind=Shell, content=[card,terminal])
+        → ACP ToolKind::Execute + Terminal
+```
+
+These ACP objects are produced only at the adaptor boundary.
+
+## Projection rules
+
+The adaptor performs explicit semantic conversion for the supported rich content variants. A malformed or unsupported rich semantic value is a projection error, not silently discarded data. Simple raw textual output may still be used as an intentional fallback when no rich content exists.
 
 ## UX target
 
