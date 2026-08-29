@@ -50,7 +50,9 @@ impl DefaultToolProvider {
         let mut registry = ToolRegistry::builtin();
         let catalog = McpCatalog::from_env().await?;
         if catalog.has_tools() {
-            registry.register_mcp(Arc::new(catalog));
+            registry
+                .register_mcp(Arc::new(catalog))
+                .map_err(|error| anyhow::anyhow!(error))?;
         }
         Ok(Self::new(registry))
     }
@@ -193,7 +195,7 @@ impl ToolProvider for DefaultToolProvider {
             .await
             .map_err(map_mcp_error)?;
         let mut registry = ToolRegistry::builtin();
-        registry.register_mcp(Arc::new(catalog));
+        registry.register_mcp(Arc::new(catalog))?;
         self.state.sessions.write().await.insert(
             session_id.to_owned(),
             SessionToolBinding {
