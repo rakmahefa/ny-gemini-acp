@@ -1,4 +1,3 @@
-# content intentionally follows existing audit, with visual boundary guard
 #!/usr/bin/env bash
 set -uo pipefail
 
@@ -47,39 +46,21 @@ TOOLS='crates/tools-provider/src'
 ADAPTER='crates/acp-adaptor/src'
 
 section "1. Runtime boundary"
-assert_no_match "FAIL" "agent-runtime has no executable ACP references" \
-  rg -n -S --glob '*.rs' --glob '!**/test/**' \
-    'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|\bMcpServer\b' \
-    "$RUNTIME"
-assert_no_match "FAIL" "agent-runtime production code has no Gemini/provider-specific references" \
-  rg -n -S --glob '*.rs' --glob '!**/test/**' \
-    '\bGemini\b|\bgemini\b|google|sapisid|web2api|cookie_file|auth_user' \
-    "$RUNTIME"
-assert_no_match "WARN" "agent-runtime tests are provider-neutral" \
-  rg -n -S --glob '*.rs' \
-    '\bGemini\b|\bgemini\b|gemini-acp-(runtime|config|agent|encaps|tools)|gemini_acp_(runtime|config|agent|encaps|tools)' \
-    "$RUNTIME/test"
+assert_no_match "FAIL" "agent-runtime has no executable ACP references" rg -n -S --glob '*.rs' --glob '!**/test/**' 'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest|\bMcpServer\b' "$RUNTIME"
+assert_no_match "FAIL" "agent-runtime production code has no Gemini/provider-specific references" rg -n -S --glob '*.rs' --glob '!**/test/**' '\bGemini\b|\bgemini\b|google|sapisid|web2api|cookie_file|auth_user' "$RUNTIME"
+assert_no_match "WARN" "agent-runtime tests are provider-neutral" rg -n -S --glob '*.rs' '\bGemini\b|\bgemini\b|gemini-acp-(runtime|config|agent|encaps|tools)|gemini_acp_(runtime|config|agent|encaps|tools)' "$RUNTIME/test"
 
 section "2. Contract surface"
-assert_match "WARN" "LLM contract contains fields worth reviewing for stronger typing" \
-  rg -n -S 'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' "$RUNTIME/providers.rs"
-assert_match "WARN" "Tool contract contains fields worth reviewing for stronger typing" \
-  rg -n -S 'ToolCallRequest|ToolCallResult|ToolProvider' "$RUNTIME/providers.rs"
+assert_match "WARN" "LLM contract contains fields worth reviewing for stronger typing" rg -n -S 'serde_json::Value|Vec<Value>|Result<[^>]+,\s*String>|pub .*String' "$RUNTIME/providers.rs"
+assert_match "WARN" "Tool contract contains fields worth reviewing for stronger typing" rg -n -S 'ToolCallRequest|ToolCallResult|ToolProvider' "$RUNTIME/providers.rs"
 
 section "3. ACP provider boundary"
-assert_no_match "FAIL" "ACP types do not cross llm-provider entry point" \
-  rg -n -S --glob '*.rs' 'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest' "$LLM/provider.rs"
-assert_no_match "FAIL" "ACP types do not cross tools-provider entry point" \
-  rg -n -S --glob '*.rs' 'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest' "$TOOLS/provider.rs"
+assert_no_match "FAIL" "ACP types do not cross llm-provider entry point" rg -n -S --glob '*.rs' 'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest' "$LLM/provider.rs"
+assert_no_match "FAIL" "ACP types do not cross tools-provider entry point" rg -n -S --glob '*.rs' 'agent[_-]client[_-]protocol|schema::v1|PromptRequest|InitializeRequest|NewSessionRequest' "$TOOLS/provider.rs"
 
 section "3b. Visual pipeline boundary"
-assert_no_match "FAIL" "tool_ux contains no ACP presentation types" \
-  rg -n -S --glob '*.rs' \
-    'agent[_-]client[_-]protocol|schema::v1|Tool(Call|CallContent|CallLocation|CallStatus|Kind)|\bDiff\b|\bTerminal\b' \
-    "$TOOLS/tools/tool_ux"
-assert_match "FAIL" "tool_ux owns semantic ToolInfo content/locations" \
-  rg -n -S 'pub struct ToolInfo|content: Vec<Value>|locations: Vec<Value>' \
-    "$TOOLS/tools/tool_ux/types.rs"
+assert_no_match "FAIL" "tool_ux contains no ACP presentation types" rg -n -S --glob '*.rs' 'agent[_-]client[_-]protocol|schema::v1|Tool(Call|CallContent|CallLocation|CallStatus|Kind)|\bDiff\b|\bTerminal\b' "$TOOLS/tools/tool_ux"
+assert_match "FAIL" "tool_ux owns semantic ToolInfo content/locations" rg -n -S 'pub struct ToolInfo|content: Vec<Value>|locations: Vec<Value>' "$TOOLS/tools/tool_ux/types.rs"
 
 section "4. Cargo dependency hygiene"
 if [[ ! -f crates/llm-provider/Cargo.toml || ! -f crates/tools-provider/Cargo.toml ]]; then
@@ -99,28 +80,19 @@ else
 fi
 
 section "5. MCP normalization"
-assert_match "FAIL" "ACP MCP servers are normalized at the adapter boundary" \
-  rg -n -S 'agent_client_protocol::schema::v1|McpServer|from_acp_servers|normalize_server' "$ADAPTER/config/mcp.rs"
-assert_match "WARN" "tools-provider owns MCP implementation details rather than runtime" \
-  rg -n -S 'McpServerConfig|McpCatalog|McpTransportKind' "$TOOLS"
+assert_match "FAIL" "ACP MCP servers are normalized at the adapter boundary" rg -n -S 'agent_client_protocol::schema::v1|McpServer|from_acp_servers|normalize_server' "$ADAPTER/config/mcp.rs"
+assert_match "WARN" "tools-provider owns MCP implementation details rather than runtime" rg -n -S 'McpServerConfig|McpCatalog|McpTransportKind' "$TOOLS"
 
 section "6. Provider-owned session state"
-assert_match "WARN" "tool session ownership is implemented by ToolProvider" \
-  rg -n -S 'for_session|configure_session|clear_session|session_id|HashMap' "$RUNTIME/providers.rs" "$TOOLS/provider.rs" "$RUNTIME/session.rs"
+assert_match "WARN" "tool session ownership is implemented by ToolProvider" rg -n -S 'for_session|configure_session|clear_session|session_id|HashMap' "$RUNTIME/providers.rs" "$TOOLS/provider.rs" "$RUNTIME/session.rs"
 
 section "7. Legacy architecture names"
-assert_no_match "FAIL" "production code has no legacy gemini-acp crate identities" \
-  rg -n -S --glob '*.rs' --glob '!**/test/**' \
-    'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' crates
-assert_no_match "WARN" "tests and fixtures have no legacy gemini-acp crate identities" \
-  rg -n -S --glob '*.rs' --glob '**/test/**' \
-    'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' crates
+assert_no_match "FAIL" "production code has no legacy gemini-acp crate identities" rg -n -S --glob '*.rs' --glob '!**/test/**' 'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' crates
+assert_no_match "WARN" "tests and fixtures have no legacy gemini-acp crate identities" rg -n -S --glob '*.rs' --glob '**/test/**' 'gemini_acp_(runtime|config|agent|encaps|tools)|gemini-acp-(runtime|config|agent|encaps|tools)' crates
 
 section "8. Provider trait declarations"
-assert_match "FAIL" "provider traits are centralized in agent-runtime" \
-  rg -n -S '^pub trait (LlmProvider|ToolProvider)' "$RUNTIME/providers.rs"
-assert_no_match "FAIL" "provider implementations do not redeclare runtime provider traits" \
-  rg -n -S '^pub trait (LlmProvider|ToolProvider)' "$LLM" "$TOOLS"
+assert_match "FAIL" "provider traits are centralized in agent-runtime" rg -n -S '^pub trait (LlmProvider|ToolProvider)' "$RUNTIME/providers.rs"
+assert_no_match "FAIL" "provider implementations do not redeclare runtime provider traits" rg -n -S '^pub trait (LlmProvider|ToolProvider)' "$LLM" "$TOOLS"
 
 printf '\n=== RESULT ===\n'
 printf 'WARN: %d\n' "$WARN_COUNT"
