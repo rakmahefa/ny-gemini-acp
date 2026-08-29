@@ -101,15 +101,13 @@ pub(crate) async fn recoverable_busy_sentinel(path: &std::path::Path) -> bool {
 }
 
 fn parse_busy_pid(raw: &str) -> Option<u32> {
-    raw.lines()
-        .find_map(|line| line.strip_prefix("pid=")?.split_whitespace().next())
-        .and_then(|value| value.parse::<u32>().ok())
+    raw.split_whitespace()
+        .find_map(|token| token.strip_prefix("pid=")?.parse::<u32>().ok())
 }
 
 fn parse_busy_start_time(raw: &str) -> Option<u64> {
-    raw.lines()
-        .find_map(|line| line.strip_prefix("start_time=")?.split_whitespace().next())
-        .and_then(|value| value.parse::<u64>().ok())
+    raw.split_whitespace()
+        .find_map(|token| token.strip_prefix("start_time=")?.parse::<u64>().ok())
 }
 
 #[cfg(target_os = "linux")]
@@ -131,6 +129,13 @@ mod tests {
     #[test]
     fn parses_busy_identity() {
         let raw = "pid=123 start_time=456 ts=789\n";
+        assert_eq!(parse_busy_pid(raw), Some(123));
+        assert_eq!(parse_busy_start_time(raw), Some(456));
+    }
+
+    #[test]
+    fn parses_busy_identity_across_lines() {
+        let raw = "pid=123\nstart_time=456\nts=789\n";
         assert_eq!(parse_busy_pid(raw), Some(123));
         assert_eq!(parse_busy_start_time(raw), Some(456));
     }
