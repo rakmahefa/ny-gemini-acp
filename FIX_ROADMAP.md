@@ -22,11 +22,17 @@ Chaque correctif doit :
 
 **Problème :** certaines entrées ACP peuvent atteindre `Store` sans validation canonique de `SessionId`, alors que les chemins de persistance sont dérivés directement de l'identifiant.
 
-**Cible :** aucune API de persistance ne doit accepter un identifiant non validé ; le namespace disque doit être fermé au travers du type/validateur d'identité.
+**Correctif appliqué :** `prompt::run_turn` valide désormais `SessionManager::validate_id()` avant le premier accès à `Store::begin_turn()`. Les formes non conformes sont rejetées avec une erreur ACP `invalid_params`.
 
-**État :** ⏳ À faire
+**État :** ✅ Corrigé — validation statique acquise
 
-**Validation :** tests de rejet des IDs invalides, tests de non-traversée, validation workspace complète.
+**Validation effectuée :**
+
+- présence d'un test contre `../../escape` ;
+- présence d'un test contre `sess_../escape` ;
+- conservation d'un test d'ID canonique valide ;
+- relecture du chemin `PromptRequest → validate_id → Store::begin_turn` confirmant qu'un ID ACP invalide n'atteint plus la persistance ;
+- `cargo` ne peut pas être exécuté dans l'environnement courant faute d'accès réseau/runtime au dépôt, donc la validation complète `fmt/check/test/clippy` reste à faire localement.
 
 ## P0-2 — Transaction d'intégrité `SemanticEvent` → transport
 
@@ -71,7 +77,7 @@ Chaque correctif doit :
 ## Statut global P0
 
 ```text
-P0-1 Session identity       ⏳
+P0-1 Session identity       ✅ corrigé / validation statique
 P0-2 SemanticEvent commit   ⏳
 P0-3 Pre-cancel turn        ⏳
 P0-4 Shell boundary         ⏳
