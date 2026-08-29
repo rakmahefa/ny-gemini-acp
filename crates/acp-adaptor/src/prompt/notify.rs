@@ -1,11 +1,12 @@
 //! ACP notifications: messages, reasoning, tool UI and usage.
 use agent_client_protocol::schema::v1::{
-    ContentBlock, ContentChunk, MessageId, SessionId, SessionNotification, SessionUpdate,
+    ContentBlock, ContentChunk, Diff, MessageId, SessionId, SessionNotification, SessionUpdate,
     TextContent, ToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
     ToolCallUpdate, ToolKind, UsageUpdate,
 };
 use agent_client_protocol::{Client, ConnectionTo, Error as AcpError};
 use agent_runtime::{ToolUiKind, ToolUiModel, ToolUiStatus};
+use serde_json::Value;
 
 use tools_provider::tools::lifecycle::record_partial_output;
 
@@ -153,16 +154,42 @@ fn tool_ui_meta(ui: &ToolUiModel) -> serde_json::Map<String, serde_json::Value> 
 }
 
 fn rich_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
-    ui.content
-        .iter()
-        .filter_map(|value| serde_json::from_value(value.clone()).ok())
-        .collect()
+    ui.content.iter().filter_map(project_rich_content).collect()
+}
+
+fn project_rich_content(value: &Value) -> Option<ToolCallContent> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("text") | Some("content") => value
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))),
+        Some("diff") => {
+            let path = value.get("path")?.as_str()?.to_owned();
+            let new_text = value.get("newText").and_then(Value::as_str).unwrap_or("");
+            let old_text = value.get("oldText").and_then(Value::as_str).map(str::to_owned);
+            Some(ToolCallContent::Diff(Diff::new(path, new_text.to_owned()).old_text(old_text)))
+        }
+        Some("terminal") => value
+            .get("id")
+            .and_then(Value::as_str)
+            .map(|id| ToolCallContent::Terminal(agent_client_protocol::schema::v1::Terminal::new(id.to_owned()))),
+        _ => None,
+    }
 }
 
 fn rich_locations(ui: &ToolUiModel) -> Vec<ToolCallLocation> {
     ui.locations
         .iter()
-        .filter_map(|value| serde_json::from_value(value.clone()).ok())
+        .filter_map(|value| {
+            let path = value.get("path")?.as_str()?.to_owned();
+            let location = ToolCallLocation::new(path);
+            value
+                .get("line")
+                .and_then(Value::as_u64)
+                .map(|line| location.line(line as u32))
+                .or(Some(location))
+        })
         .collect()
 }
 
@@ -170,7 +197,7 @@ fn fallback_text_content(ui: &ToolUiModel) -> Vec<ToolCallContent> {
     ui.output
         .as_ref()
         .and_then(|value| value.get("text"))
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .filter(|text| !text.is_empty())
         .map(|text| {
             vec![ToolCallContent::from(ContentBlock::Text(TextContent::new(

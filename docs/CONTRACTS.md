@@ -6,7 +6,7 @@ This document is the normative application-level contract for the provider-neutr
 
 `agent-runtime` owns semantic lifecycle, tool identity and the canonical `ToolUiModel` presentation contract. `tools-provider/tool_ux` is the rich semantic builder used to create that model.
 
-`tool_ux` MUST remain host-neutral: it MUST NOT construct ACP presentation types. ACP-native `ToolKind`, `ToolCallContent`, `ToolCallLocation`, `ToolCallStatus`, `ToolCall` and `ToolCallUpdate` values are created only at the ACP adapter boundary.
+`tool_ux` MUST remain host-neutral: it MUST NOT construct ACP presentation types. ACP-native `ToolKind`, `ToolCallContent`, `ToolCallLocation`, `ToolCallStatus`, `ToolCall` and `ToolCallUpdate` values are created only at the ACP adaptor boundary.
 
 The canonical end-to-end visual path is:
 
