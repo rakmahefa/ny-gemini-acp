@@ -1,37 +1,82 @@
-# Runtime contract surface
+# Runtime contracts
 
-This document is the normative application-level contract for the provider-neutral runtime.
+This document defines the normative application-level contracts for the provider-neutral runtime and its ACP boundary.
 
-## Security boundary
+## Single visual pipeline
 
-`agent-runtime` validates semantic lifecycle and tool identity. The ACP adaptor is a transport boundary and does not parse model tool syntax. Shell policy and command normalization are defensive application policies, not OS isolation.
+There is exactly one visual contract:
 
-The runtime MUST NOT claim host confinement unless an OS-level sandbox is actually configured and enforced.
+```text
+Tool implementation
+    ↓
+tool_ux
+    ↓
+ToolUiModel
+    ↓
+SemanticEvent
+    ↓
+Runtime integrity
+    ↓
+acp-adaptor
+    ↓
+ACP ToolCall / ToolCallUpdate
+    ↓
+Zed thread
+```
 
-## Persistence guarantees
+The responsibilities are deliberately separated:
 
-Persisted session state is finalized through the runtime store boundary. A successful turn finalization means the store accepted the final state according to its atomic-write and synchronization contract. Persistence failures remain explicit runtime errors; they MUST NOT be silently converted into successful turns.
+- `tool_ux` is the **rich semantic visual builder**. It knows what the user should see: tool kind, title, summary, lifecycle presentation, permission and risk signals, rich cards, diffs, terminal references, locations, and bounded input/output previews.
+- `ToolUiModel` is the **canonical runtime visual contract**. It is host-neutral and carries the structured visual information needed by the UI without requiring string parsing.
+- `SemanticEvent` is the **canonical lifecycle/event transport**. Tool lifecycle events carry the same validated `ToolCallId` and may carry the associated `ToolUiModel`.
+- Runtime integrity validates ordering, turn identity and tool identity before protocol projection.
+- `acp-adaptor` is the **only ACP visual renderer**. It is the sole layer that maps `ToolUiModel` semantic values to ACP `ToolKind`, `ToolCallContent`, `ToolCallLocation`, `ToolCallStatus`, `ToolCall`, and `ToolCallUpdate`.
+
+The following pipeline is forbidden:
+
+```text
+tool_ux
+    ↓
+ACP ToolKind / ToolCallContent / ToolCallLocation
+    ↓
+ToolUiModel
+    ↓
+ACP again
+```
+
+ACP presentation types must not leak into `tools-provider/src/tools/tool_ux`.
 
 ## Tool-result semantics
 
-A `ToolResultReceived` event belongs to exactly one semantic tool call identity. Tool output is data and MUST remain separate from protocol syntax. Permission denial, cancellation and execution result are distinct terminal outcomes of the tool lifecycle.
+A `ToolResultReceived` event belongs to exactly one semantic tool call identity. Tool output is data and remains separate from protocol syntax. Permission denial, cancellation, policy rejection, execution failure, and execution success are distinct lifecycle outcomes.
 
-## Cancellation semantics
+For a tool result, the final `ToolUiModel` preserves the status and structured visual surface produced by the tool builder. The result remains correlated with the same `ToolCallId` that was established by `ToolCallRequested`.
 
-Cancellation is terminal at the turn level. Open semantic scopes are closed before `TurnCancelled` is emitted, and open tool calls are terminalized as cancelled rather than fabricated as successful results.
+## Runtime event lifecycle
 
-## Failure semantics
+Representative lifecycle:
 
-`TurnFailed` is terminal. The runtime may preserve the underlying structured error for diagnostics while exposing only protocol-safe error data at the ACP boundary.
+```text
+ToolCallRequested
+    → PermissionRequested (when required)
+    → ToolExecutionStarted
+    → ToolResultReceived
+```
 
-## Identifier ownership
-
-`SessionId` identifies a session, `TurnId` identifies one turn within that session, and `ToolCallId` identifies one tool invocation within a turn. Tool identifiers are owned by the semantic runtime after validation and are never inferred from arbitrary tool-result text.
+All tool-scoped events use the same `ToolCallId`. The runtime does not reconstruct tool identity from arbitrary result text.
 
 ## Ordering and replay
 
 Every semantic event carries a monotonically increasing per-turn sequence. A replay journal is valid only when session/turn identity is stable, sequence numbers are contiguous from zero, and exactly one terminal event occurs at the end.
 
+## Security boundary
+
+`agent-runtime` validates semantic lifecycle and tool identity. Shell policy and command normalization are application policies, not OS isolation. The runtime MUST NOT claim host confinement unless an OS-level sandbox is actually configured and enforced.
+
+## Persistence guarantees
+
+A successful turn finalization means the store accepted the final state according to its atomic-write and synchronization contract. Persistence failures remain explicit runtime errors and MUST NOT be silently converted into successful turns.
+
 ## ACP projection
 
-The ACP layer consumes validated semantic events and projects them to ACP-native messages. ACP transport failure is observable and MUST prevent a successful mandatory transport publication.
+ACP projection is explicit and centralized at the adaptor boundary. Rich semantic content that cannot be projected into a supported ACP representation is a structured projection failure rather than silently dropped data. Text fallback is used only for the intentionally simple raw-output surface.
