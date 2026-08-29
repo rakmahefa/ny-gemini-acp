@@ -1,4 +1,3 @@
-use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind};
 use serde_json::Value;
 
 use super::super::sandbox::RiskLevel;
@@ -10,12 +9,12 @@ pub(crate) const MAX_RESULT_PREVIEW_CHARS: usize = 4 * 1024;
 pub(crate) const MAX_QUESTION_PREVIEW_CHARS: usize = 2 * 1024;
 pub(crate) const MAX_CARD_BODY_CHARS: usize = 8 * 1024;
 
+/// Host-neutral semantic tool presentation produced by `tool_ux`.
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
     pub title: String,
-    pub kind: ToolKind,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,9 +44,10 @@ impl ToolVisual {
     }
 }
 
+/// Host-neutral semantic representation of a tool result presentation.
 #[derive(Debug, Clone)]
 pub struct ResultUpdate {
-    pub status: ToolCallStatus,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub status: &'static str,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }
