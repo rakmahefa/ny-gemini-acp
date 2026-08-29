@@ -139,7 +139,7 @@ fn shell_exec(args: &Value, terminal_id: Option<&str>) -> ToolInfo {
         content.push(terminal_content(id));
     }
     ToolInfo {
-        title: if command.is_empty() { "Terminal".into() } else { truncate(command, 96) },
+        title: if command.is_empty() { "Shell".into() } else { truncate(command, 96) },
         kind: ToolUiKind::Shell,
         content,
         locations: vec![],
