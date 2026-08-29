@@ -118,6 +118,16 @@ impl ShellSandbox {
                 ));
             }
 
+            if args.iter().any(|arg| {
+                arg.split_once('=').is_some_and(|(_, value)| {
+                    value.starts_with('/') || value.starts_with('~') || value.contains("../")
+                })
+            }) {
+                return Err(SecurityError(
+                    "option contenant un chemin absolu ou hors périmètre interdite dans la sandbox".into(),
+                ));
+            }
+
             if matches!(program.as_str(), "sh" | "bash" | "zsh" | "dash" | "ksh") {
                 return Err(SecurityError(format!(
                     "interpréteur shell '{program}' interdit dans la sandbox"
