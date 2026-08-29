@@ -14,31 +14,60 @@ Après validation complète des P0, traiter les défauts importants qui n'impliq
 
 **Cible :** un exit code processus non nul doit être représenté comme `ToolCallResult::error` / `is_ok = false`, sans perdre stdout/stderr ni le code retour.
 
-**Tests :** succès, exit non nul, signal, timeout.
+**Implémentation :** ✅
+
+- `shell_exec` convertit maintenant les sorties avec exit code non nul en résultat d'erreur ;
+- stdout/stderr et le code de sortie restent présents dans le contenu ;
+- une terminaison par signal est également une erreur sémantique ;
+- tests ajoutés pour succès, exit non nul, signal et timeout.
+
+**Validation complète :** ⏳ requise localement.
 
 ## P1-2 — SemanticEvent rejection propagation
 
 **Cible :** aucun appel à `tool_call_requested`, `permission_requested`, `tool_execution_started` ou `tool_result_received` ne doit ignorer silencieusement un refus sémantique.
 
-**Tests :** chaque rejet doit produire une erreur structurée et un terminal event cohérent.
+**Implémentation :** ✅ sur le chemin d'orchestration runtime.
+
+`AgentLoop` traite explicitement tout retour `false` des événements critiques en `AgentLoopError::SemanticEventRejected` et tente de terminaliser le turn en échec. Les appels du chemin ACP/runtime existant sont donc transformés en erreurs structurées plutôt qu'en succès silencieux.
+
+**Validation complète :** ⏳ requise localement.
 
 ## P1-3 — LLM cancellation boundary
 
 **Cible :** le contrat `LlmProvider` doit rendre annulable l'établissement du stream, pas seulement sa consommation.
 
-**Tests :** provider bloqué avant création du stream, cancellation concurrente, cancellation après émission partielle.
+**Implémentation :** ✅
+
+Le contrat `LlmProvider` expose maintenant `stream_with_cancellation`, avec surveillance du canal de cancellation pendant l'établissement du stream. `AgentLoop` utilise cette frontière et convertit une cancellation de phase d'ouverture en `AgentLoopError::Cancelled` / `TurnCancelled`.
+
+**Validation complète :** ⏳ requise localement.
 
 ## P1-4 — Process tree cancellation / timeout
 
 **Cible :** un timeout ou une cancellation shell doit terminer le groupe de processus et éviter les descendants orphelins.
 
-**Tests :** arbre `sh -> child -> grandchild`, timeout, cancellation, cleanup.
+**Implémentation :** ✅ pour le timeout du builtin shell.
+
+Sur Unix, `shell_exec` crée un process group dédié et tue le groupe complet lors du timeout. Le résultat expose explicitement l'interruption de l'arbre de processus ; le test couvre un shell lançant `sleep` comme descendant.
+
+**Limite :** la propagation de cancellation ACP vers tous les backends de processus reste à vérifier séparément.
+
+**Validation complète :** ⏳ requise localement.
 
 ## P1-5 — Tool identity collision / MCP precedence
 
 **Cible :** aucun outil MCP ne doit masquer silencieusement un builtin ; les identités d'outils doivent être uniques et déterministes.
 
-**Tests :** collision de noms, lookup, execution, UI model, replay.
+**Implémentation :** ✅
+
+- doublons builtin rejetés à l'enregistrement ;
+- collision entre nom builtin et identité MCP transformée en `ToolConfigurationError` explicite ;
+- le provider propage désormais cette erreur au caller ;
+- le dispatch builtin est prioritaire sur MCP ;
+- les définitions d'outils sont triées par identité pour garantir un ordre déterministe.
+
+**Validation complète :** ⏳ requise localement.
 
 ## P1-6 — Persistence transaction consistency
 
@@ -71,11 +100,11 @@ Après validation complète des P0, traiter les défauts importants qui n'impliq
 ## Sortie P1
 
 ```text
-P1-1 Tool result semantics       ⏳
-P1-2 Event rejection propagation ⏳
-P1-3 LLM cancellation            ⏳
-P1-4 Process tree cleanup        ⏳
-P1-5 MCP identity                ⏳
+P1-1 Tool result semantics       ✅ implémenté / validation requise
+P1-2 Event rejection propagation ✅ implémenté / validation requise
+P1-3 LLM cancellation            ✅ implémenté / validation requise
+P1-4 Process tree cleanup        ✅ implémenté / validation requise
+P1-5 MCP identity                ✅ implémenté / validation requise
 P1-6 Persistence consistency     ⏳
 P1-7 Busy ownership              ⏳
 P1-8 Panic elimination           ⏳
