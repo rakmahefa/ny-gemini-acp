@@ -1,7 +1,8 @@
-//! ACP-facing tool UX module.
+//! Host-neutral tool UX builder.
 //!
-//! Responsibilities are split into presentation types, card rendering,
-//! tool builders, and result/location projections.
+//! `tool_ux` owns rich semantic presentation for concrete tool invocations.
+//! It must not construct or import ACP presentation types. The ACP adaptor is
+//! the only layer that projects `ToolUiModel` into ACP-native content.
 
 mod builders;
 mod display;
