@@ -19,6 +19,7 @@ agent-client-protocol = { workspace = true, features = ["unstable_elicitation"] 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures-util = { workspace = true }
+libc = "0.2"
 regex = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
