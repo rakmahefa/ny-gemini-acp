@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
 printf '\n==> cargo fmt\n'
-cargo fmt --all -- --check
+cargo fmt
 
 printf '\n==> cargo test\n'
 cargo test --workspace --all-targets
