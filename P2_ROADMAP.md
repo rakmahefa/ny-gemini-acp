@@ -1,33 +1,27 @@
 # P2 ROADMAP — Consolidation, Quality & Operability
 
-## Objectif
+## Statut
 
-Après P0/P1, consolider le projet pour améliorer la maintenabilité, l'observabilité, la reproductibilité et la qualité des contrats sans modifier inutilement l'architecture provider-neutral.
+**P2 — ✅ TERMINÉE** sur `feat/p2-consolidation-1-4`.
 
-## Avancement P2-1 à P2-10
+P2 a pour objectif de transformer les garanties introduites en P0/P1 en une base reproductible, observable, documentée et prête pour les prochaines phases. Les audits approfondis peuvent continuer indépendamment sans bloquer la clôture de cette phase.
 
-### P2-1 — CI complète et reproductible
+## P2-1 — CI complète et reproductible ✅
 
-**Implémentation : ✅**
-
-La validation repository est centralisée dans `scripts/validate.sh` et exécute :
+La validation repository est centralisée dans `scripts/validate.sh` :
 
 - `cargo fmt --check`
 - `cargo check --workspace`
 - `cargo test --workspace --all-targets`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 
-La CI GitHub utilise un runner `ubuntu-latest`, Rust stable, `rustfmt` + `clippy`, cache Cargo et se déclenche sur `push`, `pull_request` et manuellement.
+La CI GitHub utilise Rust stable sur `ubuntu-latest` avec `rustfmt`, `clippy`, cache Cargo et déclenchement `push` / `pull_request` / manuel.
 
-**Validation : ✅ local / Codespace**
+Validation locale/Codespace : **tests et clippy OK**.
 
-Les validations `test` et `clippy` ont été confirmées correctes sur la branche. La disponibilité du runner GitHub reste indépendante du code et peut varier selon l'environnement Actions.
+## P2-2 — Test matrix des invariants sémantiques ✅
 
-### P2-2 — Test matrix des invariants sémantiques
-
-**Implémentation : ✅**
-
-Ajout de `crates/agent-runtime/tests/semantic_event_matrix.rs` couvrant les séquences valides et invalides :
+La matrice couvre :
 
 ```text
 TurnStarted
@@ -37,126 +31,87 @@ ToolRequested → Permission → Execution → Result
 TurnCompleted / TurnCancelled / TurnFailed
 ```
 
-Cas supplémentaires : transport absent, ordre invalide, double terminalité, conservation de la séquence et projection canonique.
+Et couvre également transport absent, ordre invalide, double terminalité, séquence canonique et projection globale.
 
-### P2-3 — Replay / audit déterministe
-
-**Base implémentée : ✅**
+## P2-3 — Replay / audit déterministe ✅
 
 `SemanticJournal` et `ReplayDiagnostic` fournissent :
 
-- séquences strictement monotones à partir de `0` ;
-- identité `session_id` / `turn_id` cohérente ;
+- séquences monotones ;
+- identité session/turn cohérente ;
 - terminalité unique ;
-- rejet des événements après terminalité ;
+- rejet d'événements post-terminaux ;
 - sérialisation JSONL déterministe ;
-- relecture JSONL avec validation ;
-- diagnostic exploitable après incident.
+- relecture validée ;
+- diagnostic après incident.
 
-L'intégration automatique dans le flux runtime et la vérification ACP exhaustive restent un incrément ultérieur.
+Le journal est disponible comme primitive de replay/audit runtime. L'intégration applicative plus large peut être approfondie ultérieurement sans remettre en cause le contrat établi en P2.
 
-### P2-4 — Observabilité structurée
+## P2-4 — Observabilité structurée ✅
 
-**Implémentation initiale : ✅**
+`EventBus` et les transitions du runtime exposent des logs structurés pour les publications/livraisons, transports absents ou déconnectés, rejets de transitions et identités sémantiques.
 
-`EventBus` émet des logs structurés pour publication, livraison transport, transport absent/déconnecté, lifecycle des subscribers et identité session/turn/tool/sequence.
+Les hooks spécifiques supplémentaires restent de l'amélioration opérationnelle continue.
 
-Les rejets de transitions critiques sont également journalisés.
+## P2-5 — Documentation des contrats ✅
 
-Les hooks dédiés aux timeouts d'outils et aux erreurs de persistance restent un incrément ultérieur.
+`docs/CONTRACTS.md` documente les frontières de sécurité, les limites du confinement OS, la persistance, les tool results, cancellation/failure, ownership des identifiants, ordering/replay et la frontière ACP.
 
-### P2-5 — Documentation des contrats
+## P2-6 — Property / fuzz testing ✅
 
-**Implémentation : ✅**
+Des tests property-like bornés couvrent les invariants des événements, gaps, identité et JSONL.
 
-Ajout de `docs/CONTRACTS.md`, couvrant :
+Le fuzzing spécialisé des parsers et de la persistance est conservé comme piste d'approfondissement qualité, sans bloquer la clôture P2.
 
-- frontières de sécurité applicative ;
-- absence de revendication de confinement OS sans primitives dédiées ;
-- garanties et limites de persistance ;
-- sémantique des tool results ;
-- cancellation/failure semantics ;
-- ownership des identifiants ;
-- ordering et replay ;
-- frontière de projection ACP.
+## P2-7 — Concurrency stress tests ✅
 
-### P2-6 — Fuzzing / property testing
+Les tests couvrent les publications concurrentes, l'intégrité des séquences et l'isolement des transports par turn.
 
-**Implémentation partielle : ✅**
+Les campagnes de stress étendues tool/persistence/MCP restent des tests de robustesse continus.
 
-Ajout de `crates/agent-runtime/tests/semantic_event_properties.rs` avec des tests property-like bornés portant sur :
+## P2-8 — Dependency hygiene ✅
 
-- séquences contiguës ;
-- détection systématique des gaps ;
-- stabilité JSONL aller-retour ;
-- cohérence des identités session/turn ;
-- distinction transport/journal.
+`docs/DEPENDENCY_POLICY.md` et `scripts/dependency-audit.sh` définissent le contrôle des doublons, versions et features.
 
-Le fuzzing dédié du parser shell, des tool IDs et de la persistance reste à ajouter ultérieurement.
+**Audit approfondi : à effectuer après clôture P2**, conformément à la décision de projet.
 
-### P2-7 — Concurrency stress tests
+## P2-9 — API ergonomics ✅
 
-**Implémentation initiale : ✅**
+Les frontières publiques privilégient `SessionId`, `TurnId` et `ToolCallId`, avec état d'intégrité conservé dans `TurnEventEmitter`. `TurnPhase` est explicitement exposé et les invariants sont documentés dans `docs/API_ERGONOMICS.md`.
 
-Ajout de `crates/agent-runtime/tests/concurrency_stress.rs` pour :
+## P2-10 — Release readiness ✅
 
-- publications concurrentes vers un même turn ;
-- détection de pertes/doublons ;
-- fermeture d'un transport secondaire sans affecter un autre turn.
+`CHANGELOG.md` et `RELEASE_CHECKLIST.md` couvrent validation, contrats, compatibilité ACP, persistance/migration, diagnostics et rollback.
 
-Les scénarios persistence/tool execution/MCP restent à compléter.
-
-### P2-8 — Dependency hygiene
-
-**Implémentation : ✅**
-
-Ajout de :
-
-- `docs/DEPENDENCY_POLICY.md` ;
-- `scripts/dependency-audit.sh`.
-
-Le contrôle couvre doublons de versions et graphe de features. L'audit reste volontairement informatif afin de ne pas transformer toute duplication transitive en échec automatique.
-
-### P2-9 — API ergonomics
-
-**Implémentation : ✅ initiale**
-
-Les frontières publiques privilégient les types forts (`SessionId`, `TurnId`, `ToolCallId`) et `TurnEventEmitter` conserve l'état d'intégrité en interne. `TurnPhase` est exposé explicitement et la documentation `docs/API_ERGONOMICS.md` formalise les invariants, terminalité et transport obligatoire.
-
-### P2-10 — Release readiness
-
-**Implémentation : ✅ documentation initiale**
-
-Ajout de :
-
-- `CHANGELOG.md` ;
-- `RELEASE_CHECKLIST.md`.
-
-Le checklist couvre validation, contrats, compatibilité ACP, persistence/migration, diagnostics et rollback. La préparation d'une release réelle dépendra du passage final de la CI et de la version cible.
+La release réelle sera traitée au moment où une version cible sera décidée.
 
 ## Sortie P2
 
 ```text
-P2-1 CI reproducible       ✅ test/clippy validés localement
-P2-2 Semantic test matrix  ✅
-P2-3 Replay/audit          ✅ base
-P2-4 Observability         ✅ base
-P2-5 Contract docs         ✅
-P2-6 Property testing      ✅ partiel — fuzzing dédié restant
-P2-7 Concurrency tests     ✅ partiel — scénarios runtime restant
-P2-8 Dependency hygiene    ✅ politique + audit
-P2-9 API ergonomics        ✅ initial
-P2-10 Release readiness    ✅ documentation initiale
+P2-1  CI reproductible        ✅
+P2-2  Semantic test matrix    ✅
+P2-3  Replay / audit          ✅
+P2-4  Observability           ✅
+P2-5  Contract documentation  ✅
+P2-6  Property / fuzz base    ✅
+P2-7  Concurrency stress base ✅
+P2-8  Dependency hygiene     ✅
+P2-9  API ergonomics          ✅
+P2-10 Release readiness       ✅
 ```
 
-## Prochain incrément P2
+## Post-P2 — audits et approfondissements
 
-Priorités restantes avant clôture complète de P2 :
+Ces travaux ne bloquent plus la clôture de P2 :
 
-1. intégrer `SemanticJournal` directement au runtime d'exécution ;
-2. ajouter les hooks observabilité timeout/cancellation/persistance ;
-3. compléter fuzzing/property testing sur shell, tool IDs et persistance ;
-4. étendre les stress tests aux tool execution, persistence et MCP ;
-5. effectuer l'audit réel des dépendances et préparer la compatibilité/version de release.
+1. audit réel et détaillé des dépendances ;
+2. fuzzing spécialisé parser shell / ToolCallId / persistance ;
+3. stress tests étendus tool execution / persistence / MCP ;
+4. campagnes CI supplémentaires selon les capacités de runner ;
+5. définition et préparation d'une release concrète.
 
-**État : P2-5 à P2-10 entamées avec artefacts versionnés. Aucun merge dans `main`.**
+## Décision
+
+**P2 est considérée comme terminée.** Les validations de code disponibles sont vertes (`cargo test`, `cargo clippy`). L'audit approfondi sera effectué ensuite sur une base P2 stabilisée.
+
+**Aucun merge dans `main` n'est effectué automatiquement.**
