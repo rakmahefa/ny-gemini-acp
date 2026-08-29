@@ -1,12 +1,15 @@
 use std::path::Path;
 
-use agent_client_protocol::schema::v1::ToolCallContent;
 use serde_json::json;
 
 use super::{bounded_raw_input, result_update, ToolInfo};
 
-fn text_of(content: &ToolCallContent) -> String {
-    format!("{content:?}")
+fn text_of(value: &serde_json::Value) -> String {
+    value
+        .get("text")
+        .and_then(|text| text.as_str())
+        .unwrap_or_default()
+        .to_owned()
 }
 
 #[test]
@@ -49,8 +52,25 @@ fn core_tools_keep_one_text_card() {
         ("AskUserQuestion", json!({"questions":[{"question":"Continue?","options":[{"label":"Yes"}]}]})),
     ] {
         let info = ToolInfo::build(name, &args, cwd, None);
-        assert!(matches!(info.content.first(), Some(ToolCallContent::Content(_))), "missing card for {name}");
+        assert_eq!(info.content.first().and_then(|v| v.get("type")).and_then(|v| v.as_str()), Some("text"), "missing semantic card for {name}");
     }
+}
+
+#[test]
+fn rich_file_edit_content_is_semantic_not_acp_typed() {
+    let info = ToolInfo::build("file_edit", &json!({"path":"test.txt","old_string":"before","new_string":"after"}), Path::new("/tmp"), None);
+    let diff = info.content.iter().find(|value| value.get("type").and_then(|v| v.as_str()) == Some("diff")).expect("missing semantic diff");
+    assert_eq!(diff.get("path").and_then(|v| v.as_str()), Some("/tmp/test.txt"));
+    assert_eq!(diff.get("newText").and_then(|v| v.as_str()), Some("after"));
+}
+
+#[test]
+fn tool_info_converts_to_runtime_ui_model() {
+    let info = ToolInfo::build("file_read", &json!({"path":"src/lib.rs"}), Path::new("/tmp/project"), None);
+    let ui = info.into_ui_model(json!({"path":"src/lib.rs"}));
+    assert_eq!(ui.kind, agent_runtime::ToolUiKind::FileRead);
+    assert_eq!(ui.status, agent_runtime::ToolUiStatus::Pending);
+    assert_eq!(ui.content[0]["type"], "text");
 }
 
 #[test]
@@ -60,10 +80,11 @@ fn bounded_raw_input_keeps_small_content_unchanged() {
 }
 
 #[test]
-fn bounded_raw_input_truncates_large_content() {
+fn bounded_raw_input_truncates_large_content_without_acp_wording() {
     let content = "x".repeat(8193);
     let args = json!({"content": content});
     let bounded = bounded_raw_input(&args);
     let rendered = bounded.get("content").and_then(|v| v.as_str()).unwrap();
-    assert!(rendered.contains("chars omitted from ACP display"));
+    assert!(rendered.contains("chars omitted from semantic display"));
+    assert!(!rendered.contains("ACP display"));
 }

@@ -163,6 +163,18 @@ assert_no_match "FAIL" "ACP types do not cross tools-provider entry point" \
     "$TOOLS/provider.rs"
 
 # -----------------------------------------------------------------------------
+# 3b. VISUAL PIPELINE: tool_ux must remain host-neutral.
+# -----------------------------------------------------------------------------
+section "3b. Visual pipeline boundary"
+assert_no_match "FAIL" "tool_ux contains no ACP presentation types" \
+  rg -n -S --glob '*.rs' \
+    'agent[_-]client[_-]protocol|schema::v1|Tool(Call|CallContent|CallLocation|CallStatus|Kind)|\bDiff\b|\bTerminal\b' \
+    "$TOOLS/tools/tool_ux"
+assert_match "FAIL" "tool_ux owns semantic ToolInfo content/locations" \
+  rg -n -S 'pub struct ToolInfo|content: Vec<Value>|locations: Vec<Value>' \
+    "$TOOLS/tools/tool_ux/types.rs"
+
+# -----------------------------------------------------------------------------
 # 4. Dependency hygiene.
 # - llm-provider MUST NOT declare ACP and must not pull it as a direct dep.
 # - tools-provider MAY declare ACP only because tools/elicitation.rs currently

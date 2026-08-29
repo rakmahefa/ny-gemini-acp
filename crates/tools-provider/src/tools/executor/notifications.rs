@@ -1,14 +1,80 @@
 use agent_client_protocol::schema::v1::{
     ContentBlock, ContentChunk, SessionNotification, SessionUpdate, TextContent,
     ToolCall as AcpToolCall, ToolCallContent, ToolCallId, ToolCallLocation, ToolCallStatus,
-    ToolCallUpdate, ToolCallUpdateFields,
+    ToolCallUpdate, ToolCallUpdateFields, ToolKind,
 };
 use agent_client_protocol::{Client, ConnectionTo};
+use agent_runtime::ToolUiKind;
 use serde_json::{Map, Value};
 
 use super::super::lifecycle::ToolLifecycle;
 use super::super::tool_ux::{bounded_raw_input, ToolInfo};
 use super::{mapping, ToolExecutor};
+
+pub(super) fn project_content(values: &[Value]) -> Vec<ToolCallContent> {
+    values
+        .iter()
+        .filter_map(|value| match value.get("type").and_then(Value::as_str) {
+            Some("text") | Some("content") => value
+                .get("text")
+                .and_then(Value::as_str)
+                .map(|text| {
+                    ToolCallContent::from(ContentBlock::Text(TextContent::new(text)))
+                }),
+            Some("diff") => {
+                let path = value.get("path")?.as_str()?.to_owned();
+                let new_text = value.get("newText").and_then(Value::as_str).unwrap_or("");
+                let old_text = value
+                    .get("oldText")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                Some(ToolCallContent::Diff(
+                    agent_client_protocol::schema::v1::Diff::new(
+                        path,
+                        new_text.to_owned(),
+                    )
+                    .old_text(old_text),
+                ))
+            }
+            Some("terminal") => value
+                .get("id")
+                .and_then(Value::as_str)
+                .map(|id| {
+                    ToolCallContent::Terminal(
+                        agent_client_protocol::schema::v1::Terminal::new(id.to_owned()),
+                    )
+                }),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(super) fn project_locations(values: &[Value]) -> Vec<ToolCallLocation> {
+    values
+        .iter()
+        .filter_map(|value| {
+            let path = value.get("path")?.as_str()?.to_owned();
+            let location = ToolCallLocation::new(path);
+            value
+                .get("line")
+                .and_then(Value::as_u64)
+                .map(|line| location.line(line as u32))
+                .or(Some(location))
+        })
+        .collect()
+}
+
+pub(super) fn project_tool_kind(kind: ToolUiKind) -> ToolKind {
+    match kind {
+        ToolUiKind::FileRead | ToolUiKind::DirectoryList => ToolKind::Read,
+        ToolUiKind::FileWrite | ToolUiKind::FileEdit | ToolUiKind::ReplaceInFile => {
+            ToolKind::Edit
+        }
+        ToolUiKind::Search | ToolUiKind::Glob | ToolUiKind::SearchAndRead => ToolKind::Search,
+        ToolUiKind::Shell => ToolKind::Execute,
+        ToolUiKind::AskUserQuestion | ToolUiKind::Generic => ToolKind::Other,
+    }
+}
 
 impl<'a> ToolExecutor<'a> {
     pub(super) fn emit_tool_call(
@@ -19,10 +85,10 @@ impl<'a> ToolExecutor<'a> {
         raw_input: &Value,
     ) {
         let tool = AcpToolCall::new(call_id.clone(), info.title.clone())
-            .kind(info.kind)
+            .kind(project_tool_kind(info.kind))
             .status(lifecycle.state().wire_status())
-            .content(info.content.clone())
-            .locations(info.locations.clone())
+            .content(project_content(&info.content))
+            .locations(project_locations(&info.locations))
             .raw_input(bounded_raw_input(raw_input))
             .meta(mapping::lifecycle_meta(&info.title, lifecycle, None, None));
         let _ = self.cx.send_notification(SessionNotification::new(

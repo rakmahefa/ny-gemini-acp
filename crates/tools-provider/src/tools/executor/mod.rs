@@ -17,7 +17,8 @@ use super::lifecycle::{
     bind_session_cancellation, session_cancelled, unbind_session_cancellation,
     wait_for_session_cancel, ToolLifecycle, ToolLifecycleState,
 };
-use super::tool_ux::{classify_risk, result_update, ToolInfo};
+use super::tool_ux::{bounded_raw_input, classify_risk, result_update, ToolInfo};
+use super::notifications::{project_content, project_locations};
 
 pub use mapping::map_stop_reason;
 pub use notifications::{emit_error_chunk, safe_session_update};
@@ -153,19 +154,29 @@ impl<'a> ToolExecutor<'a> {
             terminal_id,
         );
         let meta = mapping::lifecycle_meta(tool_name, lifecycle, reason, terminal_meta);
-        self.emit_update(
-            call_id,
-            envelope.status,
-            rendered.content,
-            rendered.locations,
-            Some(meta),
-        );
-        if let Some(e) = semantic.as_mut() {
-            e.tool_result_received(
-                call_id.to_string(),
-                content.clone(),
-                Some(ToolUiModel::generic(tool_name, arguments.clone())),
+        if semantic.is_none() {
+            self.emit_update(
+                call_id,
+                envelope.status,
+                project_content(&rendered.content),
+                project_locations(&rendered.locations),
+                Some(meta),
             );
+        }
+        if let Some(e) = semantic.as_mut() {
+            let mut ui = ToolInfo::build(tool_name, arguments, self.cwd, terminal_id)
+                .into_ui_model(bounded_raw_input(arguments));
+            ui.status = if cancelled {
+                agent_runtime::ToolUiStatus::Cancelled
+            } else if is_ok {
+                agent_runtime::ToolUiStatus::Succeeded
+            } else {
+                agent_runtime::ToolUiStatus::Failed
+            };
+            ui.output = Some(serde_json::json!({ "text": content }));
+            ui.content.extend(rendered.content);
+            ui.locations = rendered.locations;
+            e.tool_result_received(call_id.to_string(), content.clone(), Some(ui));
         }
         ToolResult {
             content,
@@ -183,8 +194,10 @@ impl<'a> ToolExecutor<'a> {
     ) -> ToolResult {
         let info = ToolInfo::build(tool_name, arguments, self.cwd, None);
         let mut lifecycle = ToolLifecycle::new();
-        self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
-        let ui = Some(ToolUiModel::generic(tool_name, arguments.clone()));
+        if semantic.is_none() {
+            self.emit_tool_call(&call_id, &info, &lifecycle, arguments);
+        }
+        let ui = Some(info.clone().into_ui_model(bounded_raw_input(arguments)));
         if let Some(e) = semantic.as_mut() {
             e.tool_call_requested(call_id.to_string(), tool_name.to_owned(), ui.clone());
         }
@@ -207,11 +220,13 @@ impl<'a> ToolExecutor<'a> {
         }
         let mode = (self.get_mode)();
         let needs_permission = match info.kind {
-            agent_client_protocol::schema::v1::ToolKind::Edit
-            | agent_client_protocol::schema::v1::ToolKind::Execute => match mode {
+            agent_runtime::ToolUiKind::FileWrite
+            | agent_runtime::ToolUiKind::FileEdit
+            | agent_runtime::ToolUiKind::ReplaceInFile
+            | agent_runtime::ToolUiKind::Shell => match mode {
                 ToolPermissionMode::BypassPermissions => false,
                 ToolPermissionMode::AcceptEdits => {
-                    info.kind == agent_client_protocol::schema::v1::ToolKind::Execute
+                    matches!(info.kind, agent_runtime::ToolUiKind::Shell)
                         && classify_risk(tool_name, arguments) >= super::sandbox::RiskLevel::High
                 }
                 ToolPermissionMode::Default => true,
@@ -222,7 +237,9 @@ impl<'a> ToolExecutor<'a> {
             lifecycle
                 .transition(ToolLifecycleState::Permission)
                 .expect("pending -> permission must be legal");
-            self.emit_lifecycle(&call_id, &lifecycle, tool_name);
+            if semantic.is_none() {
+                self.emit_lifecycle(&call_id, &lifecycle, tool_name);
+            }
             if let Some(e) = semantic.as_mut() {
                 e.permission_requested(call_id.to_string());
             }
@@ -253,7 +270,9 @@ impl<'a> ToolExecutor<'a> {
                     lifecycle
                         .transition(ToolLifecycleState::Executing)
                         .expect("permission -> executing must be legal");
-                    self.emit_lifecycle(&call_id, &lifecycle, tool_name);
+                    if semantic.is_none() {
+                        self.emit_lifecycle(&call_id, &lifecycle, tool_name);
+                    }
                     if let Some(e) = semantic.as_mut() {
                         e.tool_execution_started(call_id.to_string(), ui.clone());
                     }
@@ -339,7 +358,9 @@ impl<'a> ToolExecutor<'a> {
             lifecycle
                 .transition(ToolLifecycleState::Executing)
                 .expect("pending -> executing must be legal");
-            self.emit_lifecycle(&call_id, &lifecycle, tool_name);
+            if semantic.is_none() {
+                self.emit_lifecycle(&call_id, &lifecycle, tool_name);
+            }
             if let Some(e) = semantic.as_mut() {
                 e.tool_execution_started(call_id.to_string(), ui.clone());
             }

@@ -7,7 +7,7 @@ use tokio::sync::RwLock;
 
 use agent_runtime::{
     ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider, ToolServerConfig,
-    ToolUiKind, ToolUiModel,
+    ToolUiModel,
 };
 
 use crate::tools::contracts::ToolCancellation;
@@ -58,44 +58,13 @@ impl DefaultToolProvider {
     }
 }
 
-fn ui_kind(name: &str) -> ToolUiKind {
-    match name {
-        "file_read" => ToolUiKind::FileRead,
-        "file_write" => ToolUiKind::FileWrite,
-        "file_edit" => ToolUiKind::FileEdit,
-        "glob" => ToolUiKind::Glob,
-        "list_directory" => ToolUiKind::DirectoryList,
-        "search" => ToolUiKind::Search,
-        "search_and_read" => ToolUiKind::SearchAndRead,
-        "shell_exec" => ToolUiKind::Shell,
-        "replace_in_file" => ToolUiKind::ReplaceInFile,
-        "AskUserQuestion" => ToolUiKind::AskUserQuestion,
-        "FollowUp" => ToolUiKind::Generic,
-        _ => ToolUiKind::Generic,
-    }
-}
-
-fn rich_values<T: serde::Serialize>(values: &[T]) -> Vec<Value> {
-    values
-        .iter()
-        .filter_map(|value| serde_json::to_value(value).ok())
-        .collect()
-}
-
 fn presentation_info(name: &str, arguments: &Value, cwd: &Path) -> ToolInfo {
     ToolInfo::build(name, arguments, cwd, None)
 }
 
 fn pending_ui(_call_id: &str, name: &str, arguments: &Value, cwd: &Path) -> ToolUiModel {
     let info = presentation_info(name, arguments, cwd);
-    ToolUiModel::pending(
-        ui_kind(name),
-        info.title.clone(),
-        info.title,
-        bounded_raw_input(arguments),
-    )
-    .with_content(rich_values(&info.content))
-    .with_locations(rich_values(&info.locations))
+    info.into_ui_model(bounded_raw_input(arguments))
 }
 
 fn completed_ui_from_info(
@@ -109,35 +78,15 @@ fn completed_ui_from_info(
     let rendered = result_update(name, arguments, content, is_ok, cwd, None);
 
     // Contract visuel: l'Input appartient uniquement au ToolCall initial.
-    // Les résultats restent des ToolCallContent textuels/diff structurés; aucun
-    // terminal ACP n'est injecté par le shell_exec actuel.
-    let mut rich_content = info
-        .content
-        .iter()
-        .filter_map(|item| {
-            let value = serde_json::to_value(item).ok()?;
-            let kind = value.get("type").and_then(Value::as_str)?;
-            (kind != "terminal").then_some(value)
-        })
-        .collect::<Vec<_>>();
-    rich_content.extend(rich_values(&rendered.content));
+    // Les résultats restent des données sémantiques; la conversion ACP est réservée à l'adapter.
+    let mut rich_content = info.content.clone();
+    rich_content.extend(rendered.content);
 
-    let locations = rendered
-        .locations
-        .iter()
-        .filter(|location| location.path.exists())
-        .filter_map(|location| serde_json::to_value(location).ok())
-        .collect::<Vec<_>>();
-
-    ToolUiModel::pending(
-        ui_kind(name),
-        info.title.clone(),
-        info.title.clone(),
-        bounded_raw_input(arguments),
-    )
-    .completed(is_ok, Some(json!({ "text": content })))
-    .with_content(rich_content)
-    .with_locations(locations)
+    info.clone()
+        .into_ui_model(bounded_raw_input(arguments))
+        .completed(is_ok, Some(json!({ "text": content })))
+        .with_content(rich_content)
+        .with_locations(rendered.locations)
 }
 
 fn map_mcp_error(error: McpError) -> ToolConfigurationError {

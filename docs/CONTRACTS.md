@@ -2,6 +2,32 @@
 
 This document is the normative application-level contract for the provider-neutral runtime.
 
+## Semantic and visual boundary
+
+`agent-runtime` owns semantic lifecycle, tool identity and the canonical `ToolUiModel` presentation contract. `tools-provider/tool_ux` is the rich semantic builder used to create that model.
+
+`tool_ux` MUST remain host-neutral: it MUST NOT construct ACP presentation types. ACP-native `ToolKind`, `ToolCallContent`, `ToolCallLocation`, `ToolCallStatus`, `ToolCall` and `ToolCallUpdate` values are created only at the ACP adapter boundary.
+
+The canonical end-to-end visual path is:
+
+```text
+Tool implementation
+      ↓
+tool_ux semantic builder
+      ↓
+ToolUiModel
+      ↓
+SemanticEvent
+      ↓
+Runtime integrity validation
+      ↓
+ACP adaptor projection
+      ↓
+Zed thread
+```
+
+There is exactly one visual contract. `ToolInfo` is an internal semantic presentation helper and is not an ACP contract.
+
 ## Security boundary
 
 `agent-runtime` validates semantic lifecycle and tool identity. The ACP adaptor is a transport boundary and does not parse model tool syntax. Shell policy and command normalization are defensive application policies, not OS isolation.
@@ -15,6 +41,8 @@ Persisted session state is finalized through the runtime store boundary. A succe
 ## Tool-result semantics
 
 A `ToolResultReceived` event belongs to exactly one semantic tool call identity. Tool output is data and MUST remain separate from protocol syntax. Permission denial, cancellation and execution result are distinct terminal outcomes of the tool lifecycle.
+
+Rich UI content, source locations, previews and summaries are presentation data associated with the same semantic `ToolCallId`; they are not alternative execution results.
 
 ## Cancellation semantics
 
@@ -34,4 +62,8 @@ Every semantic event carries a monotonically increasing per-turn sequence. A rep
 
 ## ACP projection
 
-The ACP layer consumes validated semantic events and projects them to ACP-native messages. ACP transport failure is observable and MUST prevent a successful mandatory transport publication.
+The ACP layer consumes validated semantic events and projects the canonical `ToolUiModel` into ACP-native messages. ACP transport failure is observable and MUST prevent a successful mandatory transport publication.
+
+## Documentation invariant
+
+Any future tool UX feature MUST update the semantic `ToolUiModel` contract first. A new direct `tools-provider → ACP` visual pipeline is prohibited. Rich tool presentation may evolve in `tool_ux`, but it must remain semantic until the ACP projection boundary.

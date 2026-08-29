@@ -1,7 +1,7 @@
-//! ACP-facing tool UX module.
+//! Host-neutral tool UX builder.
 //!
-//! Responsibilities are split into presentation types, card rendering,
-//! tool builders, and result/location projections.
+//! `tool_ux` owns rich semantic presentation for concrete tool invocations.
+//! ACP protocol presentation is projected only at the ACP boundary.
 
 mod builders;
 mod display;

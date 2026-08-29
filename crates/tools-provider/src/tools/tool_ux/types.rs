@@ -1,4 +1,4 @@
-use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind};
+use agent_runtime::ToolUiKind;
 use serde_json::Value;
 
 use super::super::sandbox::RiskLevel;
@@ -10,12 +10,27 @@ pub(crate) const MAX_RESULT_PREVIEW_CHARS: usize = 4 * 1024;
 pub(crate) const MAX_QUESTION_PREVIEW_CHARS: usize = 2 * 1024;
 pub(crate) const MAX_CARD_BODY_CHARS: usize = 8 * 1024;
 
+/// Host-neutral semantic presentation for one tool invocation.
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
     pub title: String,
-    pub kind: ToolKind,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub kind: ToolUiKind,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
+}
+
+impl ToolInfo {
+    /// Convert the rich tool UX into the runtime's canonical presentation model.
+    pub fn into_ui_model(self, input: Value) -> agent_runtime::ToolUiModel {
+        agent_runtime::ToolUiModel::pending(
+            self.kind,
+            self.title.clone(),
+            self.title,
+            input,
+        )
+        .with_content(self.content)
+        .with_locations(self.locations)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,9 +60,10 @@ impl ToolVisual {
     }
 }
 
+/// Host-neutral semantic representation of a tool result presentation.
 #[derive(Debug, Clone)]
 pub struct ResultUpdate {
-    pub status: ToolCallStatus,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub status: &'static str,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }

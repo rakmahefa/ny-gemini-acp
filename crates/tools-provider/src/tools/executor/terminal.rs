@@ -8,6 +8,7 @@ use super::super::lifecycle::{
     session_cancelled, wait_for_session_cancel, ToolLifecycle, ToolResultEnvelope,
 };
 use super::super::sandbox::ShellSandbox;
+use super::notifications::{project_content, project_locations};
 use super::{ExecutionOutcome, ToolExecutor, ToolResult};
 
 impl<'a> ToolExecutor<'a> {
@@ -143,8 +144,8 @@ impl<'a> ToolExecutor<'a> {
         self.emit_update(
             call_id,
             envelope.status,
-            rendered.content,
-            rendered.locations,
+            project_content(&rendered.content),
+            project_locations(&rendered.locations),
             Some(meta.as_object().cloned().unwrap_or_default()),
         );
     }

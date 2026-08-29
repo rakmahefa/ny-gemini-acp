@@ -1,5 +1,4 @@
-use agent_client_protocol::schema::v1::{Content, ContentBlock, TextContent, ToolCallContent};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use super::types::{CardBodyKind, ToolVisual, MAX_CARD_BODY_CHARS, MAX_RAW_INPUT_CHARS};
 
@@ -20,19 +19,20 @@ pub fn bounded_raw_input(args: &Value) -> Value {
     }
     let preview: String = content.chars().take(MAX_RAW_INPUT_CHARS).collect();
     *content_value = Value::String(format!(
-        "{preview}\n… [{} chars omitted from ACP display]",
+        "{preview}\n… [{} chars omitted from semantic display]",
         count - MAX_RAW_INPUT_CHARS
     ));
     value
 }
 
+/// Build a host-neutral semantic card. ACP conversion belongs to `acp-adaptor`.
 pub(crate) fn ux_card(
     tool_name: &str,
     phase: &str,
     args: &Value,
     body: Option<(&str, CardBodyKind, bool)>,
     terminal: Option<&str>,
-) -> ToolCallContent {
+) -> Value {
     let visual = ToolVisual::for_tool(tool_name, args);
     let mut text = format!(
         "**{} {}**\n{}  ·  {}  ·  {} {}",
@@ -51,7 +51,10 @@ pub(crate) fn ux_card(
         .unwrap_or_else(|| render_card_body("_En attente du résultat…_", CardBodyKind::Content, false));
     text.push_str("\n\n");
     text.push_str(&rendered_body);
-    text_content(&truncate(&text, MAX_CARD_BODY_CHARS), false)
+    json!({
+        "type": "text",
+        "text": truncate(&text, MAX_CARD_BODY_CHARS)
+    })
 }
 
 fn render_card_body(body: &str, kind: CardBodyKind, error: bool) -> String {
@@ -94,15 +97,6 @@ pub(crate) fn permission_label(name: &str) -> &'static str {
         "FollowUp" => "🔓 no permission",
         _ => "🔓 no permission",
     }
-}
-
-pub(crate) fn text_content(text: &str, error: bool) -> ToolCallContent {
-    let rendered = if error {
-        format!("⚠️ {text}")
-    } else {
-        text.to_owned()
-    };
-    ToolCallContent::Content(Content::new(ContentBlock::Text(TextContent::new(rendered))))
 }
 
 pub(crate) fn truncate(value: &str, max: usize) -> String {

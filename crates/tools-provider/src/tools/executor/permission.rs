@@ -8,6 +8,7 @@ use serde_json::{json, Map, Value};
 
 use super::super::sandbox::{RiskLevel, ShellAnalysis};
 use super::super::tool_ux::{bounded_raw_input, classify_risk, ToolInfo};
+use super::notifications::{project_content, project_locations};
 use super::ToolExecutor;
 
 #[derive(Debug, Clone)]
@@ -34,9 +35,15 @@ impl PermissionRequest {
     pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
         let info = ToolInfo::build(tool_name, args, cwd, None);
         let kind = match info.kind {
-            ToolKind::Read | ToolKind::Search => PermissionKind::Read,
-            ToolKind::Edit => PermissionKind::Write,
-            ToolKind::Execute => PermissionKind::Execute,
+            agent_runtime::ToolUiKind::FileRead
+            | agent_runtime::ToolUiKind::DirectoryList
+            | agent_runtime::ToolUiKind::Search
+            | agent_runtime::ToolUiKind::Glob
+            | agent_runtime::ToolUiKind::SearchAndRead => PermissionKind::Read,
+            agent_runtime::ToolUiKind::FileWrite
+            | agent_runtime::ToolUiKind::FileEdit
+            | agent_runtime::ToolUiKind::ReplaceInFile => PermissionKind::Write,
+            agent_runtime::ToolUiKind::Shell => PermissionKind::Execute,
             _ => PermissionKind::Execute,
         };
         let risk = classify_risk(tool_name, args);
@@ -123,9 +130,6 @@ impl<'a> ToolExecutor<'a> {
         request: &PermissionRequest,
         call_id: &ToolCallId,
     ) -> PermissionResult {
-        // The terminal resource does not exist yet at permission time. For shell_exec,
-        // it is created only after the user grants permission by the ACP terminal request.
-        // Therefore the permission prompt must never advertise a Terminal content block.
         let info = ToolInfo::build(&request.tool_name, &request.arguments, self.cwd, None);
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
             .kind(match request.kind {
@@ -135,8 +139,8 @@ impl<'a> ToolExecutor<'a> {
                 PermissionKind::Network => ToolKind::Fetch,
             })
             .status(ToolCallStatus::Pending)
-            .content(info.content)
-            .locations(info.locations)
+            .content(project_content(&info.content))
+            .locations(project_locations(&info.locations))
             .raw_input(bounded_raw_input(&request.arguments))
             .meta(permission_meta(request));
         let options = vec![
