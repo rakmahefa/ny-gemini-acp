@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{
-    PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
-    ToolCall as AcpToolCall, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+    ContentBlock, Diff, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionRequest, TextContent, ToolCall as AcpToolCall, ToolCallContent, ToolCallId,
+    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use serde_json::{json, Map, Value};
 
@@ -34,9 +35,15 @@ impl PermissionRequest {
     pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
         let info = ToolInfo::build(tool_name, args, cwd, None);
         let kind = match info.kind {
-            ToolKind::Read | ToolKind::Search => PermissionKind::Read,
-            ToolKind::Edit => PermissionKind::Write,
-            ToolKind::Execute => PermissionKind::Execute,
+            agent_runtime::ToolUiKind::FileRead
+            | agent_runtime::ToolUiKind::Search
+            | agent_runtime::ToolUiKind::Glob
+            | agent_runtime::ToolUiKind::DirectoryList
+            | agent_runtime::ToolUiKind::SearchAndRead => PermissionKind::Read,
+            agent_runtime::ToolUiKind::FileWrite
+            | agent_runtime::ToolUiKind::FileEdit
+            | agent_runtime::ToolUiKind::ReplaceInFile => PermissionKind::Write,
+            agent_runtime::ToolUiKind::Shell => PermissionKind::Execute,
             _ => PermissionKind::Execute,
         };
         let risk = classify_risk(tool_name, args);
@@ -123,20 +130,24 @@ impl<'a> ToolExecutor<'a> {
         request: &PermissionRequest,
         call_id: &ToolCallId,
     ) -> PermissionResult {
-        // The terminal resource does not exist yet at permission time. For shell_exec,
-        // it is created only after the user grants permission by the ACP terminal request.
-        // Therefore the permission prompt must never advertise a Terminal content block.
+        // The permission request is itself an ACP protocol interaction, so its presentation
+        // remains explicitly projected at this boundary from the host-neutral ToolInfo.
         let info = ToolInfo::build(&request.tool_name, &request.arguments, self.cwd, None);
+        let content = info
+            .content
+            .iter()
+            .filter_map(|value| project_permission_content(value).ok())
+            .collect::<Vec<_>>();
+        let locations = info
+            .locations
+            .iter()
+            .filter_map(|value| project_permission_location(value).ok())
+            .collect::<Vec<_>>();
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
-            .kind(match request.kind {
-                PermissionKind::Read => ToolKind::Read,
-                PermissionKind::Write => ToolKind::Edit,
-                PermissionKind::Execute => ToolKind::Execute,
-                PermissionKind::Network => ToolKind::Fetch,
-            })
+            .kind(permission_tool_kind(request.kind))
             .status(ToolCallStatus::Pending)
-            .content(info.content)
-            .locations(info.locations)
+            .content(content)
+            .locations(locations)
             .raw_input(bounded_raw_input(&request.arguments))
             .meta(permission_meta(request));
         let options = vec![
@@ -180,6 +191,47 @@ impl<'a> ToolExecutor<'a> {
             },
             _ => PermissionResult::TransportError("outcome de permission ACP non reconnu".into()),
         }
+    }
+}
+
+fn permission_tool_kind(kind: PermissionKind) -> ToolKind {
+    match kind {
+        PermissionKind::Read => ToolKind::Read,
+        PermissionKind::Write => ToolKind::Edit,
+        PermissionKind::Execute => ToolKind::Execute,
+        PermissionKind::Network => ToolKind::Fetch,
+    }
+}
+
+fn project_permission_content(value: &Value) -> Result<ToolCallContent, ()> {
+    match value.get("type").and_then(Value::as_str) {
+        Some("content") => {
+            let text = value.get("text").and_then(Value::as_str).ok_or(())?;
+            Ok(ToolCallContent::from(ContentBlock::Text(TextContent::new(
+                text.to_owned(),
+            ))))
+        }
+        Some("diff") => {
+            let path = value.get("path").and_then(Value::as_str).ok_or(())?;
+            let new_text = value.get("newText").and_then(Value::as_str).ok_or(())?;
+            let old_text = value.get("oldText").and_then(Value::as_str).map(str::to_owned);
+            Ok(ToolCallContent::Diff(
+                Diff::new(PathBuf::from(path), new_text.to_owned()).old_text(old_text),
+            ))
+        }
+        _ => Err(()),
+    }
+}
+
+fn project_permission_location(value: &Value) -> Result<ToolCallLocation, ()> {
+    let path = value.get("path").and_then(Value::as_str).ok_or(())?;
+    let location = ToolCallLocation::new(PathBuf::from(path));
+    match value.get("line").and_then(Value::as_u64) {
+        Some(line) => {
+            let line = u32::try_from(line).map_err(|_| ())?;
+            Ok(location.line(line))
+        }
+        None => Ok(location),
     }
 }
 
