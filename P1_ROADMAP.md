@@ -63,11 +63,15 @@ La session canonique est désormais persistée avant la création/prune des snap
 
 Les écritures de session restent atomiques via fichier temporaire synchronisé puis renommé.
 
+**Validation locale :** ✅
+
 ## P1-7 — Busy ownership robustness
 
 **Implémentation :** ✅
 
-Le sentinel `.busy` enregistre désormais le PID ainsi que le temps de démarrage du processus lorsque disponible sous Linux. La récupération considère un PID réutilisé comme un owner différent si le start time ne correspond pas.
+Le sentinel `.busy` enregistre désormais le PID ainsi que le temps de démarrage du processus lorsque disponible sous Linux. La récupération considère un PID réutilisé comme un owner différent si le start time ne correspond.
+
+**Validation locale :** ✅
 
 ## P1-8 — Error-path panic elimination
 
@@ -75,17 +79,23 @@ Le sentinel `.busy` enregistre désormais le PID ainsi que le temps de démarrag
 
 Les mutex globaux du lifecycle/cancellation/partial-output ne paniquent plus si un lock est empoisonné ; le guard empoisonné est récupéré et un avertissement est journalisé. La sérialisation de l'enveloppe de résultat possède également un fallback non-panique.
 
+**Validation locale :** ✅
+
 ## P1-9 — Turn result equals committed state
 
 **Implémentation :** ✅
 
 Après finalisation, `TurnExecutionResult.session` est relu depuis le `Store`. Le caller reçoit donc l'état canonique effectivement committé, incluant les métadonnées de finalisation (`updated_at`, `turn_count`, normalisation de l'historique).
 
+**Validation locale :** ✅
+
 ## P1-10 — Lock scope reduction
 
 **Implémentation :** ✅ sur `begin_turn`.
 
 Le verrou global mémoire n'est plus conservé pendant l'acquisition du sentinel filesystem. L'I/O d'acquisition est effectué avant le write lock global, réduisant la contention entre sessions/tours.
+
+**Validation locale :** ✅
 
 ## Sortie P1
 
@@ -105,10 +115,10 @@ P1-10 Lock scope                 ✅
 ## Validation de sortie
 
 ```text
-cargo fmt --check
-cargo check --workspace
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check                ✅
+cargo check --workspace          ✅
+cargo test --workspace           ✅
+cargo clippy --workspace --all-targets -- -D warnings ✅
 ```
 
-La validation complète de sortie doit être confirmée localement après le dernier commit.
+**P1 validée localement. La branche est prête pour merge dans `main`.**
