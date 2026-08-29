@@ -1,9 +1,9 @@
 use std::path::Path;
 
-use agent_client_protocol::schema::v1::{Diff, ToolCallContent, ToolCallLocation, ToolKind};
+use agent_runtime::ToolUiKind;
 use serde_json::Value;
 
-use super::display::{concise_args, truncate, ux_card};
+use super::display::{concise_args, diff_content, location, terminal_content, truncate, ux_card};
 use super::results::{display_path, read_old_text, resolve_path};
 use super::types::{CardBodyKind, ToolInfo};
 
@@ -12,7 +12,8 @@ impl ToolInfo {
         match name {
             "file_read" => file_read(args, cwd),
             "file_write" => file_write(args, cwd),
-            "file_edit" | "replace_in_file" => file_edit(args, cwd),
+            "file_edit" => file_edit(args, cwd, ToolUiKind::FileEdit),
+            "replace_in_file" => file_edit(args, cwd, ToolUiKind::ReplaceInFile),
             "glob" => glob(args, cwd),
             "list_directory" => list_directory(args, cwd),
             "search" => search(args, cwd),
@@ -32,9 +33,9 @@ fn file_read(args: &Value, cwd: &Path) -> ToolInfo {
     let input = format!("{}  ·  lignes {}-{}", display_path(path, cwd), offset, offset + limit - 1);
     ToolInfo {
         title: format!("Read {} ({}-{})", display_path(path, cwd), offset, offset + limit - 1),
-        kind: ToolKind::Read,
+        kind: ToolUiKind::FileRead,
         content: vec![ux_card("file_read", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None)],
-        locations: vec![ToolCallLocation::new(resolve_path(path, cwd)).line(offset as u32)],
+        locations: vec![location(&resolve_path(path, cwd), Some(offset as u32))],
     }
 }
 
@@ -42,35 +43,35 @@ fn file_write(args: &Value, cwd: &Path) -> ToolInfo {
     let path = arg_str(args, "path").unwrap_or("File");
     let content = arg_str(args, "content").unwrap_or("");
     let resolved = resolve_path(path, cwd);
-    let diff = Diff::new(resolved.clone(), content.to_owned()).old_text(read_old_text(&resolved));
+    let diff = diff_content(&resolved, read_old_text(&resolved), content.to_owned());
     let input = format!("{}  ·  {} chars", display_path(path, cwd), content.chars().count());
     ToolInfo {
         title: format!("Write {}", display_path(path, cwd)),
-        kind: ToolKind::Edit,
+        kind: ToolUiKind::FileWrite,
         content: vec![
             ux_card("file_write", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None),
-            ToolCallContent::Diff(diff),
+            diff,
         ],
-        locations: vec![ToolCallLocation::new(resolved)],
+        locations: vec![location(&resolved, None)],
     }
 }
 
-fn file_edit(args: &Value, cwd: &Path) -> ToolInfo {
+fn file_edit(args: &Value, cwd: &Path, kind: ToolUiKind) -> ToolInfo {
     let path = arg_str(args, "path").unwrap_or("File");
     let old = arg_str(args, "old_string").unwrap_or("");
     let new = arg_str(args, "new_string").unwrap_or("");
     let resolved = resolve_path(path, cwd);
     let old_text = if old.is_empty() { read_old_text(&resolved) } else { Some(old.to_owned()) };
-    let diff = Diff::new(resolved.clone(), new.to_owned()).old_text(old_text);
+    let diff = diff_content(&resolved, old_text, new.to_owned());
     let input = format!("{}  ·  replacement {} → {} chars", display_path(path, cwd), old.chars().count(), new.chars().count());
     ToolInfo {
         title: format!("Edit {}", display_path(path, cwd)),
-        kind: ToolKind::Edit,
+        kind,
         content: vec![
             ux_card("file_edit", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None),
-            ToolCallContent::Diff(diff),
+            diff,
         ],
-        locations: vec![ToolCallLocation::new(resolved)],
+        locations: vec![location(&resolved, None)],
     }
 }
 
@@ -81,9 +82,9 @@ fn glob(args: &Value, cwd: &Path) -> ToolInfo {
     let input = format!("pattern `{}`  ·  path {}  ·  max {}", truncate(pattern, 72), display_path(path, cwd), max_results);
     ToolInfo {
         title: format!("Find paths `{}`", truncate(pattern, 72)),
-        kind: ToolKind::Search,
+        kind: ToolUiKind::Glob,
         content: vec![ux_card("glob", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None)],
-        locations: vec![ToolCallLocation::new(resolve_path(path, cwd))],
+        locations: vec![location(&resolve_path(path, cwd), None)],
     }
 }
 
@@ -92,9 +93,9 @@ fn list_directory(args: &Value, cwd: &Path) -> ToolInfo {
     let input = format!("path {}", display_path(path, cwd));
     ToolInfo {
         title: format!("List {}", display_path(path, cwd)),
-        kind: ToolKind::Read,
+        kind: ToolUiKind::DirectoryList,
         content: vec![ux_card("list_directory", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None)],
-        locations: vec![ToolCallLocation::new(resolve_path(path, cwd))],
+        locations: vec![location(&resolve_path(path, cwd), None)],
     }
 }
 
@@ -108,9 +109,9 @@ fn search(args: &Value, cwd: &Path) -> ToolInfo {
     };
     ToolInfo {
         title: if path == "." { format!("Find `{}`", truncate(pattern, 72)) } else { format!("Find `{}` in {}", truncate(pattern, 56), display_path(path, cwd)) },
-        kind: ToolKind::Search,
+        kind: ToolUiKind::Search,
         content: vec![ux_card("search", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None)],
-        locations: vec![ToolCallLocation::new(resolve_path(path, cwd))],
+        locations: vec![location(&resolve_path(path, cwd), None)],
     }
 }
 
@@ -125,9 +126,9 @@ fn search_and_read(args: &Value, cwd: &Path) -> ToolInfo {
     };
     ToolInfo {
         title: if path == "." { format!("Find excerpts for `{}`", truncate(pattern, 56)) } else { format!("Find excerpts for `{}` in {}", truncate(pattern, 40), display_path(path, cwd)) },
-        kind: ToolKind::Search,
+        kind: ToolUiKind::SearchAndRead,
         content: vec![ux_card("search_and_read", "⏳ pending", args, Some((&input, CardBodyKind::Input, false)), None)],
-        locations: vec![ToolCallLocation::new(resolve_path(path, cwd))],
+        locations: vec![location(&resolve_path(path, cwd), None)],
     }
 }
 
@@ -135,11 +136,11 @@ fn shell_exec(args: &Value, terminal_id: Option<&str>) -> ToolInfo {
     let command = arg_str(args, "command").unwrap_or("");
     let mut content = vec![ux_card("shell_exec", "⏳ pending", args, Some((command, CardBodyKind::Input, false)), terminal_id)];
     if let Some(id) = terminal_id {
-        content.push(ToolCallContent::Terminal(agent_client_protocol::schema::v1::Terminal::new(id.to_owned())));
+        content.push(terminal_content(id));
     }
     ToolInfo {
         title: if command.is_empty() { "Terminal".into() } else { truncate(command, 96) },
-        kind: ToolKind::Execute,
+        kind: ToolUiKind::Shell,
         content,
         locations: vec![],
     }
@@ -150,7 +151,7 @@ fn ask_user_question(args: &Value) -> ToolInfo {
     let body = render_ask_user_input(args);
     ToolInfo {
         title,
-        kind: ToolKind::Other,
+        kind: ToolUiKind::AskUserQuestion,
         content: vec![ux_card("AskUserQuestion", "⏳ waiting for user", args, Some((&body, CardBodyKind::Content, false)), None)],
         locations: vec![],
     }
@@ -162,7 +163,7 @@ fn follow_up(args: &Value) -> ToolInfo {
     let input = format!("{label}\n→ {query}");
     ToolInfo {
         title: format!("Follow-up · {}", truncate(label, 72)),
-        kind: ToolKind::Other,
+        kind: ToolUiKind::Generic,
         content: vec![ux_card("FollowUp", "⏳ pending", args, Some((&input, CardBodyKind::Content, false)), None)],
         locations: vec![],
     }
@@ -172,7 +173,7 @@ fn generic(name: &str, args: &Value) -> ToolInfo {
     let body = if args.as_object().is_none_or(|obj| obj.is_empty()) { "No input payload.".to_owned() } else { concise_args(args) };
     ToolInfo {
         title: name.to_owned(),
-        kind: ToolKind::Other,
+        kind: ToolUiKind::Generic,
         content: vec![ux_card(name, "⏳ pending", args, Some((&body, CardBodyKind::Input, false)), None)],
         locations: vec![],
     }
