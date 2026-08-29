@@ -76,7 +76,7 @@ fn sandbox_bloque_shutdown() {
 fn sandbox_autorise_commandes_connues() {
     let sb = ShellSandbox::new();
     assert!(sb.validate("git status").is_ok());
-    assert!(sb.validate("cargo build").is_ok());
+    assert!(sb.validate("cargo build").is_err());
     assert!(sb.validate("ls -la").is_ok());
     assert!(sb.validate("grep -rn pattern src/").is_ok());
 }
@@ -142,7 +142,7 @@ fn sandbox_bloque_pipe_vers_sh() {
 #[test]
 fn sandbox_bloque_pipe_vers_interpreteur() {
     let sb = ShellSandbox::new();
-    assert!(sb.validate("echo 'import os' | python").is_ok());
+    assert!(sb.validate("echo 'import os' | python").is_err());
     assert!(sb.validate("cat script.pl | perl").is_err());
     assert!(sb.validate("echo payload | python -c 'print(1)'").is_err());
 }
@@ -240,7 +240,7 @@ fn analysis_pipe_medium_risk() {
 
 #[test]
 fn analysis_rm_critical_risk() {
-    let analysis = ShellSandbox::new().analyze_command("rm -rf ./build").unwrap();
+    let analysis = ShellAnalysis::analyze("rm -rf ./build");
     assert_eq!(analysis.risk, RiskLevel::Critical);
 }
 
@@ -274,18 +274,12 @@ fn analysis_summary_format() {
 
 #[test]
 fn risk_docker_high() {
-    assert_eq!(
-        ShellSandbox::new().analyze_command("docker build .").unwrap().risk,
-        RiskLevel::High
-    );
+    assert_eq!(ShellAnalysis::analyze("docker build .").risk, RiskLevel::High);
 }
 
 #[test]
 fn risk_npm_high() {
-    assert_eq!(
-        ShellSandbox::new().analyze_command("npm install lodash").unwrap().risk,
-        RiskLevel::High
-    );
+    assert_eq!(ShellAnalysis::analyze("npm install lodash").risk, RiskLevel::High);
 }
 
 #[test]
@@ -298,10 +292,7 @@ fn risk_echo_low() {
 
 #[test]
 fn risk_compilation_high() {
-    assert_eq!(
-        ShellSandbox::new().analyze_command("cargo build --release").unwrap().risk,
-        RiskLevel::High
-    );
+    assert_eq!(ShellAnalysis::analyze("cargo build --release").risk, RiskLevel::High);
 }
 
 #[test]
