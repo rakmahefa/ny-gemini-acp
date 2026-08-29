@@ -12,7 +12,7 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, TurnExecutionRequest};
+use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, SessionManager, TurnExecutionRequest};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -129,6 +129,16 @@ pub async fn run_turn(
         agent_error_kind=tracing::field::Empty,
     );
     let _enter = span.enter();
+
+    if let Err(error) = SessionManager::validate_id(sid) {
+        fail_before_execution(ctx.semantic);
+        tracing::warn!(session=%session_id, error=%error, "rejected invalid session id before persistence access");
+        return Err(AcpError::invalid_params().data(serde_json::json!({
+            "session_id": session_id.to_string(),
+            "error": "identifiant de session invalide"
+        })));
+    }
+
     let (mut session, generation) = match ctx.store.begin_turn(sid).await {
         Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
@@ -241,6 +251,13 @@ fn build_prompt_for_agent_loop(
 mod tests {
     use super::*;
     use agent_runtime::AgentActionError;
+
+    #[test]
+    fn invalid_session_id_is_rejected_before_store_access() {
+        assert!(SessionManager::validate_id("../../escape").is_err());
+        assert!(SessionManager::validate_id("sess_../escape").is_err());
+        assert!(SessionManager::validate_id("sess_00000000000000000000000000000000").is_ok());
+    }
 
     #[test]
     fn only_protocol_level_terminations_map_to_stop_reasons() {
