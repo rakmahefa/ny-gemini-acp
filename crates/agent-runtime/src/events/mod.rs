@@ -12,6 +12,7 @@ pub use bus::EventBus;
 pub use context::{EventContext, ToolEventContext};
 pub use emitter::TurnEventEmitter;
 pub use event::SemanticEvent;
+pub use integrity::TurnPhase;
 pub use replay::{ReplayDiagnostic, SemanticJournal};
 pub use sink::{TurnEventSink, TurnTermination};
 pub use stream::EventStream;
