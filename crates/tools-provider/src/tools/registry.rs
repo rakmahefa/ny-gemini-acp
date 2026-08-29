@@ -116,11 +116,28 @@ impl ToolRegistry {
     }
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
-        tracing::debug!(name = tool.definition().name, "outil enregistré");
+        let name = tool.definition().name;
+        if self.tools.iter().any(|existing| existing.definition().name == name) {
+            tracing::error!(name, "duplicate builtin tool identity rejected");
+            return;
+        }
+        tracing::debug!(name, "outil enregistré");
         self.tools.push(tool);
     }
 
     pub fn register_mcp(&mut self, catalog: Arc<McpCatalog>) {
+        let builtin_names: std::collections::HashSet<&str> =
+            self.tools.iter().map(|tool| tool.definition().name).collect();
+        let conflicts: Vec<String> = catalog
+            .definitions()
+            .into_iter()
+            .filter_map(|definition| definition.get("name").and_then(Value::as_str).map(str::to_owned))
+            .filter(|name| builtin_names.contains(name.as_str()))
+            .collect();
+        if !conflicts.is_empty() {
+            tracing::error!(?conflicts, "MCP registration rejected because it collides with builtin tool identities");
+            return;
+        }
         tracing::info!(tools = catalog.definitions().len(), "MCP tools registered");
         self.mcp = Some(catalog);
     }
@@ -163,6 +180,11 @@ impl ToolRegistry {
         if let Some(mcp) = &self.mcp {
             definitions.extend(mcp.definitions());
         }
+        definitions.sort_by(|a, b| {
+            a.get("name")
+                .and_then(Value::as_str)
+                .cmp(&b.get("name").and_then(Value::as_str))
+        });
         definitions
     }
 
@@ -178,19 +200,24 @@ impl ToolRegistry {
         cwd: &Path,
         extra_dirs: &[PathBuf],
     ) -> Option<ToolResult> {
-        if let Some(mcp) = &self.mcp {
-            if let Some(result) = mcp.call_async(name, args, cwd, extra_dirs).await {
-                return Some(result);
-            }
-        }
-        let tool = self.tools.iter().find(|t| t.definition().name == name)?;
         let mut allowed = self.sandbox.allowed_dirs.clone();
         for dir in extra_dirs {
             if !allowed.contains(dir) {
                 allowed.push(dir.clone());
             }
         }
-        Some(tool.execute(args, cwd, &allowed).await)
+
+        // Builtins own their canonical identities. An MCP catalog can only
+        // service names which are not already claimed by a builtin.
+        if let Some(tool) = self.tools.iter().find(|t| t.definition().name == name) {
+            return Some(tool.execute(args, cwd, &allowed).await);
+        }
+        self.mcp
+            .as_ref()
+            .and_then(|mcp| futures_util::FutureExt::boxed(mcp.call_async(name, args, cwd, extra_dirs)))
+            .map(|future| async move { future.await })
+            .transpose()
+            .await
     }
 
     pub fn has_tools(&self) -> bool {
@@ -229,5 +256,18 @@ mod tests {
             !names.contains(&"FollowUp"),
             "FollowUp must not be an executable tool"
         );
+    }
+
+    #[test]
+    fn builtin_definitions_are_sorted_deterministically() {
+        let reg = ToolRegistry::builtin();
+        let names: Vec<String> = reg
+            .definitions()
+            .iter()
+            .filter_map(|definition| definition.get("name").and_then(Value::as_str).map(str::to_owned))
+            .collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
     }
 }
