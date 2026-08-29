@@ -212,12 +212,10 @@ impl ToolRegistry {
         if let Some(tool) = self.tools.iter().find(|t| t.definition().name == name) {
             return Some(tool.execute(args, cwd, &allowed).await);
         }
-        self.mcp
-            .as_ref()
-            .and_then(|mcp| futures_util::FutureExt::boxed(mcp.call_async(name, args, cwd, extra_dirs)))
-            .map(|future| async move { future.await })
-            .transpose()
-            .await
+        if let Some(mcp) = &self.mcp {
+            return mcp.call_async(name, args, cwd, extra_dirs).await;
+        }
+        None
     }
 
     pub fn has_tools(&self) -> bool {
