@@ -1,6 +1,6 @@
 # Tool UX / UI Model
 
-This document defines the host-neutral presentation contract for agent tools. It is the canonical semantic visual model used by the runtime; ACP is only one downstream renderer.
+This document defines the host-neutral presentation contract for agent tools. `ToolUiModel` is the canonical semantic visual model used by the runtime; ACP is only a downstream renderer.
 
 ## Responsibility boundaries
 
@@ -38,19 +38,7 @@ ACP
 Zed thread
 ```
 
-`tool_ux` decides **what** the user should see. It must remain host-neutral and must not construct ACP presentation values. `ToolUiModel` carries that meaning in structured runtime data. `SemanticEvent` carries the lifecycle with the same `ToolCallId`. The ACP adaptor decides **how** to express the model through ACP.
-
-The following is explicitly forbidden:
-
-```text
-tool_ux
-   ↓
-ACP ToolKind / ToolCallContent / ToolCallLocation
-   ↓
-ToolUiModel
-   ↓
-ACP again
-```
+`tool_ux` decides **what** the user should see. It must remain host-neutral and must not construct ACP presentation values. `ToolUiModel` carries that meaning in structured runtime data. `SemanticEvent` carries lifecycle state with the same `ToolCallId`. The ACP adaptor decides **how** to express the model through ACP.
 
 ## Canonical model
 
@@ -72,19 +60,19 @@ ToolUiModel
 └── expandable
 ```
 
-The model must remain structured. Hosts must never recover semantic meaning by parsing formatted result strings, Markdown headings, exit-code decorations, or provider-specific prefixes.
+The model is the single runtime visual contract. Hosts must not recover semantic meaning by parsing formatted result strings, Markdown headings, exit-code decorations, or provider-specific prefixes.
 
 ## Rich presentation surface
 
-`tool_ux` owns the rich semantic vocabulary required by the current experience, including:
+The semantic builder intentionally preserves the existing rich UX vocabulary:
 
-- semantic tool kind and human-readable title/summary;
+- semantic tool kind, title, and summary;
 - lifecycle presentation, permission state, and risk level;
 - bounded input/output previews and rich cards;
 - file diffs for writes and edits;
-- terminal references for shell execution;
-- structured source locations for reads, searches, and filesystem results;
-- distinct user-interaction presentations for `AskUserQuestion` and `FollowUp`.
+- terminal references and terminal lifecycle metadata for shell execution;
+- structured source locations for reads, searches, glob, and filesystem results;
+- distinct interaction presentations for `AskUserQuestion` and `FollowUp`.
 
 The existing visual identities remain semantic concepts:
 
@@ -100,31 +88,81 @@ The existing visual identities remain semantic concepts:
 ↪ Follow-up
 ```
 
+## Lifecycle and identity
+
+A representative lifecycle is:
+
+```text
+ToolCallRequested
+    → PermissionRequested (when required)
+    → ToolExecutionStarted
+    → ToolResultReceived
+```
+
+Every tool-scoped event uses the same `ToolCallId`. The final `ToolResultReceived` carries the result-side `ToolUiModel` where visual state is required. Runtime integrity validates lifecycle ordering and identity before the model reaches a protocol renderer.
+
 ## Tool-result contract
 
-A final tool result remains associated with the same `ToolCallId` established by the request. Its `ToolUiModel` preserves status, output, rich content, locations, and applicable terminal metadata.
+A final result keeps its structured semantic information instead of collapsing it to text. Depending on the tool, this includes:
 
-Representative projections are:
+```text
+status
+output
+content
+locations
+terminal metadata
+```
+
+Examples:
 
 ```text
 FileRead
     ToolUiModel(kind=FileRead, locations=[...], output=...)
-        → ACP ToolKind::Read + ToolCallLocation + output/content
 
 FileEdit / FileWrite
     ToolUiModel(kind=FileEdit|FileWrite, content=[card,diff], locations=[...])
-        → ACP ToolKind::Edit + Diff + ToolCallLocation
 
 Shell
-    ToolUiModel(kind=Shell, content=[card,terminal])
-        → ACP ToolKind::Execute + Terminal
+    ToolUiModel(kind=Shell, content=[card,terminal], output=...)
+
+Search / Glob
+    ToolUiModel(kind=Search|Glob, locations=[...], output=...)
 ```
 
-These ACP objects are produced only at the adaptor boundary.
+The result remains associated with the same `ToolCallId` as the request.
 
-## Projection rules
+## ACP projection
 
-The adaptor performs explicit semantic conversion for the supported rich content variants. A malformed or unsupported rich semantic value is a projection error, not silently discarded data. Simple raw textual output may still be used as an intentional fallback when no rich content exists.
+Only `acp-adaptor` converts the semantic model into ACP presentation types.
+
+```text
+ToolUiModel(FileRead)
+    → ACP ToolKind::Read + ToolCallLocation + content/output
+
+ToolUiModel(FileEdit/FileWrite)
+    → ACP ToolKind::Edit + Diff + ToolCallLocation
+
+ToolUiModel(Shell)
+    → ACP ToolKind::Execute + Terminal + terminal metadata
+```
+
+The projection is explicit and testable. A malformed or unsupported rich semantic value produces a structured projection error rather than being silently discarded. A simple text fallback is used only when no rich content exists for the raw-output surface.
+
+## Forbidden architecture
+
+The following model flow must never return:
+
+```text
+tool_ux
+   ↓
+ACP ToolKind / ToolCallContent / ToolCallLocation
+   ↓
+ToolUiModel
+   ↓
+ACP again
+```
+
+ACP presentation types do not belong in `tools-provider/src/tools/tool_ux`. ACP protocol interactions such as permission requests may still use ACP request/response types in protocol-facing executor code; their visual payload must originate from host-neutral semantic data.
 
 ## UX target
 
