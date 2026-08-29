@@ -75,8 +75,13 @@ impl ToolResultEnvelope {
         }
     }
     pub fn encode(&self) -> String {
-        serde_json::to_string(self)
-            .expect("ToolResultEnvelope contains only serializable scalar fields")
+        // Serialization of scalar fields is infallible for this struct.
+        // Keep the explicit fallback so this helper can never panic on an
+        // unexpected serializer implementation change.
+        serde_json::to_string(self).unwrap_or_else(|_| {
+            "{\"tool\":\"serialization-error\",\"content\":\"serialization-error\"}"
+                .to_owned()
+        })
     }
 }
 
@@ -197,30 +202,30 @@ fn cancellation_map() -> &'static Mutex<SessionCancellationMap> {
     SESSION_CANCELLATION.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+fn lock_or_recover<T>(mutex: &'static Mutex<T>) -> std::sync::MutexGuard<'static, T> {
+    match mutex.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            tracing::warn!("recovering poisoned tool lifecycle mutex");
+            poisoned.into_inner()
+        }
+    }
+}
+
 pub fn bind_session_cancellation(session_id: &str, cancellation: ToolCancellation) {
-    cancellation_map()
-        .lock()
-        .expect("session cancellation mutex poisoned")
-        .insert(session_id.to_owned(), cancellation);
+    lock_or_recover(cancellation_map()).insert(session_id.to_owned(), cancellation);
 }
 pub fn unbind_session_cancellation(session_id: &str) {
-    cancellation_map()
-        .lock()
-        .expect("session cancellation mutex poisoned")
-        .remove(session_id);
+    lock_or_recover(cancellation_map()).remove(session_id);
 }
 pub fn session_cancelled(session_id: &str) -> bool {
-    cancellation_map()
-        .lock()
-        .expect("session cancellation mutex poisoned")
+    lock_or_recover(cancellation_map())
         .get(session_id)
         .is_some_and(ToolCancellation::is_cancelled)
 }
 pub async fn wait_for_session_cancel(session_id: &str) {
     let cancellation = {
-        let map = cancellation_map()
-            .lock()
-            .expect("session cancellation mutex poisoned");
+        let map = lock_or_recover(cancellation_map());
         map.get(session_id).cloned()
     };
     let Some(cancellation) = cancellation else {
@@ -236,17 +241,10 @@ fn partial_output_map() -> &'static Mutex<PartialOutputMap> {
     PARTIAL_OUTPUT.get_or_init(|| Mutex::new(HashMap::new()))
 }
 pub fn begin_partial_output(session_id: &str) {
-    partial_output_map()
-        .lock()
-        .expect("partial output mutex poisoned")
-        .insert(session_id.to_owned(), String::new());
+    lock_or_recover(partial_output_map()).insert(session_id.to_owned(), String::new());
 }
 pub fn clear_partial_output(session_id: &str) {
-    if let Some(output) = partial_output_map()
-        .lock()
-        .expect("partial output mutex poisoned")
-        .get_mut(session_id)
-    {
+    if let Some(output) = lock_or_recover(partial_output_map()).get_mut(session_id) {
         output.clear();
     }
 }
@@ -254,15 +252,13 @@ pub fn record_partial_output(session_id: &str, text: &str) {
     if text.is_empty() {
         return;
     }
-    let mut map = partial_output_map()
-        .lock()
-        .expect("partial output mutex poisoned");
-    map.entry(session_id.to_owned()).or_default().push_str(text);
+    lock_or_recover(partial_output_map())
+        .entry(session_id.to_owned())
+        .or_default()
+        .push_str(text);
 }
 pub fn take_partial_output(session_id: &str) -> String {
-    partial_output_map()
-        .lock()
-        .expect("partial output mutex poisoned")
+    lock_or_recover(partial_output_map())
         .remove(session_id)
         .unwrap_or_default()
 }
