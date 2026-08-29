@@ -1,5 +1,6 @@
-use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind};
 use serde_json::Value;
+
+use agent_runtime::{ToolUiKind, ToolUiStatus};
 
 use super::super::sandbox::RiskLevel;
 
@@ -13,9 +14,9 @@ pub(crate) const MAX_CARD_BODY_CHARS: usize = 8 * 1024;
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
     pub title: String,
-    pub kind: ToolKind,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub kind: ToolUiKind,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +48,7 @@ impl ToolVisual {
 
 #[derive(Debug, Clone)]
 pub struct ResultUpdate {
-    pub status: ToolCallStatus,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub status: ToolUiStatus,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }
