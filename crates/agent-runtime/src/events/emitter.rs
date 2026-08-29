@@ -83,6 +83,14 @@ impl TurnEventEmitter {
         EventContext::new(self.session_id.clone(), self.turn_id.clone(), sequence)
     }
 
+    fn proposed_context(&self) -> EventContext {
+        EventContext::new(
+            self.session_id.clone(),
+            self.turn_id.clone(),
+            self.next_sequence,
+        )
+    }
+
     fn tool_context(&mut self, tool_call_id: ToolCallId) -> ToolEventContext {
         ToolEventContext {
             event: self.context(),
@@ -97,9 +105,11 @@ impl TurnEventEmitter {
 
     fn publish(&self, event: SemanticEvent) -> bool {
         if self.require_transport {
-            self.bus.publish_global(event.clone());
-            match self.bus.publish_turn(event) {
-                Ok(()) => true,
+            match self.bus.publish_turn(event.clone()) {
+                Ok(()) => {
+                    self.bus.publish_global(event);
+                    true
+                }
                 Err(error) => {
                     tracing::error!(session=%self.session_id, turn=%self.turn_id, error=%error, "mandatory ACP semantic transport failed");
                     false
@@ -144,281 +154,168 @@ impl TurnEventEmitter {
         if !self.transport_ready() {
             return false;
         }
-        if let Err(e) = self.integrity.turn_started() {
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.turn_started() {
             return self.reject(e);
         }
-        let context = self.context();
-        self.publish(SemanticEvent::TurnStarted { context })
-    }
-
-    pub fn assistant_started(&mut self) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        if let Err(e) = self.integrity.assistant_started() {
-            return self.reject(e);
-        }
-        let context = self.context();
-        self.publish(SemanticEvent::AssistantStarted { context })
-    }
-
-    pub fn assistant_delta(&mut self, delta: impl Into<String>) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        if let Err(e) = self.integrity.assistant_delta() {
-            return self.reject(e);
-        }
-        let context = self.context();
-        self.publish(SemanticEvent::AssistantDelta {
-            context,
-            delta: delta.into(),
-        })
-    }
-
-    pub fn assistant_completed(&mut self) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        if let Err(e) = self.integrity.assistant_completed() {
-            return self.reject(e);
-        }
-        let context = self.context();
-        self.publish(SemanticEvent::AssistantCompleted { context })
-    }
-
-    /// Closes the assistant stream without emitting `AssistantCompleted`.
-    ///
-    /// This is a semantic handoff, not turn completion: the model has yielded to
-    /// an action that still has to execute. The next observable semantic event is
-    /// therefore the action/tool lifecycle itself.
-    pub fn assistant_yields_to_action(&mut self) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        match self.integrity.assistant_yields_to_action() {
-            Ok(()) => true,
-            Err(error) => self.reject(error),
-        }
-    }
-
-    pub fn thinking_started(&mut self) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        if let Err(e) = self.integrity.thinking_started() {
-            return self.reject(e);
-        }
-        let context = self.context();
-        self.publish(SemanticEvent::ThinkingStarted { context })
-    }
-
-    pub fn thinking_delta(&mut self, delta: impl Into<String>) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        if let Err(e) = self.integrity.thinking_delta() {
-            return self.reject(e);
-        }
-        let context = self.context();
-        self.publish(SemanticEvent::ThinkingDelta {
-            context,
-            delta: delta.into(),
-        })
-    }
-
-    pub fn thinking_completed(&mut self) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        if let Err(e) = self.integrity.thinking_completed() {
-            return self.reject(e);
-        }
-        let context = self.context();
-        self.publish(SemanticEvent::ThinkingCompleted { context })
-    }
-
-    pub fn tool_call_requested(
-        &mut self,
-        upstream_id: impl Into<ToolCallId>,
-        name: impl Into<String>,
-    ) -> bool {
-        self.tool_call_requested_with_ui(upstream_id, name, None)
-    }
-
-    pub fn tool_call_requested_with_ui(
-        &mut self,
-        upstream_id: impl Into<ToolCallId>,
-        name: impl Into<String>,
-        ui: Option<ToolUiModel>,
-    ) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
-        let upstream_id = upstream_id.into();
-        if upstream_id.is_empty() {
-            return self.reject(IntegrityError::new("tool call identity must be non-empty"));
-        }
-        let semantic_id = match self.bind_tool_identity(upstream_id.clone()) {
-            Ok(id) => id,
-            Err(error) => return self.reject(error),
-        };
-        if let Err(e) = self.integrity.tool_call_requested(semantic_id.as_str()) {
-            self.rollback_tool_binding(&upstream_id);
-            return self.reject(e);
-        }
-        let context = self.tool_context(semantic_id);
-        if self.publish(SemanticEvent::ToolCallRequested {
-            context,
-            name: name.into(),
-            ui,
-        }) {
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::TurnStarted { context }) {
+            self.integrity = candidate;
+            self.next_sequence = self.next_sequence.saturating_add(1);
             true
         } else {
-            self.rollback_tool_binding(&upstream_id);
             false
         }
     }
 
+    pub fn assistant_started(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.assistant_started() { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::AssistantStarted { context }) {
+            self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
+    }
+
+    pub fn assistant_delta(&mut self, delta: impl Into<String>) -> bool {
+        if !self.transport_ready() { return false; }
+        if let Err(e) = self.integrity.assistant_delta() { return self.reject(e); }
+        let context = self.proposed_context();
+        let event = SemanticEvent::AssistantDelta { context, delta: delta.into() };
+        if self.publish(event) { self.next_sequence = self.next_sequence.saturating_add(1); true } else { false }
+    }
+
+    pub fn assistant_completed(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.assistant_completed() { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::AssistantCompleted { context }) {
+            self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
+    }
+
+    pub fn assistant_yields_to_action(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
+        let mut candidate = self.integrity.clone();
+        match candidate.assistant_yields_to_action() { Ok(()) => true, Err(error) => return self.reject(error) }
+    }
+
+    pub fn thinking_started(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.thinking_started() { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::ThinkingStarted { context }) {
+            self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
+    }
+
+    pub fn thinking_delta(&mut self, delta: impl Into<String>) -> bool {
+        if !self.transport_ready() { return false; }
+        if let Err(e) = self.integrity.thinking_delta() { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::ThinkingDelta { context, delta: delta.into() }) {
+            self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
+    }
+
+    pub fn thinking_completed(&mut self) -> bool {
+        if !self.transport_ready() { return false; }
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.thinking_completed() { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::ThinkingCompleted { context }) {
+            self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
+    }
+
+    pub fn tool_call_requested(&mut self, upstream_id: impl Into<ToolCallId>, name: impl Into<String>) -> bool {
+        self.tool_call_requested_with_ui(upstream_id, name, None)
+    }
+
+    pub fn tool_call_requested_with_ui(&mut self, upstream_id: impl Into<ToolCallId>, name: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+        if !self.transport_ready() { return false; }
+        let upstream_id = upstream_id.into();
+        if upstream_id.is_empty() { return self.reject(IntegrityError::new("tool call identity must be non-empty")); }
+        let semantic_id = match self.bind_tool_identity(upstream_id.clone()) { Ok(id) => id, Err(error) => return self.reject(error) };
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.tool_call_requested(semantic_id.as_str()) { self.rollback_tool_binding(&upstream_id); return self.reject(e); }
+        let context = EventContext::new(self.session_id.clone(), self.turn_id.clone(), self.next_sequence);
+        let event = SemanticEvent::ToolCallRequested { context: ToolEventContext { event: context, tool_call_id: semantic_id }, name: name.into(), ui };
+        if self.publish(event) { self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true } else { self.rollback_tool_binding(&upstream_id); false }
+    }
+
     pub fn permission_requested(&mut self, upstream_id: impl Into<ToolCallId>) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
-        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else {
-            return self.reject(IntegrityError::new(format!(
-                "permission_requested references unknown upstream tool {upstream_id}"
-            )));
-        };
-        if let Err(e) = self.integrity.permission_requested(semantic_id.as_str()) {
-            return self.reject(e);
-        }
-        let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::PermissionRequested { context })
+        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else { return self.reject(IntegrityError::new(format!("permission_requested references unknown upstream tool {upstream_id}"))); };
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.permission_requested(semantic_id.as_str()) { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::PermissionRequested { context: ToolEventContext { event: context, tool_call_id: semantic_id } }) {
+            self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
     }
 
-    pub fn tool_execution_started(&mut self, upstream_id: impl Into<ToolCallId>) -> bool {
-        self.tool_execution_started_with_ui(upstream_id, None)
-    }
+    pub fn tool_execution_started(&mut self, upstream_id: impl Into<ToolCallId>) -> bool { self.tool_execution_started_with_ui(upstream_id, None) }
 
-    pub fn tool_execution_started_with_ui(
-        &mut self,
-        upstream_id: impl Into<ToolCallId>,
-        ui: Option<ToolUiModel>,
-    ) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
+    pub fn tool_execution_started_with_ui(&mut self, upstream_id: impl Into<ToolCallId>, ui: Option<ToolUiModel>) -> bool {
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
-        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else {
-            return self.reject(IntegrityError::new(format!(
-                "tool_execution_started references unknown upstream tool {upstream_id}"
-            )));
-        };
-        if let Err(e) = self.integrity.tool_execution_started(semantic_id.as_str()) {
-            return self.reject(e);
-        }
-        let context = self.tool_context(semantic_id);
-        self.publish(SemanticEvent::ToolExecutionStarted { context, ui })
+        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else { return self.reject(IntegrityError::new(format!("tool_execution_started references unknown upstream tool {upstream_id}"))); };
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.tool_execution_started(semantic_id.as_str()) { return self.reject(e); }
+        let context = self.proposed_context();
+        if self.publish(SemanticEvent::ToolExecutionStarted { context: ToolEventContext { event: context, tool_call_id: semantic_id }, ui }) {
+            self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); true
+        } else { false }
     }
 
-    pub fn tool_result_received(
-        &mut self,
-        upstream_id: impl Into<ToolCallId>,
-        result: impl Into<String>,
-    ) -> bool {
-        self.tool_result_received_with_ui(upstream_id, result, None)
-    }
+    pub fn tool_result_received(&mut self, upstream_id: impl Into<ToolCallId>, result: impl Into<String>) -> bool { self.tool_result_received_with_ui(upstream_id, result, None) }
 
-    pub fn tool_result_received_with_ui(
-        &mut self,
-        upstream_id: impl Into<ToolCallId>,
-        result: impl Into<String>,
-        ui: Option<ToolUiModel>,
-    ) -> bool {
-        if !self.transport_ready() {
-            return false;
-        }
+    pub fn tool_result_received_with_ui(&mut self, upstream_id: impl Into<ToolCallId>, result: impl Into<String>, ui: Option<ToolUiModel>) -> bool {
+        if !self.transport_ready() { return false; }
         let upstream_id = upstream_id.into();
-        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else {
-            return self.reject(IntegrityError::new(format!(
-                "tool_result_received references unknown upstream tool {upstream_id}"
-            )));
-        };
-        if let Err(e) = self.integrity.tool_result_received(semantic_id.as_str()) {
-            return self.reject(e);
-        }
-        let context = self.tool_context(semantic_id);
-        let emitted = self.publish(SemanticEvent::ToolResultReceived {
-            context,
-            result: result.into(),
-            ui,
-        });
-        if emitted {
-            self.release_tool_identity(&upstream_id);
-        }
-        emitted
-    }
-
-    fn abort_scopes(&mut self, reason: ToolTerminalReason) -> bool {
-        if self.integrity.thinking_active() && !self.thinking_completed() {
-            return false;
-        }
-        if self.integrity.assistant_active() && !self.assistant_completed() {
-            return false;
-        }
-        self.integrity.abort_open_tools(reason).is_ok()
+        let Some(semantic_id) = self.resolve_tool_identity(&upstream_id).cloned() else { return self.reject(IntegrityError::new(format!("tool_result_received references unknown upstream tool {upstream_id}"))); };
+        let mut candidate = self.integrity.clone();
+        if let Err(e) = candidate.tool_result_received(semantic_id.as_str()) { return self.reject(e); }
+        let context = self.proposed_context();
+        let event = SemanticEvent::ToolResultReceived { context: ToolEventContext { event: context, tool_call_id: semantic_id }, result: result.into(), ui };
+        if self.publish(event) { self.integrity = candidate; self.next_sequence = self.next_sequence.saturating_add(1); self.release_tool_identity(&upstream_id); true } else { false }
     }
 
     fn finish_terminal(&mut self, event: &str) -> bool {
-        if !self.transport_ready() {
-            return false;
+        if !self.transport_ready() { return false; }
+        let mut candidate = self.integrity.clone();
+        if event != "turn_completed" {
+            let reason = candidate.terminal_reason_for(event);
+            if candidate.thinking_active() { candidate.thinking_completed().ok(); }
+            if candidate.assistant_active() { candidate.assistant_completed().ok(); }
+            if let Err(error) = candidate.abort_open_tools(reason) { return self.reject(error); }
         }
-        if event == "turn_completed" {
-            if let Err(error) = self.integrity.finish_terminal_after_scopes(event) {
-                return self.reject(error);
-            }
-        } else {
-            let reason = self.integrity.terminal_reason_for(event);
-            if !self.abort_scopes(reason) {
-                return self.reject(IntegrityError::new(format!(
-                    "{event} could not abort open semantic scopes"
-                )));
-            }
-            if let Err(error) = self.integrity.finish_terminal_after_scopes(event) {
-                return self.reject(error);
-            }
-        }
-        let context = self.context();
+        if let Err(error) = candidate.finish_terminal_after_scopes(event) { return self.reject(error); }
+        let context = EventContext::new(self.session_id.clone(), self.turn_id.clone(), self.next_sequence);
         let emitted = match event {
             "turn_cancelled" => self.publish(SemanticEvent::TurnCancelled { context }),
             "turn_failed" => self.publish(SemanticEvent::TurnFailed { context }),
             "turn_completed" => self.publish(SemanticEvent::TurnCompleted { context }),
-            _ => {
-                return self.reject(IntegrityError::new(format!(
-                    "unknown terminal event {event}"
-                )))
-            }
+            _ => return self.reject(IntegrityError::new(format!("unknown terminal event {event}"))),
         };
         if emitted {
+            self.integrity = candidate;
+            self.next_sequence = self.next_sequence.saturating_add(1);
             self.tool_bindings.clear();
             self.seen_tool_ids.clear();
         }
         emitted
     }
 
-    pub fn turn_cancelled(&mut self) -> bool {
-        self.finish_terminal("turn_cancelled")
-    }
-    pub fn turn_failed(&mut self) -> bool {
-        self.finish_terminal("turn_failed")
-    }
-    pub fn turn_completed(&mut self) -> bool {
-        self.finish_terminal("turn_completed")
-    }
+    pub fn turn_cancelled(&mut self) -> bool { self.finish_terminal("turn_cancelled") }
+    pub fn turn_failed(&mut self) -> bool { self.finish_terminal("turn_failed") }
+    pub fn turn_completed(&mut self) -> bool { self.finish_terminal("turn_completed") }
 
     #[cfg(test)]
-    pub fn bind_count(&self) -> usize {
-        self.tool_bindings.len()
-    }
+    pub fn bind_count(&self) -> usize { self.tool_bindings.len() }
 }
