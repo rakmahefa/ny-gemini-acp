@@ -22,7 +22,7 @@ pub struct PermissionRequest {
     pub arguments: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionKind {
     Read,
     Write,
@@ -194,44 +194,52 @@ impl<'a> ToolExecutor<'a> {
     }
 }
 
+fn project_permission_content(value: &Value) -> anyhow::Result<ToolCallContent> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("permission content missing type"))?;
+    match kind {
+        "text" => {
+            let text = value
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("permission text content missing text"))?;
+            Ok(ToolCallContent::Content(ContentBlock::Text(TextContent::new(
+                text.to_owned(),
+            ))))
+        }
+        "diff" => {
+            let path = value
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("permission diff missing path"))?;
+            let old_text = value.get("old_text").and_then(Value::as_str).unwrap_or("");
+            let new_text = value.get("new_text").and_then(Value::as_str).unwrap_or("");
+            Ok(ToolCallContent::Diff(Diff::new(
+                path.to_owned(),
+                old_text.to_owned(),
+                new_text.to_owned(),
+            )))
+        }
+        other => Err(anyhow::anyhow!("unsupported permission content kind: {other}")),
+    }
+}
+
+fn project_permission_location(value: &Value) -> anyhow::Result<ToolCallLocation> {
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("permission location missing path"))?;
+    Ok(ToolCallLocation::new(path.to_owned()))
+}
+
 fn permission_tool_kind(kind: PermissionKind) -> ToolKind {
     match kind {
         PermissionKind::Read => ToolKind::Read,
         PermissionKind::Write => ToolKind::Edit,
         PermissionKind::Execute => ToolKind::Execute,
         PermissionKind::Network => ToolKind::Fetch,
-    }
-}
-
-fn project_permission_content(value: &Value) -> Result<ToolCallContent, ()> {
-    match value.get("type").and_then(Value::as_str) {
-        Some("content") => {
-            let text = value.get("text").and_then(Value::as_str).ok_or(())?;
-            Ok(ToolCallContent::from(ContentBlock::Text(TextContent::new(
-                text.to_owned(),
-            ))))
-        }
-        Some("diff") => {
-            let path = value.get("path").and_then(Value::as_str).ok_or(())?;
-            let new_text = value.get("newText").and_then(Value::as_str).ok_or(())?;
-            let old_text = value.get("oldText").and_then(Value::as_str).map(str::to_owned);
-            Ok(ToolCallContent::Diff(
-                Diff::new(PathBuf::from(path), new_text.to_owned()).old_text(old_text),
-            ))
-        }
-        _ => Err(()),
-    }
-}
-
-fn project_permission_location(value: &Value) -> Result<ToolCallLocation, ()> {
-    let path = value.get("path").and_then(Value::as_str).ok_or(())?;
-    let location = ToolCallLocation::new(PathBuf::from(path));
-    match value.get("line").and_then(Value::as_u64) {
-        Some(line) => {
-            let line = u32::try_from(line).map_err(|_| ())?;
-            Ok(location.line(line))
-        }
-        None => Ok(location),
     }
 }
 
