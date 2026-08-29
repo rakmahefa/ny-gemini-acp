@@ -2,7 +2,7 @@
 //!
 //! The shell implementation remains on the existing `Tool` / `ToolRegistry`
 //! architecture. It adds bounded execution, explicit security analysis,
-//! deterministic output formatting, and process cleanup on timeout.
+//! deterministic output formatting, and process-tree cleanup on timeout.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -80,18 +80,26 @@ impl Tool for ShellExecTool {
             "shell_exec"
         );
 
-        let child = match tokio::process::Command::new("sh")
+        let mut command_builder = tokio::process::Command::new("sh");
+        command_builder
             .arg("-c")
             .arg(command)
             .current_dir(cwd)
             .kill_on_drop(true)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(unix)]
         {
+            use std::os::unix::process::CommandExt;
+            command_builder.process_group(0);
+        }
+
+        let child = match command_builder.spawn() {
             Ok(child) => child,
             Err(error) => return ToolResult::Err(format!("échec du démarrage du shell: {error}")),
         };
+        let process_group_id = child.id();
 
         let execution =
             tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output());
@@ -99,9 +107,18 @@ impl Tool for ShellExecTool {
         match execution.await {
             Ok(Ok(output)) => format_shell_output(&output, &analysis),
             Ok(Err(error)) => ToolResult::Err(format!("échec de l'exécution: {error}")),
-            Err(_) => ToolResult::Err(format!(
-                "timeout après {timeout_secs}s; processus interrompu"
-            )),
+            Err(_) => {
+                #[cfg(unix)]
+                if let Some(pid) = process_group_id {
+                    let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+                    if rc != 0 {
+                        tracing::debug!(pid, "impossible de tuer immédiatement le process group shell");
+                    }
+                }
+                ToolResult::Err(format!(
+                    "timeout après {timeout_secs}s; arbre de processus interrompu"
+                ))
+            }
         }
     }
 }
@@ -144,7 +161,10 @@ fn format_shell_output(
     }
     result.push_str(&format!("\n[risk={}]", analysis.risk.label()));
 
-    ToolResult::Ok(result)
+    match output.status.code() {
+        Some(0) => ToolResult::Ok(result),
+        Some(_) | None => ToolResult::Err(result),
+    }
 }
 
 fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
@@ -172,31 +192,46 @@ mod tests {
             .execute(&json!({"command": "echo hello"}), Path::new("/tmp"), &[])
             .await;
 
-        assert!(
-            matches!(result, ToolResult::Ok(output) if output.contains("hello") && output.contains("exit code 0"))
-        );
+        assert!(matches!(result, ToolResult::Ok(output) if output.contains("hello") && output.contains("exit code 0")));
     }
 
     #[tokio::test]
-    async fn shell_non_zero_exit_is_reported() {
-        let result = ShellExecTool
-            .execute(&json!({"command": "false"}), Path::new("/tmp"), &[])
-            .await;
-
-        assert!(matches!(result, ToolResult::Ok(output) if output.contains("exit code 1")));
-    }
-
-    #[tokio::test]
-    async fn shell_timeout_interrupts_process() {
+    async fn shell_non_zero_exit_is_an_error_and_preserves_output() {
         let result = ShellExecTool
             .execute(
-                &json!({"command": "sleep 60", "timeout": 1}),
+                &json!({"command": "printf error-output >&2; false"}),
                 Path::new("/tmp"),
                 &[],
             )
             .await;
 
-        assert!(matches!(result, ToolResult::Err(error) if error.contains("timeout")));
+        assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code 1") && output.contains("error-output")));
+    }
+
+    #[tokio::test]
+    async fn shell_signal_termination_is_an_error() {
+        let result = ShellExecTool
+            .execute(
+                &json!({"command": "kill -TERM $$"}),
+                Path::new("/tmp"),
+                &[],
+            )
+            .await;
+
+        assert!(matches!(result, ToolResult::Err(output) if output.contains("signal")));
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_interrupts_process_tree() {
+        let result = ShellExecTool
+            .execute(
+                &json!({"command": "sleep 60 & wait", "timeout": 1}),
+                Path::new("/tmp"),
+                &[],
+            )
+            .await;
+
+        assert!(matches!(result, ToolResult::Err(error) if error.contains("arbre de processus")));
     }
 
     #[tokio::test]
