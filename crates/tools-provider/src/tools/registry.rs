@@ -14,20 +14,9 @@ use agent_runtime::ToolConfigurationError;
 
 use super::mcp::McpCatalog;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SandboxConfig {
     pub allowed_dirs: Vec<PathBuf>,
-    #[allow(dead_code)]
-    pub shell_sandbox_enabled: bool,
-}
-
-impl Default for SandboxConfig {
-    fn default() -> Self {
-        Self {
-            allowed_dirs: Vec::new(),
-            shell_sandbox_enabled: true,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -108,15 +97,6 @@ impl ToolRegistry {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn with_sandbox(sandbox: SandboxConfig) -> Self {
-        Self {
-            tools: Vec::new(),
-            sandbox,
-            mcp: None,
-        }
-    }
-
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         let name = tool.definition().name;
         if self.tools.iter().any(|existing| existing.definition().name == name) {
@@ -177,13 +157,6 @@ impl ToolRegistry {
         reg
     }
 
-    #[allow(dead_code)]
-    pub fn builtin_with_sandbox(sandbox: SandboxConfig) -> Self {
-        let mut reg = Self::with_sandbox(sandbox);
-        reg.register_builtins();
-        reg
-    }
-
     pub fn definitions(&self) -> Vec<Value> {
         let mut definitions = self
             .tools
@@ -199,11 +172,6 @@ impl ToolRegistry {
                 .cmp(&b.get("name").and_then(Value::as_str))
         });
         definitions
-    }
-
-    #[allow(dead_code)]
-    pub fn sandbox(&self) -> &SandboxConfig {
-        &self.sandbox
     }
 
     pub async fn call_async(
@@ -226,7 +194,10 @@ impl ToolRegistry {
             return Some(tool.execute(args, cwd, &allowed).await);
         }
         if let Some(mcp) = &self.mcp {
-            return mcp.call_async(name, args, cwd, extra_dirs).await;
+            // D-18 : même périmètre fusionné (sandbox + extra) que pour les
+            // builtins — les deux types d'outils d'une même session ne doivent
+            // pas avoir des périmètres d'accès différents.
+            return mcp.call_async(name, args, cwd, &allowed).await;
         }
         None
     }

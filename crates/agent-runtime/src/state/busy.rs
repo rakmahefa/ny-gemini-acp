@@ -63,14 +63,19 @@ fn format_busy_content() -> String {
     }
 }
 
-/// Returns true only when a well-formed busy sentinel references a dead PID,
-/// or a reused PID whose recorded process start time no longer matches.
-pub(crate) async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
+/// Critère partagé (P-14) : un sentinel est « récupérable » si lisible,
+/// parseable et référençant un processus mort ou recyclé (start_time différent).
+/// `require_wellformed` distingue les deux politiques :
+/// - `stale_busy_sentinel` (pendant l'exécution) : exige un sentinel bien
+///   formé — un fichier illisible ou malformé n'est PAS volé ;
+/// - `recoverable_busy_sentinel` (au démarrage) : un sentinel illisible ou
+///   malformé laissé par un crash est récupérable.
+async fn busy_sentinel_is_recoverable(path: &std::path::Path, require_wellformed: bool) -> bool {
     let Ok(raw) = tokio::fs::read_to_string(path).await else {
-        return false;
+        return !require_wellformed;
     };
     let Some(pid) = parse_busy_pid(&raw) else {
-        return false;
+        return !require_wellformed;
     };
 
     let Some(current_start) = process_start_time(pid) else {
@@ -82,22 +87,15 @@ pub(crate) async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
     }
 }
 
+/// Returns true only when a well-formed busy sentinel references a dead PID,
+/// or a reused PID whose recorded process start time no longer matches.
+pub(crate) async fn stale_busy_sentinel(path: &std::path::Path) -> bool {
+    busy_sentinel_is_recoverable(path, true).await
+}
+
 /// Startup recovery may also remove malformed sentinels left by a crashed writer.
 pub(crate) async fn recoverable_busy_sentinel(path: &std::path::Path) -> bool {
-    let Ok(raw) = tokio::fs::read_to_string(path).await else {
-        return true;
-    };
-    let Some(pid) = parse_busy_pid(&raw) else {
-        return true;
-    };
-
-    let Some(current_start) = process_start_time(pid) else {
-        return true;
-    };
-    match parse_busy_start_time(&raw) {
-        Some(recorded_start) => recorded_start != current_start,
-        None => false,
-    }
+    busy_sentinel_is_recoverable(path, false).await
 }
 
 fn parse_busy_pid(raw: &str) -> Option<u32> {

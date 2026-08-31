@@ -72,9 +72,69 @@ pub fn parse_tag_attributes(input: &str) -> BTreeMap<String, String> {
     attrs
 }
 
+/// Décode les entités XML de base. `&amp;` est traité en dernier pour ne pas
+/// altérer les entités déjà décodées.
+///
+/// Implémentation unique du workspace (C-27) : consommée par le parsing de
+/// flux du runtime LLM (`llm-provider::semantic_stream`) et par le parsing
+/// des tool calls (`tools_provider::tools::parse`).
+pub fn decode_xml_entities(input: &str) -> String {
+    input
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Préfixe canonique des balises FollowUp émises par le modèle.
+pub const FOLLOW_UP_TAG_PREFIX: &str = "<FollowUp";
+
+/// Retourne l'index du `>` fermant une balise, en ignorant les `>` situés
+/// entre guillemets (simples ou doubles).
+pub fn find_tag_end(input: &str) -> Option<usize> {
+    let mut quote = None;
+    for (index, byte) in input.as_bytes().iter().copied().enumerate() {
+        match quote {
+            Some(current) if byte == current => quote = None,
+            Some(_) => {}
+            None if byte == b'\'' || byte == b'"' => quote = Some(byte),
+            None if byte == b'>' => return Some(index),
+            None => {}
+        }
+    }
+    None
+}
+
+/// Parse un tag `<FollowUp label="…" query="…" />` en `(label, query)`.
+/// Implémentation unique du workspace (C-27).
+pub fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
+    let inner = tag
+        .strip_prefix(FOLLOW_UP_TAG_PREFIX)?
+        .strip_suffix('>')?
+        .trim();
+    let inner = inner.strip_suffix('/').unwrap_or(inner).trim();
+    let attrs = parse_tag_attributes(inner);
+    let label = attrs.get("label")?.trim();
+    let query = attrs.get("query")?.trim();
+    if label.is_empty() || query.is_empty() {
+        return None;
+    }
+    Some((decode_xml_entities(label), decode_xml_entities(query)))
+}
+
+/// Troncature sûre sur frontière de caractère avec ellipse finale.
+/// Implémentation unique du workspace (C-26).
+pub fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_owned();
+    }
+    format!("{}…", value.chars().take(max_chars).collect::<String>())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_tag_attributes;
+    use super::{decode_xml_entities, find_tag_end, parse_follow_up_tag, parse_tag_attributes, truncate_chars};
 
     #[test]
     fn accepts_reordered_double_quoted_attributes() {
@@ -88,5 +148,39 @@ mod tests {
         let attrs = parse_tag_attributes("label = 'Run tests' query = 'cargo test'");
         assert_eq!(attrs.get("label"), Some(&"Run tests".to_owned()));
         assert_eq!(attrs.get("query"), Some(&"cargo test".to_owned()));
+    }
+
+    #[test]
+    fn decodes_xml_entities_with_amp_last() {
+        assert_eq!(decode_xml_entities("&amp;quot;"), "&quot;");
+        assert_eq!(
+            decode_xml_entities("a&lt;b&gt;&apos;&quot;c&quot;"),
+            concat!("a<b>'", '"', "c", '"')
+        );
+    }
+
+    #[test]
+    fn finds_tag_end_ignoring_gt_inside_quotes() {
+        assert_eq!(
+            find_tag_end(" label=\"A > B\" query=\"x\" /> tail"),
+            Some(26)
+        );
+        assert_eq!(find_tag_end("without close"), None);
+    }
+
+    #[test]
+    fn parses_follow_up_tag_variants() {
+        let (label, query) = parse_follow_up_tag("<FollowUp label=\"Run tests\" query=\"cargo test\" />").unwrap();
+        assert_eq!((label.as_str(), query.as_str()), ("Run tests", "cargo test"));
+        let (label, query) = parse_follow_up_tag("<FollowUp label=\"L\" query=\"Q\">").unwrap();
+        assert_eq!((label.as_str(), query.as_str()), ("L", "Q"));
+        assert!(parse_follow_up_tag("<FollowUp label=\"\" query=\"Q\" />").is_none());
+    }
+
+    #[test]
+    fn truncates_on_char_boundary_with_ellipsis() {
+        assert_eq!(truncate_chars("abcdef", 3), "abc…");
+        assert_eq!(truncate_chars("abc", 5), "abc");
+        assert_eq!(truncate_chars("héhé", 2), "hé…");
     }
 }

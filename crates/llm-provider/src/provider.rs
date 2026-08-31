@@ -5,9 +5,7 @@ use crate::client::{Client, Config, StreamItem};
 use crate::config::AgentConfig;
 use crate::core::GeminiError;
 use crate::semantic_stream::GeminiSemanticStream;
-use agent_runtime::{
-    LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelEvent, ModelRequest,
-};
+use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelRequest};
 use tokio::sync::mpsc;
 
 fn map_gemini_error(error: &anyhow::Error) -> LlmError {
@@ -58,9 +56,6 @@ impl GeminiProvider {
         })
     }
 
-    pub fn client(&self) -> Arc<Client> {
-        Arc::clone(&self.client)
-    }
 }
 
 #[async_trait::async_trait]
@@ -148,5 +143,3 @@ impl LlmProvider for GeminiProvider {
     }
 }
 
-#[allow(dead_code)]
-fn _model_event_type_is_stable(_: ModelEvent) {}

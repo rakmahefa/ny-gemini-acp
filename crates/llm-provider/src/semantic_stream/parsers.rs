@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::types::{ModelToolCall, FOLLOW_UP_PREFIX};
+use super::types::ModelToolCall;
 
 pub(super) fn parse_bare_json(text: &str, next_id: &mut usize) -> Option<ModelToolCall> {
     let value = serde_json::from_str::<Value>(text.trim()).ok()?;
@@ -68,13 +68,16 @@ fn normalize_arguments(value: Value) -> Option<Value> {
 }
 
 pub(super) fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, String)>> {
+    use agent_runtime::text::{find_tag_end, parse_follow_up_tag};
+
     let mut cursor = 0;
     let mut found = false;
     let mut calls = Vec::new();
-    while let Some(relative_start) = text[cursor..].find(FOLLOW_UP_PREFIX) {
+    while let Some(relative_start) = text[cursor..].find(agent_runtime::text::FOLLOW_UP_TAG_PREFIX)
+    {
         found = true;
         let start = cursor + relative_start;
-        let after = start + FOLLOW_UP_PREFIX.len();
+        let after = start + agent_runtime::text::FOLLOW_UP_TAG_PREFIX.len();
         let end = find_tag_end(&text[after..])?;
         let absolute_end = after + end;
         let tag = &text[start..=absolute_end];
@@ -86,44 +89,6 @@ pub(super) fn parse_follow_up_candidates(text: &str) -> Option<Vec<(String, Stri
     } else {
         None
     }
-}
-
-fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
-    let inner = tag
-        .strip_prefix(FOLLOW_UP_PREFIX)?
-        .strip_suffix('>')?
-        .trim();
-    let inner = inner.strip_suffix('/').unwrap_or(inner).trim();
-    let attrs = agent_runtime::text::parse_tag_attributes(inner);
-    let label = attrs.get("label")?.trim();
-    let query = attrs.get("query")?.trim();
-    if label.is_empty() || query.is_empty() {
-        return None;
-    }
-    Some((decode_xml(label), decode_xml(query)))
-}
-
-fn decode_xml(input: &str) -> String {
-    input
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
-}
-
-fn find_tag_end(input: &str) -> Option<usize> {
-    let mut quote = None;
-    for (index, byte) in input.as_bytes().iter().copied().enumerate() {
-        match quote {
-            Some(current) if byte == current => quote = None,
-            Some(_) => {}
-            None if byte == b'\'' || byte == b'"' => quote = Some(byte),
-            None if byte == b'>' => return Some(index),
-            None => {}
-        }
-    }
-    None
 }
 
 pub(super) fn allocate_call_id(next_id: &mut usize) -> String {

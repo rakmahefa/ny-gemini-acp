@@ -112,7 +112,7 @@ async fn stream_deltas(state: &AppState, prompt: &str, resolved: &Resolved, ctx:
                 }
                 Ok(StreamItem::ToolCall { .. }) | Ok(StreamItem::Metadata { .. }) => {}
                 Err(error) => {
-                    tracing::warn!("stream chat interrompu: {error}");
+                    tracing::warn!("chat stream interrupted: {error}");
                     break;
                 }
             }

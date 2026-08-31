@@ -36,7 +36,6 @@ futures-util = { workspace = true }
 axum = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio-stream = { version = "0.1", features = ["sync"] }
-notify = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "fs"] }

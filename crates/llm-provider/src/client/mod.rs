@@ -34,22 +34,22 @@ impl Client {
             Some(cookies) => {
                 let n = cookies.header().map_or(0, |h| h.split(';').count());
                 debug!(
-                    "cookies chargés: {} paires, SAPISID {}",
+                    "cookies loaded: {} pairs, SAPISID {}",
                     n,
                     if cookies.sapisid().is_some() {
-                        "présent"
+                        "present"
                     } else {
                         "absent"
                     }
                 );
             }
             None => warn!(
-                "aucun cookie chargé depuis {:?} — les requêtes échoueront",
+                "no cookies loaded from {:?} — requests will fail",
                 config.cookie_file
             ),
         }
         let inner = Arc::new(ClientInner {
-            http: builder.build().context("construction client HTTP")?,
+            http: builder.build().context("failed to build HTTP client")?,
             config,
             jar: tokio::sync::RwLock::new(jar),
             page: tokio::sync::RwLock::new(None),
@@ -71,7 +71,7 @@ impl Client {
             None => model.to_string(),
         };
         let resolved = crate::core::models::resolve(&model_arg, &self.inner.config.default_model)
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .map_err(anyhow::Error::new)?;
         debug!(
             "stream: {} -> mode {} think {} extra {:?}",
             resolved.name, resolved.mode, resolved.think, resolved.extra

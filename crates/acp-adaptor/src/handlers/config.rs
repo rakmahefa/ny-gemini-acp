@@ -28,13 +28,28 @@ pub async fn handle(
             match config_id.as_ref() {
                 "model" => {
                     if let Some(v) = value.as_value_id() {
-                        s.model = v.to_string();
+                        // D-12 : valider la valeur contre la table des modèles.
+                        let candidate = v.0.to_string();
+                        if llm_provider::core::models::MODEL_KEYS.contains(&candidate.as_str()) {
+                            s.model = candidate;
+                        } else {
+                            tracing::warn!(
+                                model = %candidate,
+                                "unknown requested model, config option ignored"
+                            );
+                        }
                     }
                 }
                 "think" => {
                     if let Some(v) = value.as_value_id() {
-                        if let Ok(n) = v.0.parse::<u32>() {
-                            s.think = Some(n.min(4));
+                        // D-12 : une valeur invalide est signalée explicitement
+                        // (warn) au lieu d'être ignorée silencieusement.
+                        match v.0.parse::<u32>() {
+                            Ok(n) => s.think = Some(n.min(4)),
+                            Err(_) => tracing::warn!(
+                                value = %v.0,
+                                "invalid think value, config option ignored"
+                            ),
                         }
                     }
                 }
@@ -45,12 +60,12 @@ pub async fn handle(
                             "false" | "0" | "off" | "no" => s.tools_enabled = false,
                             other => tracing::warn!(
                                 value = other,
-                                "valeur tools_enabled invalide, ignorée"
+                                "invalid tools_enabled value, ignored"
                             ),
                         }
                     }
                 }
-                other => tracing::warn!(config_id = other, "config_id inconnu"),
+                other => tracing::warn!(config_id = other, "unknown config_id"),
             }
         })
         .await

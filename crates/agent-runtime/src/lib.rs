@@ -3,7 +3,6 @@
 pub mod events;
 mod execution;
 pub mod identity;
-pub mod persona;
 pub mod prompt;
 pub mod providers;
 pub mod runtime;
@@ -14,8 +13,8 @@ pub mod time;
 pub mod tool_ui;
 
 pub use events::{
-    EventBus, EventContext, EventStream, ReplayDiagnostic, SemanticEvent, SemanticJournal,
-    ToolEventContext, TurnEventEmitter, TurnEventSink, TurnPhase, TurnTermination,
+    EventBus, EventContext, SemanticEvent, ToolEventContext, TurnEventEmitter, TurnEventSink,
+    TurnPhase, TurnTermination,
 };
 pub use execution::{
     AgentActionError, AgentActionHandler, AgentLoop, AgentLoopConfig, AgentLoopError,

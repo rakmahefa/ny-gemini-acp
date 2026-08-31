@@ -20,7 +20,7 @@ async fn main() -> Result<()> {
         tools,
     )
     .await?;
-    tokio::select! {result=run_agent(runtime.state().clone())=>{result.context("transport ACP arrêté avec une erreur")?;}_=wait_for_shutdown_signal()=>{runtime.shutdown().await;tracing::info!("shutdown gracieux terminé")}}
+    tokio::select! {result=run_agent(runtime.state().clone())=>{result.context("ACP transport stopped with an error")?;}_=wait_for_shutdown_signal()=>{runtime.shutdown().await;tracing::info!("graceful shutdown completed")}}
     Ok(())
 }
 fn init_tracing() {
@@ -38,25 +38,25 @@ async fn wait_for_shutdown_signal() {
         let mut sigterm = match signal(SignalKind::terminate()) {
             Ok(s) => s,
             Err(error) => {
-                tracing::error!(%error,"installation du handler SIGTERM impossible");
+                tracing::error!(%error,"failed to install SIGTERM handler");
                 return;
             }
         };
         let mut sigint = match signal(SignalKind::interrupt()) {
             Ok(s) => s,
             Err(error) => {
-                tracing::error!(%error,"installation du handler SIGINT impossible");
+                tracing::error!(%error,"failed to install SIGINT handler");
                 return;
             }
         };
-        tokio::select! {_=sigterm.recv()=>tracing::info!("SIGTERM reçu"),_=sigint.recv()=>tracing::info!("SIGINT reçu")}
+        tokio::select! {_=sigterm.recv()=>tracing::info!("SIGTERM received"),_=sigint.recv()=>tracing::info!("SIGINT received")}
     }
     #[cfg(not(unix))]
     {
         if let Err(error) = tokio::signal::ctrl_c().await {
-            tracing::error!(%error,"installation du handler Ctrl-C impossible")
+            tracing::error!(%error,"failed to install Ctrl-C handler")
         } else {
-            tracing::info!("Ctrl-C reçu")
+            tracing::info!("Ctrl-C received")
         }
     }
 }

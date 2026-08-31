@@ -67,7 +67,7 @@ impl Tool for ShellExecTool {
         let analysis = match sandbox::ShellSandbox::new().analyze_command(command) {
             Ok(analysis) => analysis,
             Err(error) => {
-                tracing::warn!(command = %command, error = %error, "commande shell bloquée");
+                tracing::warn!(command = %command, error = %error, "shell command blocked by sandbox");
                 return ToolResult::Err(error.to_string());
             }
         };
@@ -111,7 +111,7 @@ impl Tool for ShellExecTool {
                 if let Some(pid) = process_group_id {
                     let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
                     if rc != 0 {
-                        tracing::debug!(pid, "impossible de tuer immédiatement le process group shell");
+                        tracing::debug!(pid, "failed to kill the shell process group immediately");
                     }
                 }
                 ToolResult::Err(format!(

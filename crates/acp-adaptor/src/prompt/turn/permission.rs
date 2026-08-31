@@ -36,7 +36,7 @@ impl ToolPermissionHandler for AcpToolPermissionHandler {
     ) -> bool {
         let permission = self.permission_request(request);
         match permission.kind {
-            PermissionKind::Read | PermissionKind::Network => false,
+            PermissionKind::Read => false,
             PermissionKind::Write | PermissionKind::Execute => match session.mode {
                 SessionMode::BypassPermissions => false,
                 SessionMode::AcceptEdits => {

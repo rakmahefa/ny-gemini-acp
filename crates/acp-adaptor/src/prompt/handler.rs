@@ -31,7 +31,7 @@ pub async fn handle_prompt(
             let projection_cancellation = cancellation.clone();
             let projection_turn_id = turn_id.clone();
             let projection = tokio::spawn(async move {
-                prompt::stream::project(
+                prompt::projection::project(
                     projection_rx,
                     &projection_cx,
                     &projection_session_id,

@@ -61,7 +61,7 @@ async fn main() -> anyhow::Result<()> {
     let addr = format!("{}:{}", state.config.host, state.config.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
     tracing::info!(
-        "gemini-web2api {} sur http://{addr} (modèle par défaut: {})",
+        "gemini-web2api {} listening on http://{addr} (default model: {})",
         env!("CARGO_PKG_VERSION"),
         state.config.default_model
     );

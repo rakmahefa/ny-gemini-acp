@@ -15,6 +15,13 @@ fn resolution_normale() {
 }
 
 #[test]
+fn default_inconnu_est_une_erreur_typee_pas_un_panic() {
+    let err = resolve("gpt-4o", "modele-fantome").unwrap_err();
+    assert!(matches!(err, GeminiError::UnknownModel(_)), "got: {err:?}");
+    assert!(err.to_string().contains("modele-fantome"));
+}
+
+#[test]
 fn extra_pro_enhanced() {
     let r = resolve("gemini-3.1-pro-enhanced", DEFAULT_MODEL).unwrap();
     assert_eq!(r.mode, 3);
@@ -33,7 +40,7 @@ fn override_think() {
 #[test]
 fn refuse_multiple_think_suffixes() {
     let err = resolve("gemini-3.6-flash@think=2@think=3", DEFAULT_MODEL).unwrap_err();
-    assert!(err.contains("Multiple @think="), "got: {err}");
+    assert!(err.to_string().contains("Multiple @think="), "got: {err}");
 }
 
 #[test]
@@ -56,5 +63,5 @@ fn repli_clé_inconnue() {
 #[test]
 fn think_invalide() {
     let err = resolve("gemini-3.6-flash@think=abc", DEFAULT_MODEL).unwrap_err();
-    assert!(err.contains("Invalid think level: abc"));
+    assert!(err.to_string().contains("Invalid think level: abc"));
 }

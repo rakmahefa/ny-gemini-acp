@@ -213,7 +213,6 @@ pub struct ToolCallRequest {
 pub struct ToolCallResult {
     pub content: String,
     pub is_ok: bool,
-    pub executed: bool,
     pub ui: Option<ToolUiModel>,
 }
 
@@ -222,7 +221,6 @@ impl ToolCallResult {
         Self {
             content: content.into(),
             is_ok: false,
-            executed: false,
             ui: None,
         }
     }

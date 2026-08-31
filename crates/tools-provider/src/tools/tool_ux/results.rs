@@ -1,13 +1,13 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus};
+use agent_runtime::ToolUiStatus;
 use serde_json::Value;
 
-use super::display::{truncate, ux_card};
+use super::display::{location, terminal_content, ux_card};
 use super::types::{CardBodyKind, ResultUpdate, MAX_DIFF_OLD_TEXT_BYTES, MAX_RESULT_LOCATIONS, MAX_RESULT_PREVIEW_CHARS};
-use super::super::lifecycle::ToolLifecycleState;
 use super::super::sandbox::{RiskLevel, ShellAnalysis, ShellSandbox};
+use agent_runtime::text::truncate_chars;
 
 pub fn result_update(
     tool_name: &str,
@@ -17,7 +17,7 @@ pub fn result_update(
     cwd: &Path,
     terminal_id: Option<&str>,
 ) -> ResultUpdate {
-    let status = if is_ok { ToolCallStatus::Completed } else { ToolCallStatus::Failed };
+    let status = if is_ok { ToolUiStatus::Succeeded } else { ToolUiStatus::Failed };
     let phase = if is_ok { "🟢 completed" } else { "🔴 failed" };
     match tool_name {
         "file_read" => {
@@ -36,7 +36,7 @@ pub fn result_update(
         "shell_exec" => {
             let mut content = vec![ux_card(tool_name, phase, args, Some((result.trim_end(), CardBodyKind::Output, !is_ok)), terminal_id)];
             if let Some(id) = terminal_id {
-                content.push(ToolCallContent::Terminal(agent_client_protocol::schema::v1::Terminal::new(id.to_owned())));
+                content.push(terminal_content(id));
             }
             ResultUpdate { status, content, locations: vec![] }
         }
@@ -88,28 +88,6 @@ pub fn classify_risk(name: &str, args: &Value) -> RiskLevel {
     }
 }
 
-pub fn lifecycle_label(state: ToolLifecycleState) -> &'static str {
-    match state {
-        ToolLifecycleState::Pending => "pending",
-        ToolLifecycleState::Permission => "permission",
-        ToolLifecycleState::Executing => "executing",
-        ToolLifecycleState::Completed => "completed",
-        ToolLifecycleState::Failed => "failed",
-        ToolLifecycleState::Cancelled => "cancelled",
-    }
-}
-
-pub fn lifecycle_icon(state: ToolLifecycleState) -> &'static str {
-    match state {
-        ToolLifecycleState::Pending => "⏳",
-        ToolLifecycleState::Permission => "🔐",
-        ToolLifecycleState::Executing => "▶",
-        ToolLifecycleState::Completed => "🟢",
-        ToolLifecycleState::Failed => "🔴",
-        ToolLifecycleState::Cancelled => "⚪",
-    }
-}
-
 fn render_follow_up_result(result: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(result) else { return result.to_owned(); };
     let label = value.get("label").and_then(Value::as_str).unwrap_or("Suggested next step");
@@ -137,19 +115,19 @@ fn format_numbered_read(result: &str, args: &Value) -> String {
     result.trim_end_matches('\n').split('\n').enumerate().map(|(idx, line)| format!("{}\t{}", start + idx, line)).collect::<Vec<_>>().join("\n")
 }
 
-fn file_location(args: &Value, cwd: &Path) -> Vec<ToolCallLocation> {
-    arg_str(args, "path").map(|path| vec![ToolCallLocation::new(resolve_path(path, cwd))]).unwrap_or_default()
+fn file_location(args: &Value, cwd: &Path) -> Vec<Value> {
+    arg_str(args, "path").map(|path| vec![location(&resolve_path(path, cwd), None)]).unwrap_or_default()
 }
 
-fn filesystem_result_locations(tool_name: &str, result: &str, cwd: &Path) -> Vec<ToolCallLocation> {
+fn filesystem_result_locations(tool_name: &str, result: &str, cwd: &Path) -> Vec<Value> {
     if tool_name == "list_directory" { return vec![]; }
     result.lines().take(MAX_RESULT_LOCATIONS).filter_map(|line| {
         let path = line.trim();
-        if path.is_empty() { None } else { Some(ToolCallLocation::new(resolve_path(path, cwd))) }
+        if path.is_empty() { None } else { Some(location(&resolve_path(path, cwd), None)) }
     }).collect()
 }
 
-fn search_result_locations(result: &str, cwd: &Path) -> Vec<ToolCallLocation> {
+fn search_result_locations(result: &str, cwd: &Path) -> Vec<Value> {
     let mut locations = Vec::new();
     let mut seen = BTreeSet::new();
     for line in result.lines() {
@@ -157,7 +135,7 @@ fn search_result_locations(result: &str, cwd: &Path) -> Vec<ToolCallLocation> {
         let Some((path, line_number, _)) = split_path_line(candidate) else { continue; };
         let resolved = resolve_path(path, cwd);
         let key = format!("{}:{line_number}", resolved.display());
-        if seen.insert(key) { locations.push(ToolCallLocation::new(resolved).line(line_number)); }
+        if seen.insert(key) { locations.push(location(&resolved, Some(line_number))); }
         if locations.len() >= MAX_RESULT_LOCATIONS { break; }
     }
     locations
@@ -174,7 +152,7 @@ fn normalize_search_result(tool_name: &str, result: &str, cwd: &Path) -> String 
         }
         if output.chars().count() >= MAX_RESULT_PREVIEW_CHARS { break; }
     }
-    truncate(&output, MAX_RESULT_PREVIEW_CHARS)
+    truncate_chars(&output, MAX_RESULT_PREVIEW_CHARS)
 }
 
 fn normalize_heading_path(line: &str, cwd: &Path) -> String {
@@ -233,9 +211,4 @@ mod tests {
         assert_eq!(classify_risk("file_write", &serde_json::json!({})), RiskLevel::Medium);
     }
 
-    #[test]
-    fn lifecycle_labels_are_stable() {
-        assert_eq!(lifecycle_label(ToolLifecycleState::Pending), "pending");
-        assert_eq!(lifecycle_icon(ToolLifecycleState::Completed), "🟢");
-    }
 }

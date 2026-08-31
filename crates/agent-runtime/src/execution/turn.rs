@@ -105,10 +105,6 @@ impl AgentTurn {
         Ok(())
     }
 
-    pub fn cancellation(&self) -> Cancellation {
-        self.cancellation.clone()
-    }
-
     pub async fn cancel(&self) -> Result<(), RuntimeError> {
         let mut inner = self.inner.lock().await;
         if inner.state.is_terminal() {
@@ -122,10 +118,6 @@ impl AgentTurn {
 }
 
 impl AgentTurnHandle {
-    pub fn cancellation(&self) -> Cancellation {
-        self.cancellation.clone()
-    }
-
     pub async fn state(&self) -> TurnState {
         self.inner.lock().await.state
     }

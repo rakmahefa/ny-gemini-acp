@@ -18,7 +18,7 @@ pub mod openai;
 // Re-exports pour compatibilité ascendante (les handlers `chat.rs`,
 // `responses.rs`, `google.rs` utilisent `convert::messages_to_prompt` etc.).
 pub use codex::{normalize_responses_tools, responses_input_to_messages};
-pub use common::{parse_tool_calls, resolve_model_strict, usage, warn_xsrf_ignored, ToolChoice};
+pub use common::{parse_tool_calls, resolve_model_strict, usage, usage_google, usage_responses, warn_xsrf_ignored, ToolChoice};
 pub use google::{google_contents_to_prompt, parse_google_function_calls};
 pub use openai::messages_to_prompt;
 

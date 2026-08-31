@@ -1,6 +1,6 @@
 //! Session lifecycle and persistence.
 use crate::providers::{
-    NullToolProvider, SharedToolProvider, ToolConfigurationError, ToolProvider, ToolServerConfig,
+    NullToolProvider, SharedToolProvider, ToolConfigurationError, ToolServerConfig,
 };
 use crate::state::{Session, SessionMode, Store};
 use anyhow::{bail, Context, Result};
@@ -35,10 +35,6 @@ impl SessionManager {
 
     pub fn store(&self) -> &Arc<Store> {
         &self.store
-    }
-
-    pub async fn tools_for(&self, id: &str) -> Arc<dyn ToolProvider> {
-        self.tools.for_session(id).await
     }
 
     pub async fn clear_mcp(&self, id: &str) {
@@ -76,27 +72,27 @@ impl SessionManager {
 
     pub fn validate_id(id: &str) -> Result<()> {
         let Some(rest) = id.strip_prefix(SESSION_ID_PREFIX) else {
-            bail!("identifiant de session invalide: préfixe attendu `{SESSION_ID_PREFIX}`");
+            bail!("invalid session id: expected prefix `{SESSION_ID_PREFIX}`");
         };
         if rest.len() != 32
             || !rest
                 .bytes()
                 .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
         {
-            bail!("identifiant de session invalide: UUID hexadécimal minuscule attendu");
+            bail!("invalid session id: expected lowercase hexadecimal UUID");
         }
         Ok(())
     }
 
     pub async fn validate_cwd(cwd: &Path) -> Result<()> {
         if !cwd.is_absolute() {
-            bail!("le chemin de session doit être absolu");
+            bail!("session path must be absolute");
         }
         let metadata = tokio::fs::metadata(cwd)
             .await
-            .with_context(|| format!("workspace inaccessible: {}", cwd.display()))?;
+            .with_context(|| format!("workspace not accessible: {}", cwd.display()))?;
         if !metadata.is_dir() {
-            bail!("le workspace n'est pas un répertoire: {}", cwd.display());
+            bail!("workspace is not a directory: {}", cwd.display());
         }
         Ok(())
     }
@@ -138,7 +134,7 @@ impl SessionManager {
         self.store
             .create(cwd, additional_directories, model)
             .await
-            .context("création de session")
+            .context("session creation")
     }
 
     pub async fn get(&self, id: &str) -> Result<Session> {
@@ -146,7 +142,7 @@ impl SessionManager {
         self.store
             .get(id)
             .await
-            .ok_or_else(|| anyhow::anyhow!("session introuvable: {id}"))
+            .ok_or_else(|| anyhow::anyhow!("session not found: {id}"))
     }
 
     pub async fn list(&self, cwd: Option<&Path>) -> Result<Vec<Session>> {
@@ -161,7 +157,7 @@ impl SessionManager {
         Self::validate_cwd(cwd).await?;
         let session = self.get(id).await?;
         if session.cwd != cwd {
-            bail!("le cwd ne correspond pas à la session");
+            bail!("cwd does not match the session");
         }
         Ok(session)
     }
@@ -170,36 +166,12 @@ impl SessionManager {
         self.load(id, cwd).await
     }
 
-    pub async fn set_title(&self, id: &str, title: &str) -> Result<()> {
-        let title = Self::sanitize_title(title);
-        self.get(id).await?;
-        self.store
-            .update_session(id, move |session| session.title = title)
-            .await
-            .context("mise à jour du titre de session")
-    }
-
-    pub async fn set_title_from_prompt(&self, id: &str, prompt: &str) -> Result<()> {
-        let title = Self::sanitize_title(prompt);
-        if title.is_none() {
-            return Ok(());
-        }
-        self.store
-            .update_session(id, move |session| {
-                if session.title.is_none() {
-                    session.title = title;
-                }
-            })
-            .await
-            .context("initialisation du titre de session")
-    }
-
     pub async fn set_mode(&self, id: &str, mode: SessionMode) -> Result<Session> {
         let mut updated = self.get(id).await?;
         self.store
             .update_session(id, |session| session.mode = mode)
             .await
-            .context("mise à jour du mode de session")?;
+            .context("failed to update session mode")?;
         updated.mode = mode;
         Ok(updated)
     }

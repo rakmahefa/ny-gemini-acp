@@ -11,7 +11,7 @@ impl Store {
     pub async fn open(dir: &Path) -> Result<Self> {
         tokio::fs::create_dir_all(dir)
             .await
-            .with_context(|| format!("création du répertoire {}", dir.display()))?;
+            .with_context(|| format!("failed to create directory {}", dir.display()))?;
         cleanup_orphan_tmp_files(dir).await;
         cleanup_stale_busy_files(dir).await;
         let sessions_dir = dir.join("sessions");
@@ -127,6 +127,13 @@ impl Store {
     pub async fn delete(&self, id: &str) -> bool {
         let existed = self.live.write().await.remove(id).is_some() || self.path(id).exists();
         let _ = tokio::fs::remove_file(self.path(id)).await;
+        // D-05 : la suppression doit retirer toutes les traces de la session —
+        // sentinel busy et snapshots compris — sinon `end_turn` d'un tour en
+        // cours (ou un redémarrage) peut réécrire la session supprimée.
+        self.release_busy(id).await;
+        for n in self.list_snapshots(id).await {
+            let _ = tokio::fs::remove_file(self.snapshot_path(id, n)).await;
+        }
         existed
     }
 }

@@ -64,9 +64,9 @@ pub fn load() -> Config {
             match serde_json::from_str::<Config>(&raw) {
                 Ok(from_file) => {
                     config = from_file;
-                    tracing::info!("config chargée depuis {}", path.display());
+                    tracing::info!("config loaded from {}", path.display());
                 }
-                Err(e) => tracing::warn!("config.json invalide ({}): {e}", path.display()),
+                Err(e) => tracing::warn!("invalid config.json ({}): {e}", path.display()),
             }
         }
     }

@@ -1,8 +1,9 @@
 use std::path::{Path, PathBuf};
 
 use agent_client_protocol::schema::v1::{
-    PermissionOption, PermissionOptionKind, RequestPermissionOutcome, RequestPermissionRequest,
-    ToolCall as AcpToolCall, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolKind,
+    Content, ContentBlock, Diff, PermissionOption, PermissionOptionKind, RequestPermissionOutcome,
+    RequestPermissionRequest, TextContent, ToolCall as AcpToolCall, ToolCallContent, ToolCallId,
+    ToolCallLocation, ToolCallStatus, ToolCallUpdate, ToolKind,
 };
 use serde_json::{json, Map, Value};
 
@@ -21,22 +22,26 @@ pub struct PermissionRequest {
     pub arguments: Value,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionKind {
     Read,
     Write,
     Execute,
-    #[allow(dead_code)]
-    Network,
 }
 
 impl PermissionRequest {
     pub fn from_tool_call(tool_name: &str, args: &Value, cwd: &std::path::Path) -> Self {
         let info = ToolInfo::build(tool_name, args, cwd, None);
         let kind = match info.kind {
-            ToolKind::Read | ToolKind::Search => PermissionKind::Read,
-            ToolKind::Edit => PermissionKind::Write,
-            ToolKind::Execute => PermissionKind::Execute,
+            agent_runtime::ToolUiKind::FileRead
+            | agent_runtime::ToolUiKind::Search
+            | agent_runtime::ToolUiKind::Glob
+            | agent_runtime::ToolUiKind::DirectoryList
+            | agent_runtime::ToolUiKind::SearchAndRead => PermissionKind::Read,
+            agent_runtime::ToolUiKind::FileWrite
+            | agent_runtime::ToolUiKind::FileEdit
+            | agent_runtime::ToolUiKind::ReplaceInFile => PermissionKind::Write,
+            agent_runtime::ToolUiKind::Shell => PermissionKind::Execute,
             _ => PermissionKind::Execute,
         };
         let risk = classify_risk(tool_name, args);
@@ -123,20 +128,32 @@ impl<'a> ToolExecutor<'a> {
         request: &PermissionRequest,
         call_id: &ToolCallId,
     ) -> PermissionResult {
-        // The terminal resource does not exist yet at permission time. For shell_exec,
-        // it is created only after the user grants permission by the ACP terminal request.
-        // Therefore the permission prompt must never advertise a Terminal content block.
+        // The permission request is itself an ACP protocol interaction, so its presentation
+        // remains explicitly projected at this boundary from the host-neutral ToolInfo.
         let info = ToolInfo::build(&request.tool_name, &request.arguments, self.cwd, None);
+        let content = info
+            .content
+            .iter()
+            .map(project_permission_content)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = %error, "permission content projection failed");
+                Vec::new()
+            });
+        let locations = info
+            .locations
+            .iter()
+            .map(project_permission_location)
+            .collect::<anyhow::Result<Vec<_>>>()
+            .unwrap_or_else(|error| {
+                tracing::warn!(error = %error, "permission location projection failed");
+                Vec::new()
+            });
         let tool_call = AcpToolCall::new(call_id.clone(), request.summary.clone())
-            .kind(match request.kind {
-                PermissionKind::Read => ToolKind::Read,
-                PermissionKind::Write => ToolKind::Edit,
-                PermissionKind::Execute => ToolKind::Execute,
-                PermissionKind::Network => ToolKind::Fetch,
-            })
+            .kind(permission_tool_kind(request.kind))
             .status(ToolCallStatus::Pending)
-            .content(info.content)
-            .locations(info.locations)
+            .content(content)
+            .locations(locations)
             .raw_input(bounded_raw_input(&request.arguments))
             .meta(permission_meta(request));
         let options = vec![
@@ -183,6 +200,52 @@ impl<'a> ToolExecutor<'a> {
     }
 }
 
+fn project_permission_content(value: &Value) -> anyhow::Result<ToolCallContent> {
+    let kind = value
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("permission content missing type"))?;
+    match kind {
+        "text" => {
+            let text = value
+                .get("text")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("permission text content missing text"))?;
+            Ok(ToolCallContent::Content(Content::new(ContentBlock::Text(
+                TextContent::new(text.to_owned()),
+            ))))
+        }
+        "diff" => {
+            let path = value
+                .get("path")
+                .and_then(Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("permission diff missing path"))?;
+            let old_text = value.get("old_text").and_then(Value::as_str).unwrap_or("");
+            let new_text = value.get("new_text").and_then(Value::as_str).unwrap_or("");
+            Ok(ToolCallContent::Diff(
+                Diff::new(path.to_owned(), new_text.to_owned()).old_text(old_text.to_owned()),
+            ))
+        }
+        other => Err(anyhow::anyhow!("unsupported permission content kind: {other}")),
+    }
+}
+
+fn project_permission_location(value: &Value) -> anyhow::Result<ToolCallLocation> {
+    let path = value
+        .get("path")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("permission location missing path"))?;
+    Ok(ToolCallLocation::new(path.to_owned()))
+}
+
+fn permission_tool_kind(kind: PermissionKind) -> ToolKind {
+    match kind {
+        PermissionKind::Read => ToolKind::Read,
+        PermissionKind::Write => ToolKind::Edit,
+        PermissionKind::Execute => ToolKind::Execute,
+    }
+}
+
 fn permission_meta(request: &PermissionRequest) -> Map<String, Value> {
     let mut meta = Map::new();
     meta.insert(
@@ -198,7 +261,6 @@ impl PermissionKind {
             PermissionKind::Read => "read",
             PermissionKind::Write => "write",
             PermissionKind::Execute => "execute",
-            PermissionKind::Network => "network",
         }
     }
 }

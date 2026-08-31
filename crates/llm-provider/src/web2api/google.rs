@@ -64,7 +64,7 @@ pub async fn generate(
     for (b64, mime) in images {
         match state.client.upload_image(&b64, &mime).await {
             Ok(reference) => refs.push(reference),
-            Err(e) => tracing::warn!("upload d'image ignoré: {e:#}"),
+            Err(e) => tracing::warn!("image upload skipped: {e:#}"),
         }
     }
     if stream && !has_tools {
@@ -83,7 +83,7 @@ pub async fn generate(
             )
         }
     };
-    json_ok(response_object(&text, &model_name, prompt.len(), has_tools))
+    json_ok(response_object(&text, &model_name, &prompt, has_tools))
 }
 
 async fn stream_chunks(
@@ -122,18 +122,18 @@ async fn stream_chunks(
                 }
                 Ok(StreamItem::ToolCall { .. }) | Ok(StreamItem::Metadata { .. }) => {}
                 Err(error) => {
-                    tracing::warn!("stream generateContent interrompu: {error}");
+                    tracing::warn!("Gemini stream interrupted: {error}");
                     break;
                 }
             }
         }
-        let final_chunk = serde_json::json!({"candidates": [{"content": {"parts": [{"text": ""}], "role": "model"}, "finishReason": "STOP", "index": 0}], "usageMetadata": {"promptTokenCount": prompt.chars().count() / 4, "candidatesTokenCount": emitted.chars().count() / 4, "totalTokenCount": (prompt.len() + emitted.len()) / 4}, "modelVersion": model_name});
+        let final_chunk = serde_json::json!({"candidates": [{"content": {"parts": [{"text": ""}], "role": "model"}, "finishReason": "STOP", "index": 0}], "usageMetadata": convert::usage_google(&prompt, &emitted), "modelVersion": model_name});
         let _ = tx.send(Ok(sse_event(final_chunk))).await;
     });
     sse(out).into_response()
 }
 
-fn response_object(text: &str, model_name: &str, prompt_len: usize, has_tools: bool) -> Value {
+fn response_object(text: &str, model_name: &str, prompt: &str, has_tools: bool) -> Value {
     let parts: Vec<Value> = if has_tools {
         let (clean, calls) = convert::parse_google_function_calls(text);
         let mut parts = Vec::new();
@@ -151,6 +151,6 @@ fn response_object(text: &str, model_name: &str, prompt_len: usize, has_tools: b
         vec![json!({ "text": text })]
     };
     let candidate = serde_json::json!({"content": {"parts": parts, "role": "model"}, "finishReason": "STOP", "index": 0});
-    let usage = serde_json::json!({"promptTokenCount": prompt_len / 4, "candidatesTokenCount": text.len() / 4, "totalTokenCount": (prompt_len + text.len()) / 4});
+    let usage = convert::usage_google(prompt, text);
     serde_json::json!({"candidates": [candidate], "usageMetadata": usage, "modelVersion": model_name})
 }

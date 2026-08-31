@@ -35,11 +35,11 @@ impl AgentRuntime {
     ) -> Result<Self> {
         tokio::fs::create_dir_all(&config.data_dir)
             .await
-            .with_context(|| format!("création {}", config.data_dir.display()))?;
+            .with_context(|| format!("failed to create {}", config.data_dir.display()))?;
         let store = Arc::new(
             crate::state::Store::open(&config.data_dir)
                 .await
-                .with_context(|| format!("ouverture du store {}", config.data_dir.display()))?,
+                .with_context(|| format!("failed to open store {}", config.data_dir.display()))?,
         );
         let sessions = SessionManager::with_tool_provider(Arc::clone(&store), Arc::clone(&tools));
         let turn_service = TurnService::new(
@@ -67,12 +67,12 @@ impl AgentRuntime {
     pub async fn shutdown(&self) {
         match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.state.turns.cancel_all_and_wait()).await {
             Ok(Ok(count)) => {
-                tracing::info!(cancelled_turns = count, "arrêt des tours actifs terminé")
+                tracing::info!(cancelled_turns = count, "active turns shutdown completed")
             }
-            Ok(Err(error)) => tracing::warn!(%error, "échec de l'arrêt des tours actifs"),
+            Ok(Err(error)) => tracing::warn!(%error, "failed to shut down active turns"),
             Err(_) => tracing::warn!(
                 timeout_secs = SHUTDOWN_TIMEOUT.as_secs(),
-                "timeout pendant l'arrêt gracieux"
+                "timeout during graceful shutdown"
             ),
         }
     }

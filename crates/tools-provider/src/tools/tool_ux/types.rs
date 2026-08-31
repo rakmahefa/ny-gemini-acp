@@ -1,5 +1,6 @@
-use agent_client_protocol::schema::v1::{ToolCallContent, ToolCallLocation, ToolCallStatus, ToolKind};
 use serde_json::Value;
+
+use agent_runtime::{ToolUiKind, ToolUiStatus};
 
 use super::super::sandbox::RiskLevel;
 
@@ -10,12 +11,30 @@ pub(crate) const MAX_RESULT_PREVIEW_CHARS: usize = 4 * 1024;
 pub(crate) const MAX_QUESTION_PREVIEW_CHARS: usize = 2 * 1024;
 pub(crate) const MAX_CARD_BODY_CHARS: usize = 8 * 1024;
 
+/// C-30 : mapping unique nom d'outil → kind d'UI (fusion des deux copies
+/// `ui_kind` (provider.rs) et `tool_ui_kind` (executor/mod.rs)).
+pub fn tool_ui_kind(name: &str) -> ToolUiKind {
+    match name {
+        "file_read" => ToolUiKind::FileRead,
+        "file_write" => ToolUiKind::FileWrite,
+        "file_edit" => ToolUiKind::FileEdit,
+        "glob" => ToolUiKind::Glob,
+        "list_directory" => ToolUiKind::DirectoryList,
+        "search" => ToolUiKind::Search,
+        "search_and_read" => ToolUiKind::SearchAndRead,
+        "shell_exec" => ToolUiKind::Shell,
+        "replace_in_file" => ToolUiKind::ReplaceInFile,
+        "AskUserQuestion" => ToolUiKind::AskUserQuestion,
+        _ => ToolUiKind::Generic,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolInfo {
     pub title: String,
-    pub kind: ToolKind,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub kind: ToolUiKind,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -47,7 +66,7 @@ impl ToolVisual {
 
 #[derive(Debug, Clone)]
 pub struct ResultUpdate {
-    pub status: ToolCallStatus,
-    pub content: Vec<ToolCallContent>,
-    pub locations: Vec<ToolCallLocation>,
+    pub status: ToolUiStatus,
+    pub content: Vec<Value>,
+    pub locations: Vec<Value>,
 }

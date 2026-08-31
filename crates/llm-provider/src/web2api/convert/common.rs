@@ -12,13 +12,33 @@ pub fn resolve_model_strict(
     if !llm_provider::core::models::MODEL_KEYS.contains(&base) {
         return Err(format!("Unknown model: {requested}"));
     }
-    llm_provider::core::models::resolve(requested, default)
+    llm_provider::core::models::resolve(requested, default).map_err(|e| e.to_string())
+}
+
+/// Estimation de tokens : partout en chars (C-15 — la sémantique divergente
+/// chars/bytes donnait total ≠ input + output pour tout texte non-ASCII).
+pub fn token_estimate(text: &str) -> u64 {
+    (text.chars().count() / 4) as u64
 }
 
 pub fn usage(prompt: &str, completion: &str) -> Value {
-    let pt = prompt.chars().count() / 4;
-    let ct = completion.chars().count() / 4;
+    let pt = token_estimate(prompt);
+    let ct = token_estimate(completion);
     json!({"prompt_tokens":pt,"completion_tokens":ct,"total_tokens":pt+ct})
+}
+
+/// Usage au format Responses API (`input_tokens` / `output_tokens`).
+pub fn usage_responses(prompt: &str, completion: &str) -> Value {
+    let pt = token_estimate(prompt);
+    let ct = token_estimate(completion);
+    json!({"input_tokens":pt,"output_tokens":ct,"total_tokens":pt+ct})
+}
+
+/// Usage au format Google GenerateContent (`usageMetadata`).
+pub fn usage_google(prompt: &str, completion: &str) -> Value {
+    let pt = token_estimate(prompt);
+    let ct = token_estimate(completion);
+    json!({"promptTokenCount":pt,"candidatesTokenCount":ct,"totalTokenCount":pt+ct})
 }
 pub fn tool_call_block(name: &str, args: &Value) -> String {
     format!(
@@ -98,7 +118,7 @@ impl ToolChoice {
 pub fn warn_xsrf_ignored(xsrf: Option<&str>) {
     if xsrf.is_some() {
         warn!(
-            "xsrf_token configuré mais ignoré : le client gemini récupère SNlM0e automatiquement"
+            "xsrf_token configured but ignored: the gemini client fetches SNlM0e automatically"
         );
     }
 }

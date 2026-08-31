@@ -19,6 +19,9 @@ use super::config::{StreamItem, StreamResult, ENDPOINT, TOKEN_TTL};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
 
+// C-17 : plafond par frame individuelle (ligne du flux Gemini). Ne pas
+// confondre avec `MAX_BUFFER_BYTES` (core/frames.rs) qui borne le buffer
+// cumulé du décodeur — deux niveaux de défense différents.
 const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TEXT_EVENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOOL_ID_BYTES: usize = 1024;
@@ -32,6 +35,135 @@ struct AttemptState<'a> {
     emitted_tools: &'a mut HashSet<String>,
     diverged: &'a mut bool,
     tx: &'a mpsc::Sender<StreamResult>,
+}
+
+/// Décodeur UTF-8 incrémental : conserve le résidu d'octets d'un chunk à
+/// l'autre afin qu'un caractère multi-octets coupé à une frontière de chunk
+/// TCP ne soit jamais corrompu en U+FFFD (D-01).
+struct IncrementalUtf8 {
+    residual: Vec<u8>,
+}
+
+impl IncrementalUtf8 {
+    fn new() -> Self {
+        Self { residual: Vec::new() }
+    }
+
+    /// Pousse un chunk d'octets et retourne le texte valide correspondant.
+    /// Un caractère multi-octets incomplet en fin de chunk est conservé en
+    /// résidu et complété au chunk suivant. Une séquence réellement invalide
+    /// est ignorée (avec un warn) au lieu d'être convertie en U+FFFD.
+    fn push(&mut self, bytes: &[u8]) -> String {
+        self.residual.extend_from_slice(bytes);
+        let (text, keep_from) = match std::str::from_utf8(&self.residual) {
+            Ok(text) => (text.to_owned(), self.residual.len()),
+            Err(e) => (
+                String::from_utf8_lossy(&self.residual[..e.valid_up_to()]).into_owned(),
+                match e.error_len() {
+                    Some(invalid_len) => {
+                        // Séquence invalide : on la saute plutôt que d'insérer U+FFFD.
+                        tracing::warn!(
+                            bytes = invalid_len,
+                            "invalid UTF-8 sequence skipped in Gemini stream"
+                        );
+                        e.valid_up_to() + invalid_len
+                    }
+                    None => e.valid_up_to(),
+                },
+            ),
+        };
+        self.residual.drain(..keep_from);
+        text
+    }
+
+    /// Flush final : tout résidu restant est nécessairement incomplet ou
+    /// invalide (fin du stream), on le décode en mode lossy.
+    fn finish(&mut self) -> String {
+        let text = String::from_utf8_lossy(&self.residual).into_owned();
+        self.residual.clear();
+        text
+    }
+}
+
+/// Tronque `s` à `max` octets en s'arrêtant sur une frontière de caractère
+/// (`String::truncate` panique sinon — D-02).
+fn truncate_at_char_boundary(s: &mut String, max: usize) {
+    if s.len() <= max {
+        return;
+    }
+    let mut cut = max;
+    while cut > 0 && !s.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    s.truncate(cut);
+}
+
+/// Traite un segment de texte UTF-8 valide : plafond de taille de frame,
+/// accumulation brute, détection d'erreurs amont et émission des frames.
+/// Retourne `true` si le flux doit se terminer immédiatement (blocage
+/// sécurité déjà envoyé au canal).
+async fn feed_decoded_text(
+    state: &mut AttemptState<'_>,
+    raw_accumulator: &mut String,
+    text: &str,
+) -> anyhow::Result<bool> {
+    if state
+        .decoder
+        .pending()
+        .len()
+        .saturating_add(text.len())
+        > MAX_FRAME_BYTES
+    {
+        return Err(GeminiError::Other(anyhow::anyhow!(
+            "Gemini frame exceeded the configured safety limit ({MAX_FRAME_BYTES} bytes)"
+        ))
+        .into());
+    }
+    trace!(
+        "segment {} octets, queue ligne {}",
+        text.len(),
+        state.decoder.pending().len()
+    );
+    if raw_accumulator.len() < MAX_RAW_ACCUMULATOR {
+        raw_accumulator.push_str(text);
+        truncate_at_char_boundary(raw_accumulator, MAX_RAW_ACCUMULATOR);
+    }
+
+    // D-14 : erreur amont wire-level — détection par regex précise
+    // (BardErrorInfo [code]) au lieu d'un `contains` sur le flux brut, qui
+    // pouvait déclencher un faux positif si le modèle échoédait ce texte.
+    if let Some(code) = frames::bard_error(&format!(
+        "{}{}",
+        state.decoder.pending(),
+        text
+    )) {
+        if code == 401 {
+            return Err(GeminiError::CookiesExpired { code }.into());
+        }
+        return Err(GeminiError::UpstreamRejected { code }.into());
+    }
+    for frame in state.decoder.feed(text) {
+        // D-14 : blocage sécurité détecté sur les frames JSON décodées
+        // (métadonnée typée `blockReason`) et non sur le flux brut — un
+        // « blockReason » présent dans le texte du modèle ne tue plus le
+        // stream par erreur.
+        if let GeminiFrameEvent::Metadata { kind, value } = &frame {
+            if kind == "blockReason" {
+                let reason = value.as_str().unwrap_or("politique de sécurité");
+                let _ = state
+                    .tx
+                    .send(Err(GeminiError::SafetyBlocked(format!(
+                        "Gemini a refusé de répondre (blockReason: {reason}). Reformulez votre prompt."
+                    ))
+                    .to_string()))
+                    .await;
+                return Ok(true);
+            }
+        }
+        validate_frame_event(&frame)?;
+        emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
+    }
+    Ok(false)
 }
 
 impl Client {
@@ -65,11 +197,19 @@ impl Client {
             {
                 Ok(_) => return Ok(()),
                 Err(e) => {
-                    let es = e.to_string();
-                    if es.contains("cookie")
-                        || es.contains("Cookie")
-                        || es.contains("BardErrorInfo")
-                    {
+                    // D-14 : décision de retry basée sur les erreurs typées (et
+                    // plus sur des sous-chaînes du message d'erreur).
+                    let fatal = e
+                        .downcast_ref::<GeminiError>()
+                        .is_some_and(|error| {
+                            matches!(
+                                error,
+                                GeminiError::CookiesExpired { .. }
+                                    | GeminiError::UpstreamRejected { .. }
+                                    | GeminiError::UnknownModel(_)
+                            )
+                        });
+                    if fatal {
                         return Err(e);
                     }
                     let retryable_divergence = e
@@ -90,10 +230,10 @@ impl Client {
                         let jitter_ms = (ts_nanos % (2 * jitter + 1)).saturating_sub(jitter);
                         let effective = delay_ms.saturating_add(jitter_ms);
                         debug!(
-                            tentative = attempt,
+                            attempt,
                             total = attempts,
                             divergence = retryable_divergence,
-                            "tentative échouée, retry dans {}ms — {e:#}",
+                            "attempt failed, retrying in {}ms — {e:#}",
                             effective
                         );
                         decoder.clear();
@@ -127,7 +267,11 @@ impl Client {
             .body(body)
             .send()
             .await
-            .context("envoi requête Gemini")?;
+            .map_err(|error| {
+                // C-16 : les erreurs réseau sont typées (timeout, DNS,
+                // connexion rompue) au lieu d'un anyhow générique.
+                GeminiError::Network(format!("requête Gemini impossible: {error}"))
+            })?;
 
         if !response.status().is_success() {
             let status = response.status().as_u16();
@@ -136,15 +280,26 @@ impl Client {
 
         let mut bytes_stream = response.bytes_stream();
         let mut raw_accumulator = String::new();
+        let mut utf8 = IncrementalUtf8::new();
 
         loop {
             tokio::select! {
                 _ = state.tx.closed() => return Ok(None),
                 chunk = bytes_stream.next() => {
                     let Some(chunk) = chunk else {
+                        // Fin du stream : flush du résidu UTF-8 puis des frames
+                        // partielles restantes.
+                        let tail = utf8.finish();
+                        let mut blocked = false;
+                        if !tail.is_empty() {
+                            blocked = feed_decoded_text(state, &mut raw_accumulator, &tail).await?;
+                        }
                         for frame in state.decoder.finish() {
                             validate_frame_event(&frame)?;
                             emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
+                        }
+                        if blocked {
+                            return Ok(Some(()));
                         }
                         if let Some(reason) = frames::detect_safety_block(&raw_accumulator) {
                             let _ = state.tx.send(Err(reason)).await;
@@ -159,36 +314,17 @@ impl Client {
                         }
                         return Ok(Some(()));
                     };
-                    let bytes = chunk.context("lecture flux Gemini")?;
-                    let text = String::from_utf8_lossy(&bytes);
-                    if state.decoder.pending().len().saturating_add(text.len()) > MAX_FRAME_BYTES {
-                        return Err(GeminiError::Other(anyhow::anyhow!(
-                            "Gemini frame exceeded the configured safety limit ({MAX_FRAME_BYTES} bytes)"
-                        )).into());
+                    let bytes = chunk.map_err(|error| {
+                        GeminiError::Network(format!("lecture flux Gemini interrompue: {error}"))
+                    })?;
+                    let text = utf8.push(&bytes);
+                    if text.is_empty() {
+                        // Rien de décodable pour l'instant (caractère coupé en
+                        // attente de la suite) : on attend le chunk suivant.
+                        continue;
                     }
-                    trace!("chunk {} octets, queue ligne {}", text.len(), state.decoder.pending().len());
-                    if raw_accumulator.len() < MAX_RAW_ACCUMULATOR {
-                        raw_accumulator.push_str(&text);
-                        if raw_accumulator.len() > MAX_RAW_ACCUMULATOR {
-                            raw_accumulator.truncate(MAX_RAW_ACCUMULATOR);
-                        }
-                    }
-
-                    let combined = format!("{}{}", state.decoder.pending(), text);
-                    if combined.contains("BardErrorInfo") {
-                        let code = frames::bard_error(&combined).unwrap_or(0);
-                        if code == 401 {
-                            return Err(GeminiError::CookiesExpired { code }.into());
-                        }
-                        return Err(GeminiError::UpstreamRejected { code }.into());
-                    }
-                    if let Some(reason) = frames::detect_safety_block(&combined) {
-                        let _ = state.tx.send(Err(reason)).await;
+                    if feed_decoded_text(state, &mut raw_accumulator, &text).await? {
                         return Ok(Some(()));
-                    }
-                    for frame in state.decoder.feed(&text) {
-                        validate_frame_event(&frame)?;
-                        emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
                     }
                 }
             }
@@ -294,14 +430,14 @@ impl Client {
                 let body = match resp.text().await {
                     Ok(b) => b,
                     Err(e) => {
-                        warn!("lecture /app impossible: {e:#}");
+                        warn!("failed to read /app: {e:#}");
                         return;
                     }
                 };
                 let tokens = extract_page_tokens(&body);
                 *self.inner.page.write().await = Some((tokens.clone(), Instant::now()));
                 debug!(
-                    "jetons de page récupérés (at: {}, push_id: {}, pctx: {})",
+                    "page tokens retrieved (at: {}, push_id: {}, pctx: {})",
                     tokens.at.is_some(),
                     tokens.push_id.is_some(),
                     tokens.pctx.is_some()
@@ -309,7 +445,7 @@ impl Client {
             }
             Err(e) => {
                 let safe = self.inner.config.proxy.as_ref().map(|_| "<redacted>");
-                warn!("GET /app impossible: {e:#} proxy={:?}", safe);
+                warn!("GET /app failed: {e:#} proxy={:?}", safe);
             }
         }
     }
@@ -466,5 +602,47 @@ mod tests {
         let error = GeminiError::StreamDivergence;
         assert!(matches!(error, GeminiError::StreamDivergence));
         let _ = json!({"kind": "stream_divergence"});
+    }
+
+    #[test]
+    fn utf8_split_across_chunks_is_not_corrupted() {
+        // 'é' fait 2 octets, 🎉 en fait 4 : on coupe au milieu de chacun.
+        let full = "émoji 🎉 suite";
+        let bytes = full.as_bytes();
+        let (a, rest) = bytes.split_at(1); // 'é' coupé
+        let (b, c) = rest.split_at(9); // 🎉 coupé
+        let mut dec = IncrementalUtf8::new();
+
+        assert_eq!(dec.push(a), "");
+        assert_eq!(dec.push(b), "émoji ");
+        assert_eq!(dec.push(c), "🎉 suite");
+        assert_eq!(dec.push(b""), "");
+        assert_eq!(dec.finish(), "");
+
+        // Et en une seule fois, le texte complet ressort intact.
+        let mut dec = IncrementalUtf8::new();
+        assert_eq!(dec.push(bytes), full);
+    }
+
+    #[test]
+    fn utf8_invalid_sequence_is_skipped_without_fffd() {
+        let mut dec = IncrementalUtf8::new();
+        assert_eq!(dec.push(&[0x41, 0xFF, 0x42]), "A");
+        assert_eq!(dec.finish(), "B");
+    }
+
+    #[test]
+    fn truncate_stops_at_char_boundary() {
+        let mut s = "héhé".to_string(); // frontières : 0, 1, 3, 4, 6
+        truncate_at_char_boundary(&mut s, 2);
+        assert_eq!(s, "h");
+
+        let mut s = "abc".to_string();
+        truncate_at_char_boundary(&mut s, 64);
+        assert_eq!(s, "abc");
+
+        let mut s = "ééé".to_string();
+        truncate_at_char_boundary(&mut s, 0);
+        assert_eq!(s, "");
     }
 }

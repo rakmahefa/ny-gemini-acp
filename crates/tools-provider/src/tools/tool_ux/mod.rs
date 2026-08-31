@@ -1,7 +1,7 @@
-//! ACP-facing tool UX module.
+//! Host-neutral semantic tool presentation builder.
 //!
-//! Responsibilities are split into presentation types, card rendering,
-//! tool builders, and result/location projections.
+//! This module owns rich tool presentation semantics. It must not depend on ACP
+//! presentation types; the ACP adaptor performs the protocol projection.
 
 mod builders;
 mod display;
@@ -12,5 +12,6 @@ mod types;
 mod tests;
 
 pub use display::bounded_raw_input;
-pub use results::{classify_risk, lifecycle_icon, lifecycle_label, result_update};
+pub use results::{classify_risk, result_update};
+pub use types::tool_ui_kind;
 pub use types::{ResultUpdate, ToolInfo};

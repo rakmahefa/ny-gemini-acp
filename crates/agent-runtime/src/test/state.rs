@@ -109,6 +109,98 @@ async fn failed_persist_does_not_corrupt_live_session() {
 }
 
 #[tokio::test]
+async fn end_turn_after_delete_aborts_instead_of_resurrecting() {
+    // D-05 : une session supprimée pendant un tour ne doit pas être
+    // réécrite par end_turn (résurrection).
+    let dir = std::env::temp_dir().join(format!(
+        "acp-delete-race-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    let (session1, generation1) = store.begin_turn(&s.id).await.unwrap();
+
+    // Suppression concurrente (comme session/delete pendant un tour).
+    assert!(store.delete(&s.id).await);
+    assert!(!dir.join(format!("{}.json", s.id)).exists());
+
+    // Le commit du tour doit abandonner, pas réécrire le JSON.
+    let mut finished = session1;
+    finished.messages.push((Role::User, "ghost".into()));
+    let result = store.end_turn(&s.id, finished, generation1).await;
+    assert!(
+        matches!(result, Err(StoreError::SessionDeleted(_))),
+        "got: {result:?}"
+    );
+    assert!(!dir.join(format!("{}.json", s.id)).exists());
+
+    // La session n'est pas réapparue et un nouveau tour est possible côté
+    // busy sentinel (pas de sentinel orpheline bloquante).
+    assert!(store.get(&s.id).await.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn end_turn_merges_concurrent_config_updates() {
+    // D-05 : un update_session concurrent (ex. session/set_mode pendant un
+    // tour) ne doit pas être écrasé par le commit de fin de tour.
+    let dir = std::env::temp_dir().join(format!(
+        "acp-endturn-merge-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    let (session1, generation1) = store.begin_turn(&s.id).await.unwrap();
+
+    // Mise à jour concurrente du mode pendant le tour.
+    store
+        .update_session(&s.id, |current| {
+            current.mode = crate::state::SessionMode::BypassPermissions;
+        })
+        .await
+        .unwrap();
+
+    let mut finished = session1;
+    finished.messages.push((Role::User, "hello".into()));
+    store.end_turn(&s.id, finished, generation1).await.unwrap();
+
+    let reloaded = store.get(&s.id).await.unwrap();
+    assert_eq!(
+        reloaded.mode,
+        crate::state::SessionMode::BypassPermissions,
+        "le mode modifié en concurrent doit survivre au end_turn"
+    );
+    assert_eq!(reloaded.turn_count, 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn delete_cleans_up_snapshots() {
+    // D-05 : Store::delete retire aussi les snapshots.
+    let dir = std::env::temp_dir().join(format!(
+        "acp-delete-snapshots-test-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    let snapshot = store.snapshot_path(&s.id, 3);
+    tokio::fs::write(&snapshot, b"{}").await.unwrap();
+
+    assert!(store.delete(&s.id).await);
+    assert!(!snapshot.exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
 async fn open_removes_orphan_busy_sentinel() {
     let dir = std::env::temp_dir().join(format!(
         "acp-busy-recovery-test-{}",

@@ -205,44 +205,9 @@ fn is_ignored_dir(name: &str) -> bool {
     )
 }
 fn glob_matches(pattern: &str, relative: &str, basename: &str) -> bool {
-    let regex = glob_to_regex(pattern);
-    regex::Regex::new(&regex)
-        .map(|re| re.is_match(relative) || re.is_match(basename))
-        .unwrap_or(false)
-}
-fn glob_to_regex(pattern: &str) -> String {
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut regex = String::from("^");
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '*' if i + 1 < chars.len() && chars[i + 1] == '*' => {
-                regex.push_str(".*");
-                i += 2;
-            }
-            '*' => {
-                regex.push_str("[^/]*");
-                i += 1;
-            }
-            '?' => {
-                regex.push_str("[^/]");
-                i += 1;
-            }
-            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '\\' => {
-                regex.push('\\');
-                regex.push(chars[i]);
-                i += 1;
-            }
-            c => {
-                regex.push(c);
-                i += 1;
-            }
-        }
-    }
-    regex.push('$');
-    regex
-}
-fn format_paths(paths: Vec<PathBuf>) -> String {
+    let shared = crate::tools::glob::glob_matches;
+    shared(pattern, relative) || shared(pattern, basename)
+}fn format_paths(paths: Vec<PathBuf>) -> String {
     paths
         .into_iter()
         .map(|path| path.display().to_string())

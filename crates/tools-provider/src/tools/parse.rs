@@ -140,7 +140,9 @@ pub fn parse_tool_calls(text: &str) -> (String, Vec<ParsedToolCall>) {
 }
 
 fn extract_follow_up(text: &str) -> (String, Option<(String, String)>) {
-    const MARKER: &str = "<FollowUp";
+    use agent_runtime::text::{find_tag_end, parse_follow_up_tag};
+
+    const MARKER: &str = agent_runtime::text::FOLLOW_UP_TAG_PREFIX;
     let mut clean = String::with_capacity(text.len());
     let mut cursor = 0;
     let mut found = None;
@@ -168,38 +170,6 @@ fn extract_follow_up(text: &str) -> (String, Option<(String, String)>) {
     }
     clean.push_str(&text[cursor..]);
     (clean.trim().to_owned(), found)
-}
-fn find_tag_end(input: &str) -> Option<usize> {
-    let mut quote = None;
-    for (index, byte) in input.as_bytes().iter().copied().enumerate() {
-        match quote {
-            Some(current) if byte == current => quote = None,
-            Some(_) => {}
-            None if byte == b'\'' || byte == b'"' => quote = Some(byte),
-            None if byte == b'>' => return Some(index),
-            None => {}
-        }
-    }
-    None
-}
-fn parse_follow_up_tag(tag: &str) -> Option<(String, String)> {
-    let inner = tag.strip_prefix("<FollowUp")?.strip_suffix('>')?.trim();
-    let inner = inner.strip_suffix('/').unwrap_or(inner).trim();
-    let attrs = agent_runtime::text::parse_tag_attributes(inner);
-    let label = attrs.get("label")?.trim();
-    let query = attrs.get("query")?.trim();
-    if label.is_empty() || query.is_empty() {
-        return None;
-    }
-    Some((decode_xml(label), decode_xml(query)))
-}
-fn decode_xml(input: &str) -> String {
-    input
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
 }
 fn parse_single(raw: &str, sequence: usize) -> Option<ParsedToolCall> {
     let data: Value = serde_json::from_str(raw).ok()?;

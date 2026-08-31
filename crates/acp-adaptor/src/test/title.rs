@@ -10,10 +10,11 @@ fn derive_title_court_reste_telquel() {
 }
 
 #[test]
-fn derive_title_long_est_tronque() {
-    let title = derive_title("Ceci est un message utilisateur tres long qui depasse la limite de cinquante caracteres et doit etre tronque proprement");
+fn derive_title_long_est_tronque_a_la_limite_partagee() {
+    let long = "Ceci est un message utilisateur tres long qui depasse largement la limite de titre et doit etre tronque proprement par le sanitize_title du runtime".repeat(3);
+    let title = derive_title(&long);
     assert!(title.ends_with('…'));
-    assert!(title.chars().count() <= MAX_TITLE_CHARS + 1);
+    assert!(title.chars().count() <= agent_runtime::session::MAX_TITLE_LENGTH + 1);
 }
 
 #[test]
@@ -32,6 +33,8 @@ fn derive_title_vide_renvoie_defaut() {
 
 #[test]
 fn derive_title_unicode_compte_chars_pas_octets() {
-    let title = derive_title(&"🚀".repeat(60));
-    assert!(title.chars().count() <= MAX_TITLE_CHARS + 1);
+    let title = derive_title(&"🚀".repeat(300));
+    assert!(
+        title.chars().count() <= agent_runtime::session::MAX_TITLE_LENGTH + 1
+    );
 }

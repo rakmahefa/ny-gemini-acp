@@ -1,11 +1,13 @@
-//! Gestion des snapshots de session : création, liste, prune, restauration.
+//! Gestion des snapshots de session : création, liste, prune.
 //!
 //! Chaque snapshot est un fichier `<id>.<n>.snap.json` dans le dépôt de
 //! sessions, où `n` est le nombre de messages avant la fin du tour.
-//! Les snapshots sont créés par `end_turn` AVANT la persistance, puis
-//! élagués pour ne garder que les `MAX_SNAPSHOTS` plus récents.
+//! Les snapshots sont créés par `end_turn` **APRÈS** le commit canonique de la
+//! session (un snapshot est un artefact de récupération auxiliaire qui ne doit
+//! jamais être plus récent que l'état canonique pendant un échec d'écriture),
+//! puis élagués pour ne garder que les `MAX_SNAPSHOTS` plus récents.
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use tokio::fs;
 
 use super::Store;
@@ -23,7 +25,10 @@ impl Store {
         n: usize,
         raw: &[u8],
     ) -> Result<()> {
-        Self::write_atomic(&self.snapshot_path(id, n), raw).await
+        use anyhow::Context;
+        Self::write_atomic(&self.snapshot_path(id, n), raw)
+            .await
+            .context("failed to write session snapshot")
     }
 
     /// Garde seulement les `keep` snapshots les plus récents (par n décroissant).
@@ -59,31 +64,5 @@ impl Store {
         }
         snaps.sort_by(|a, b| b.cmp(a));
         snaps
-    }
-
-    /// Restaure un snapshot par numéro de tour.
-    pub async fn restore_snapshot(&self, id: &str, turn: usize) -> Result<()> {
-        self.restore_snapshot_impl(id, turn, false).await
-    }
-
-    /// Variante avec `--force` pour bypasser le check du sentinel `busy`.
-    pub async fn restore_snapshot_force(&self, id: &str, turn: usize) -> Result<()> {
-        self.restore_snapshot_impl(id, turn, true).await
-    }
-
-    async fn restore_snapshot_impl(&self, id: &str, turn: usize, force: bool) -> Result<()> {
-        if !force && self.busy_path(id).exists() {
-            bail!(
-                "un tour est en cours sur la session {id} (sentinel .busy présent). \
-                 Arrêtez l'agent ou envoyez session/cancel, ou utilisez --force si l'agent a crashé."
-            );
-        }
-        let snap_path = self.snapshot_path(id, turn);
-        let raw = fs::read_to_string(&snap_path)
-            .await
-            .with_context(|| format!("snapshot introuvable: {}", snap_path.display()))?;
-        let session: super::types::Session = serde_json::from_str(&raw)
-            .with_context(|| format!("snapshot invalide: {}", snap_path.display()))?;
-        self.end_turn(id, session, 0).await.map_err(anyhow::Error::new)
     }
 }

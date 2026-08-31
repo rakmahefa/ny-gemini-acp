@@ -227,55 +227,13 @@ async fn search_file(
 fn glob_matches(pattern: &str, path: &Path) -> bool {
     let normalized = path.to_string_lossy().replace('\\', "/");
     let pattern = pattern.replace('\\', "/");
-    let regex = glob_to_regex(&pattern);
-    Regex::new(&regex)
-        .map(|re| {
-            re.is_match(&normalized)
-                || path
-                    .file_name()
-                    .map(|n| re.is_match(&n.to_string_lossy()))
-                    .unwrap_or(false)
-        })
-        .unwrap_or(false)
+    let shared = crate::tools::glob::glob_matches;
+    shared(&pattern, &normalized)
+        || path
+            .file_name()
+            .map(|n| shared(&pattern, &n.to_string_lossy()))
+            .unwrap_or(false)
 }
-
-fn glob_to_regex(pattern: &str) -> String {
-    let mut regex = String::from("^");
-    let chars: Vec<char> = pattern.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        match chars[i] {
-            '*' if i + 1 < chars.len() && chars[i + 1] == '*' => {
-                regex.push_str(".*");
-                i += 2;
-            }
-            '*' => {
-                regex.push_str("[^/]*");
-                i += 1;
-            }
-            '?' => {
-                regex.push_str("[^/]");
-                i += 1;
-            }
-            '.' | '+' | '(' | ')' | '[' | ']' | '{' | '}' | '^' | '$' | '|' | '\\' => {
-                regex.push('\\');
-                regex.push(chars[i]);
-                i += 1;
-            }
-            '/' => {
-                regex.push('/');
-                i += 1;
-            }
-            c => {
-                regex.push(c);
-                i += 1;
-            }
-        }
-    }
-    regex.push('$');
-    regex
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

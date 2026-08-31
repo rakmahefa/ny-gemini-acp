@@ -1,5 +1,7 @@
-mod context;
+// C-36 : `context.rs` renommé `uploads.rs` — ce module gère l'upload des
+// images, pas le contexte du tour (éviter la confusion avec `turn_context.rs`).
 mod permission;
+mod uploads;
 
 use super::action;
 use super::content::blocks_to_parts;
@@ -27,7 +29,9 @@ fn fail_before_execution(semantic: &mut TurnEventEmitter) {
 fn map_agent_error(error: &AgentLoopError) -> Option<StopReason> {
     match error {
         AgentLoopError::Cancelled => Some(StopReason::Cancelled),
-        AgentLoopError::MaxRounds(_) => Some(StopReason::MaxTokens),
+        // D-10 : la limite de rounds d'outils n'est pas une saturation de
+        // tokens — la sémantique ACP fidèle est MaxTurnRequests.
+        AgentLoopError::MaxRounds(_) => Some(StopReason::MaxTurnRequests),
         _ => None,
     }
 }
@@ -135,7 +139,7 @@ pub async fn run_turn(
         tracing::warn!(session=%session_id, error=%error, "rejected invalid session id before persistence access");
         return Err(AcpError::invalid_params().data(serde_json::json!({
             "session_id": session_id.to_string(),
-            "error": "identifiant de session invalide"
+            "error": "invalid session id"
         })));
     }
 
@@ -143,8 +147,11 @@ pub async fn run_turn(
         Ok(turn) => turn,
         Err(TurnError::NotFound(_)) => {
             fail_before_execution(ctx.semantic);
-            return Err(AcpError::invalid_params()
-                .data(serde_json::json!({"session_id": session_id.to_string()})));
+            // I-10 : payload cohérent avec les autres erreurs (champ `error`).
+            return Err(AcpError::invalid_params().data(serde_json::json!({
+                "session_id": session_id.to_string(),
+                "error": "session not found"
+            })));
         }
         Err(TurnError::AlreadyRunning) => {
             fail_before_execution(ctx.semantic);
@@ -165,7 +172,7 @@ pub async fn run_turn(
         );
     }
 
-    let refs = match context::upload_images(&*ctx.llm, &ctx.cx, &session_id, &images).await {
+    let refs = match uploads::upload_images(&*ctx.llm, &ctx.cx, &session_id, &images).await {
         Ok(refs) => refs,
         Err(()) => {
             fail_before_execution(ctx.semantic);
@@ -267,7 +274,7 @@ mod tests {
         );
         assert_eq!(
             map_agent_error(&AgentLoopError::MaxRounds(20)),
-            Some(StopReason::MaxTokens)
+            Some(StopReason::MaxTurnRequests)
         );
         assert_eq!(map_agent_error(&AgentLoopError::EmptyStream), None);
         assert_eq!(map_agent_error(&AgentLoopError::NoProgress), None);

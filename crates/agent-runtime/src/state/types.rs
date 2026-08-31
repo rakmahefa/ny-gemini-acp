@@ -61,14 +61,6 @@ impl SessionMode {
             Self::BypassPermissions => "Edits and commands run without prompting.",
         }
     }
-
-    pub fn requires_write_permission(&self) -> bool {
-        matches!(self, Self::Default)
-    }
-
-    pub fn requires_execute_permission(&self) -> bool {
-        !matches!(self, Self::BypassPermissions)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,9 +127,9 @@ impl Session {
 
 #[derive(Debug, Error)]
 pub enum TurnError {
-    #[error("session introuvable: {0}")]
+    #[error("session not found: {0}")]
     NotFound(String),
-    #[error("un tour est deja en cours sur cette session — envoyez session/cancel d'abord")]
+    #[error("a turn is already active on this session — send session/cancel first")]
     AlreadyRunning,
 }
 
@@ -147,6 +139,10 @@ pub enum StoreError {
     Persistence(String),
     #[error("stale turn generation: expected {expected}, current {current}")]
     StaleGeneration { expected: u64, current: u64 },
+    /// La session a été supprimée pendant le tour : le commit est abandonné
+    /// plutôt que de ressusciter la session supprimée (D-05).
+    #[error("session deleted during turn: {0}")]
+    SessionDeleted(String),
 }
 
 /// Runtime session cache. Turn concurrency and cancellation are owned by `TurnManager`.

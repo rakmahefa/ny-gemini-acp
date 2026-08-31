@@ -100,11 +100,7 @@ pub async fn handler(State(state): State<AppState>, req: axum::extract::Request)
         }));
     }
 
-    let usage = serde_json::json!({
-        "input_tokens": prompt.chars().count() / 4,
-        "output_tokens": clean.chars().count() / 4,
-        "total_tokens": (prompt.len() + clean.len()) / 4,
-    });
+    let usage = convert::usage_responses(&prompt, &clean);
     let base = Arc::new(serde_json::json!({
         "id": rid,
         "object": "response",

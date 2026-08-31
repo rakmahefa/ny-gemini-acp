@@ -16,7 +16,6 @@
 //! jusqu'à `GeminiSemanticStream`. Le parsing de marqueurs textuels reste un
 //! fallback séparé dans `semantic_stream::protocol`.
 
-use anyhow::{bail, Result};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -359,24 +358,6 @@ pub fn is_empty_stream(raw: &str) -> bool {
             && !matches!(event, GeminiFrameEvent::ToolCall { .. })
     })
 }
-pub fn final_text(raw: &str) -> Result<String> {
-    if let Some(code) = bard_error(raw) {
-        bail!("Gemini upstream rejected request: BardErrorInfo [{code}]");
-    }
-    let mut decoder = GeminiFrameDecoder::new();
-    let text = decoder
-        .feed(raw)
-        .into_iter()
-        .chain(decoder.finish())
-        .filter_map(|event| match event {
-            GeminiFrameEvent::Text(text) => Some(text),
-            _ => None,
-        })
-        .max_by_key(String::len)
-        .unwrap_or_default();
-    Ok(clean_text(&text, true))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,21 +438,5 @@ mod tests {
     fn clean_text_enleve_references_et_cards() {
         let input = "avant\n```python?code_reference&code_event_index=12\nligne 1\nligne 2\n```\nmilieu\nhttp://googleusercontent.com/card_content/7\nfin\n";
         assert_eq!(clean_text(input, true), "avant\nmilieu\nfin");
-    }
-    #[test]
-    fn final_text_uses_decoder() {
-        let raw = format!(
-            ")]}}'\n{}\n",
-            wire_line(inner_with_candidates(json!([["c", ["court"]]])))
-        );
-        assert_eq!(final_text(&raw).unwrap(), "court");
-    }
-    #[test]
-    fn final_text_bard_error() {
-        let raw = ")]}' foo\nBardErrorInfo [123] bar";
-        assert!(final_text(raw)
-            .unwrap_err()
-            .to_string()
-            .contains("BardErrorInfo [123]"));
     }
 }

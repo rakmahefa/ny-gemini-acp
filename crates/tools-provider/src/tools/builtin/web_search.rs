@@ -236,9 +236,9 @@ fn parse_results(html: &str, max_results: usize) -> Vec<SearchResult> {
         let url = normalize_result_url(&href);
         if !title.is_empty() && is_http_url(&url) {
             results.push(SearchResult {
-                title: truncate(&title, MAX_RESULT_CHARS),
+                title: agent_runtime::text::truncate_chars(&title, MAX_RESULT_CHARS),
                 url,
-                snippet: truncate(&snippet, MAX_RESULT_CHARS),
+                snippet: agent_runtime::text::truncate_chars(&snippet, MAX_RESULT_CHARS),
             });
         }
         cursor = title_end + 4;
@@ -378,14 +378,6 @@ fn decode_html_entities(input: &str) -> String {
         output.replace_range(start..=end, &code.to_string());
     }
 
-    output
-}
-
-fn truncate(value: &str, max_chars: usize) -> String {
-    let mut output = value.chars().take(max_chars).collect::<String>();
-    if value.chars().count() > max_chars {
-        output.push('…');
-    }
     output
 }
 

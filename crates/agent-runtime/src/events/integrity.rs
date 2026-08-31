@@ -1,3 +1,22 @@
+//! State machines of a turn, and their boundaries (C-32):
+//!
+//! - `TurnPhase` / `ToolPhase` (this module): the **integrity** view. They
+//!   model what the turn pipeline is *allowed* to emit — an append-only
+//!   journal of semantic events validated by `check_transition`. They are
+//!   private to the integrity layer and never cross the crate boundary.
+//! - `ToolLifecycleState` (`tools-provider::tools::lifecycle`): the
+//!   **execution** view, owned by the tools-provider crate. It models the
+//!   real tool-call lifecycle against the host (permission, execution,
+//!   terminal integrity). `wire_status()` maps it to the ACP statuses.
+//! - `ToolUiStatus` / `ToolUiKind` (`agent-runtime::tool_ui`): the
+//!   **presentation** view, a loss-free projection of lifecycle/phase states
+//!   for host UI cards. It carries no transition logic.
+//!
+//! Correspondence: `ToolLifecycleState::{Pending, Permission} ⇒
+//! ToolUiStatus::Pending`, `Executing ⇒ Running`, `Completed ⇒ Succeeded`,
+//! `Failed ⇒ Failed`, `Cancelled ⇒ Cancelled`; the integrity `ToolPhase`
+//! tracks the same progress from the emitted-events side and must never be
+//! *ahead* of the lifecycle view.
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

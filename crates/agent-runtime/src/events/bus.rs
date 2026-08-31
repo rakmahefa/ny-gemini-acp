@@ -28,14 +28,26 @@ impl EventBus {
         }
     }
 
+    /// D-11 : stratégie de verrou unique dans ce fichier — un empoisonnement
+    /// (panic ailleurs sous lock) est récupéré au lieu de paniquer à son tour
+    /// (`subscribe_turn` utilisait `.expect`) ou de sauter silencieusement
+    /// l'opération (`close_turn`, `publish_turn`).
+    fn lock_senders(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, mpsc::UnboundedSender<SemanticEvent>>> {
+        self.turn_senders
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     pub fn publish_global(&self, event: SemanticEvent) -> usize {
         let subscribers = self.sender.send(event.clone()).unwrap_or(0);
         tracing::debug!(
-            event = event_kind(&event),
-            session = %event_session_id(&event),
-            turn = %event_turn_id(&event),
-            sequence = event_sequence(&event),
-            tool_call_id = event_tool_call_id(&event).unwrap_or(""),
+            event = event.kind(),
+            session = %event.session_id(),
+            turn = %event.turn_id(),
+            sequence = event.sequence(),
+            tool_call_id = event.tool_call_id().unwrap_or(""),
             subscribers,
             "published semantic event globally"
         );
@@ -43,23 +55,16 @@ impl EventBus {
     }
 
     pub fn has_turn_subscriber(&self, turn_id: &str) -> bool {
-        self.turn_senders
-            .lock()
-            .map(|senders| senders.contains_key(turn_id))
-            .unwrap_or(false)
+        self.lock_senders().contains_key(turn_id)
     }
 
     pub fn publish_turn(&self, event: SemanticEvent) -> Result<(), String> {
-        let turn_id = event_turn_id(&event).to_owned();
-        let sender = self
-            .turn_senders
-            .lock()
-            .ok()
-            .and_then(|senders| senders.get(&turn_id).cloned());
+        let turn_id = event.turn_id().to_owned();
+        let sender = self.lock_senders().get(&turn_id).cloned();
 
         let Some(sender) = sender else {
             tracing::warn!(
-                event = event_kind(&event),
+                event = event.kind(),
                 turn = %turn_id,
                 "semantic event rejected: turn transport is absent"
             );
@@ -68,20 +73,18 @@ impl EventBus {
 
         if sender.send(event.clone()).is_ok() {
             tracing::debug!(
-                event = event_kind(&event),
-                session = %event_session_id(&event),
+                event = event.kind(),
+                session = %event.session_id(),
                 turn = %turn_id,
-                sequence = event_sequence(&event),
-                tool_call_id = event_tool_call_id(&event).unwrap_or(""),
+                sequence = event.sequence(),
+                tool_call_id = event.tool_call_id().unwrap_or(""),
                 "delivered semantic event to turn transport"
             );
             Ok(())
         } else {
-            if let Ok(mut senders) = self.turn_senders.lock() {
-                senders.remove(&turn_id);
-            }
+            self.lock_senders().remove(&turn_id);
             tracing::warn!(
-                event = event_kind(&event),
+                event = event.kind(),
                 turn = %turn_id,
                 "semantic event rejected: turn transport disconnected"
             );
@@ -104,110 +107,16 @@ impl EventBus {
 
     pub fn subscribe_turn(&self, turn_id: &str) -> mpsc::UnboundedReceiver<SemanticEvent> {
         let (sender, receiver) = mpsc::unbounded_channel();
-        let mut senders = self
-            .turn_senders
-            .lock()
-            .expect("event bus turn sender registry poisoned");
-        senders.insert(turn_id.to_owned(), sender);
+        self.lock_senders().insert(turn_id.to_owned(), sender);
         tracing::debug!(turn = turn_id, "registered turn transport subscriber");
         receiver
     }
 
     pub fn close_turn(&self, turn_id: &str) {
-        if let Ok(mut senders) = self.turn_senders.lock() {
-            senders.remove(turn_id);
-        }
+        self.lock_senders().remove(turn_id);
         tracing::debug!(turn = turn_id, "closed turn transport subscriber");
     }
-}
-
-fn event_turn_id(event: &SemanticEvent) -> &str {
-    match event {
-        SemanticEvent::TurnStarted { context }
-        | SemanticEvent::AssistantStarted { context }
-        | SemanticEvent::AssistantDelta { context, .. }
-        | SemanticEvent::AssistantCompleted { context }
-        | SemanticEvent::ThinkingStarted { context }
-        | SemanticEvent::ThinkingDelta { context, .. }
-        | SemanticEvent::ThinkingCompleted { context }
-        | SemanticEvent::TurnCancelled { context }
-        | SemanticEvent::TurnFailed { context }
-        | SemanticEvent::TurnCompleted { context } => context.turn_id.as_str(),
-        SemanticEvent::ToolCallRequested { context, .. }
-        | SemanticEvent::PermissionRequested { context }
-        | SemanticEvent::ToolExecutionStarted { context, .. }
-        | SemanticEvent::ToolResultReceived { context, .. } => context.event.turn_id.as_str(),
-    }
-}
-
-fn event_session_id(event: &SemanticEvent) -> &str {
-    match event {
-        SemanticEvent::TurnStarted { context }
-        | SemanticEvent::AssistantStarted { context }
-        | SemanticEvent::AssistantDelta { context, .. }
-        | SemanticEvent::AssistantCompleted { context }
-        | SemanticEvent::ThinkingStarted { context }
-        | SemanticEvent::ThinkingDelta { context, .. }
-        | SemanticEvent::ThinkingCompleted { context }
-        | SemanticEvent::TurnCancelled { context }
-        | SemanticEvent::TurnFailed { context }
-        | SemanticEvent::TurnCompleted { context } => context.session_id.as_str(),
-        SemanticEvent::ToolCallRequested { context, .. }
-        | SemanticEvent::PermissionRequested { context }
-        | SemanticEvent::ToolExecutionStarted { context, .. }
-        | SemanticEvent::ToolResultReceived { context, .. } => context.event.session_id.as_str(),
-    }
-}
-
-fn event_sequence(event: &SemanticEvent) -> u64 {
-    match event {
-        SemanticEvent::TurnStarted { context }
-        | SemanticEvent::AssistantStarted { context }
-        | SemanticEvent::AssistantDelta { context, .. }
-        | SemanticEvent::AssistantCompleted { context }
-        | SemanticEvent::ThinkingStarted { context }
-        | SemanticEvent::ThinkingDelta { context, .. }
-        | SemanticEvent::ThinkingCompleted { context }
-        | SemanticEvent::TurnCancelled { context }
-        | SemanticEvent::TurnFailed { context }
-        | SemanticEvent::TurnCompleted { context } => context.sequence,
-        SemanticEvent::ToolCallRequested { context, .. }
-        | SemanticEvent::PermissionRequested { context }
-        | SemanticEvent::ToolExecutionStarted { context, .. }
-        | SemanticEvent::ToolResultReceived { context, .. } => context.event.sequence,
-    }
-}
-
-fn event_tool_call_id(event: &SemanticEvent) -> Option<&str> {
-    match event {
-        SemanticEvent::ToolCallRequested { context, .. }
-        | SemanticEvent::PermissionRequested { context }
-        | SemanticEvent::ToolExecutionStarted { context, .. }
-        | SemanticEvent::ToolResultReceived { context, .. } => Some(context.tool_call_id.as_str()),
-        _ => None,
-    }
-}
-
-fn event_kind(event: &SemanticEvent) -> &'static str {
-    match event {
-        SemanticEvent::TurnStarted { .. } => "turn_started",
-        SemanticEvent::AssistantStarted { .. } => "assistant_started",
-        SemanticEvent::AssistantDelta { .. } => "assistant_delta",
-        SemanticEvent::AssistantCompleted { .. } => "assistant_completed",
-        SemanticEvent::ThinkingStarted { .. } => "thinking_started",
-        SemanticEvent::ThinkingDelta { .. } => "thinking_delta",
-        SemanticEvent::ThinkingCompleted { .. } => "thinking_completed",
-        SemanticEvent::ToolCallRequested { .. } => "tool_call_requested",
-        SemanticEvent::PermissionRequested { .. } => "permission_requested",
-        SemanticEvent::ToolExecutionStarted { .. } => "tool_execution_started",
-        SemanticEvent::ToolResultReceived { .. } => "tool_result_received",
-        SemanticEvent::TurnCancelled { .. } => "turn_cancelled",
-        SemanticEvent::TurnFailed { .. } => "turn_failed",
-        SemanticEvent::TurnCompleted { .. } => "turn_completed",
-    }
-}
-
-#[cfg(test)]
+}#[cfg(test)]
 mod tests {
     use super::*;
     use crate::events::EventContext;
@@ -225,8 +134,8 @@ mod tests {
         let mut turn_b = bus.subscribe_turn("turn-b");
         bus.publish_turn(event("turn-a", 0)).unwrap();
         bus.publish_turn(event("turn-b", 0)).unwrap();
-        assert_eq!(event_turn_id(&turn_a.recv().await.unwrap()), "turn-a");
-        assert_eq!(event_turn_id(&turn_b.recv().await.unwrap()), "turn-b");
+        assert_eq!(turn_a.recv().await.unwrap().turn_id().to_string(), "turn-a");
+        assert_eq!(turn_b.recv().await.unwrap().turn_id(), "turn-b");
     }
 
     #[tokio::test]
@@ -271,7 +180,7 @@ mod tests {
         bus.close_turn("turn-b");
         let mut turn_b = bus.subscribe_turn("turn-b");
         bus.publish_turn(event("turn-b", 1)).unwrap();
-        assert_eq!(event_turn_id(&turn_b.try_recv().unwrap()), "turn-b");
+        assert_eq!(turn_b.try_recv().unwrap().turn_id(), "turn-b");
     }
 
     #[tokio::test]
@@ -281,7 +190,7 @@ mod tests {
         let mut turn = bus.subscribe_turn("turn");
         let value = event("turn", 0);
         bus.publish(value).unwrap();
-        assert_eq!(event_turn_id(&global.recv().await.unwrap()), "turn");
-        assert_eq!(event_turn_id(&turn.recv().await.unwrap()), "turn");
+        assert_eq!(global.recv().await.unwrap().turn_id(), "turn");
+        assert_eq!(turn.recv().await.unwrap().turn_id(), "turn");
     }
 }

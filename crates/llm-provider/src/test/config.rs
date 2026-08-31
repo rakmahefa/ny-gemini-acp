@@ -63,7 +63,7 @@ fn from_env_lit_les_variables() {
 fn validate_warns_missing_cookies() {
     let config = AgentConfig {
         cookie_file: PathBuf::from("/nonexistent/path/cookies.json"),
-        default_model: "model".into(),
+        default_model: crate::core::models::DEFAULT_MODEL.into(),
         data_dir: PathBuf::from("/tmp/gemini-acp"),
         auth_user: None,
         proxy: None,
@@ -71,4 +71,26 @@ fn validate_warns_missing_cookies() {
     let warnings = config.validate();
     assert_eq!(warnings.len(), 1);
     assert!(warnings[0].0.contains("cookies"));
+}
+
+#[test]
+fn validate_warns_unknown_default_model() {
+    // D-03 : un modèle par défaut inconnu (config manuelle) est signalé au
+    // chargement de la config.
+    let cookie_file = std::env::temp_dir().join(format!(
+        "acp-validate-cookies-{}.json",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::write(&cookie_file, b"{}").unwrap();
+    let config = AgentConfig {
+        cookie_file: cookie_file.clone(),
+        default_model: "modele-fantome".into(),
+        data_dir: PathBuf::from("/tmp/gemini-acp"),
+        auth_user: None,
+        proxy: None,
+    };
+    let warnings = config.validate();
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].0.contains("modele-fantome"));
+    std::fs::remove_file(&cookie_file).ok();
 }

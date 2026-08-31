@@ -28,6 +28,7 @@ impl ShellSandbox {
     }
 
     #[allow(dead_code)]
+    #[cfg(test)]
     pub fn permissive() -> Self {
         Self {
             allowed_programs: HashSet::new(),

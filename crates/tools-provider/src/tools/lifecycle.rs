@@ -1,5 +1,10 @@
 //! Deterministic tool-call lifecycle and the session cancellation adapter.
 //!
+//! C-32 cartography: this `ToolLifecycleState` is the **execution** view of a
+//! tool call. The integrity view lives in `agent-runtime::events::integrity`
+//! (`ToolPhase`), the presentation view in `agent-runtime::tool_ui`
+//! (`ToolUiStatus`); the correspondence is documented in `events::integrity`.
+//!
 //! Cancellation ownership belongs to the runtime boundary and is adapted here
 //! through `ToolCancellation`. This module is also the single source of truth
 //! for terminal result integrity: a result is only terminal when the lifecycle
@@ -235,34 +240,6 @@ pub async fn wait_for_session_cancel(session_id: &str) {
     cancellation.cancelled().await;
 }
 
-type PartialOutputMap = HashMap<String, String>;
-static PARTIAL_OUTPUT: OnceLock<Mutex<PartialOutputMap>> = OnceLock::new();
-fn partial_output_map() -> &'static Mutex<PartialOutputMap> {
-    PARTIAL_OUTPUT.get_or_init(|| Mutex::new(HashMap::new()))
-}
-pub fn begin_partial_output(session_id: &str) {
-    lock_or_recover(partial_output_map()).insert(session_id.to_owned(), String::new());
-}
-pub fn clear_partial_output(session_id: &str) {
-    if let Some(output) = lock_or_recover(partial_output_map()).get_mut(session_id) {
-        output.clear();
-    }
-}
-pub fn record_partial_output(session_id: &str, text: &str) {
-    if text.is_empty() {
-        return;
-    }
-    lock_or_recover(partial_output_map())
-        .entry(session_id.to_owned())
-        .or_default()
-        .push_str(text);
-}
-pub fn take_partial_output(session_id: &str) -> String {
-    lock_or_recover(partial_output_map())
-        .remove(session_id)
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -426,20 +403,4 @@ mod tests {
         assert!(!session_cancelled("sess-test"));
     }
 
-    #[test]
-    fn partial_output_is_bounded_by_turn_boundaries() {
-        begin_partial_output("sess-partial");
-        record_partial_output("sess-partial", "Hello ");
-        record_partial_output("sess-partial", "world");
-        assert_eq!(take_partial_output("sess-partial"), "Hello world");
-        assert_eq!(take_partial_output("sess-partial"), "");
-    }
-    #[test]
-    fn partial_output_can_be_reset_before_tool_execution() {
-        begin_partial_output("sess-tool");
-        record_partial_output("sess-tool", "before tool");
-        clear_partial_output("sess-tool");
-        record_partial_output("sess-tool", "after tool");
-        assert_eq!(take_partial_output("sess-tool"), "after tool");
-    }
 }

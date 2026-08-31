@@ -1,10 +1,10 @@
 //! Section `# Tool Use` partagée entre les crates (refactor B — spec).
 //!
-//! Les 3 convertisseurs (`acp::tools::prompt`, `gemini-web2api::convert::openai`,
-//! `gemini-web2api::convert::google`) construisaient chacun une section quasi
-//! identique : header + instruction + liste de définitions (JSON pretty) +
-//! contrainte optionnelle. Ce module centralise la composition ; seuls changent
-//! le label de fence, le texte d'instruction, la liste de déf et le suffixe.
+//! Ce module centralise la composition de la section outils : header +
+//! instruction + liste de définitions (JSON pretty) + contrainte optionnelle.
+//! Les consommateurs actuels sont le chemin ACP (`tools_provider::tools::prompt`)
+//! et les convertisseurs web2api ; seuls changent le label de fence, le texte
+//! d'instruction, la liste de déf et le suffixe.
 
 use serde_json::Value;
 

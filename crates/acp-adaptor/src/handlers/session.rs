@@ -11,24 +11,20 @@ use agent_client_protocol::{Client, ConnectionTo, Error as AcpError, Responder};
 
 use crate::config::config_options::build_config_options;
 use crate::config::mcp::normalize_servers;
-use agent_runtime::state::{HistoryEntry, SessionMode as AcpSessionMode};
-use agent_runtime::AppState;
-use tools_provider::tools::tool_ux::{bounded_raw_input, result_update, ToolInfo};
+use agent_runtime::state::{HistoryEntry, SessionMode as RuntimeSessionMode};
+use agent_runtime::{AppState, SessionManager, ToolUiModel};
+use tools_provider::tools::tool_ux::{result_update, ToolInfo};
 
-fn is_valid_session_id(id: &str) -> bool {
-    let Some(rest) = id.strip_prefix("sess_") else {
-        return false;
-    };
-    rest.len() == 32
-        && rest
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+// P-07 : une seule validation d'id de session — celle du runtime
+// (`SessionManager::validate_id`), réutilisée par tous les handlers.
+pub(crate) fn is_valid_session_id(id: &str) -> bool {
+    SessionManager::validate_id(id).is_ok()
 }
 
 fn session_id_error(id: &SessionId) -> AcpError {
     AcpError::invalid_params().data(serde_json::json!({
         "session_id": id.to_string(),
-        "error": "identifiant de session invalide"
+        "error": "invalid session id"
     }))
 }
 
@@ -51,16 +47,16 @@ async fn configure_mcp(
     state.sessions.configure_mcp(session_id, servers).await
 }
 
-fn session_mode_id(mode: AcpSessionMode) -> SessionModeId {
+fn session_mode_id(mode: RuntimeSessionMode) -> SessionModeId {
     SessionModeId::from(match mode {
-        AcpSessionMode::Default => "default",
-        AcpSessionMode::AcceptEdits => "accept_edits",
-        AcpSessionMode::BypassPermissions => "bypass_permissions",
+        RuntimeSessionMode::Default => "default",
+        RuntimeSessionMode::AcceptEdits => "accept_edits",
+        RuntimeSessionMode::BypassPermissions => "bypass_permissions",
     })
 }
 
 fn build_available_modes() -> Vec<SessionMode> {
-    AcpSessionMode::all()
+    RuntimeSessionMode::all()
         .iter()
         .map(|mode| {
             SessionMode::new(session_mode_id(*mode), mode.display_name())
@@ -69,7 +65,7 @@ fn build_available_modes() -> Vec<SessionMode> {
         .collect()
 }
 
-fn build_mode_state(current: AcpSessionMode) -> SessionModeState {
+fn build_mode_state(current: RuntimeSessionMode) -> SessionModeState {
     SessionModeState::new(session_mode_id(current), build_available_modes())
 }
 
@@ -88,13 +84,6 @@ fn send_restored_title(
     Ok(())
 }
 
-fn is_rejected_or_cancelled_tool_result(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    lower.contains("refusé par l'utilisateur")
-        || lower.contains("annulé par l'utilisateur")
-        || lower.contains("échec de la demande de permission acp")
-}
-
 struct ReplayTool<'a> {
     id: &'a str,
     name: &'a str,
@@ -109,34 +98,27 @@ fn replay_tool_result(
     session_id: &SessionId,
     replay: ReplayTool<'_>,
 ) -> Result<(), AcpError> {
-    let call_id = ToolCallId::from(replay.id.to_owned());
     let info = ToolInfo::build(replay.name, replay.arguments, replay.cwd, None);
-    let is_ok = replay.result_ok.unwrap_or_else(|| {
-        replay
-            .result_text
-            .map(|text| !is_rejected_or_cancelled_tool_result(text))
-            .unwrap_or(false)
-    });
+    // D-09 : le replay se base sur le champ structuré persisté `is_ok` — la
+    // détection par sous-chaînes françaises était inatteignable (result_text et
+    // result_ok sortent du même tuple) et matchait des chaînes jamais produites.
+    let is_ok = replay.result_ok.unwrap_or(false);
 
-    cx.send_notification(SessionNotification::new(
-        session_id.clone(),
-        SessionUpdate::ToolCall(
-            ToolCall::new(call_id.clone(), info.title.clone())
-                .kind(info.kind)
-                .status(if replay.result_text.is_some() {
-                    if is_ok {
-                        ToolCallStatus::Completed
-                    } else {
-                        ToolCallStatus::Failed
-                    }
-                } else {
-                    ToolCallStatus::InProgress
-                })
-                .content(info.content.clone())
-                .locations(info.locations.clone())
-                .raw_input(bounded_raw_input(replay.arguments)),
-        ),
-    ))?;
+    let initial = ToolUiModel::pending(
+        info.kind,
+        info.title.clone(),
+        info.title.clone(),
+        replay.arguments.clone(),
+    )
+    .with_content(info.content.clone())
+    .with_locations(info.locations.clone());
+    let initial = if replay.result_text.is_some() {
+        initial.completed(is_ok, None)
+    } else {
+        initial.running()
+    };
+
+    crate::prompt::notify::notify_tool_call(cx, session_id, replay.id, &initial)?;
 
     if let Some(result_text) = replay.result_text {
         let rendered = result_update(
@@ -147,16 +129,22 @@ fn replay_tool_result(
             replay.cwd,
             None,
         );
-        cx.send_notification(SessionNotification::new(
-            session_id.clone(),
-            SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
-                call_id,
-                ToolCallUpdateFields::new()
-                    .status(rendered.status)
-                    .content(rendered.content)
-                    .locations(rendered.locations),
-            )),
-        ))?;
+        let result_ui = ToolUiModel::pending(
+            info.kind,
+            info.title,
+            "tool result",
+            replay.arguments.clone(),
+        )
+        .with_content(rendered.content)
+        .with_locations(rendered.locations)
+        .completed(is_ok, Some(serde_json::json!({ "text": result_text })));
+
+        crate::prompt::notify::notify_tool_call_update(
+            cx,
+            session_id,
+            replay.id,
+            &result_ui,
+        )?;
     }
     Ok(())
 }
@@ -177,7 +165,7 @@ pub async fn handle_new(
     {
         Ok(session) => session,
         Err(error) => {
-            return responder.respond_with_internal_error(format!("création de session: {error:#}"))
+            return responder.respond_with_internal_error(format!("session creation: {error:#}"))
         }
     };
     let session_id = SessionId::from(session.id.clone());
@@ -206,7 +194,7 @@ pub async fn handle_list(
     let sessions = match state.sessions.list(req.cwd.as_deref()).await {
         Ok(sessions) => sessions,
         Err(error) => {
-            return responder.respond_with_internal_error(format!("liste des sessions: {error:#}"))
+            return responder.respond_with_internal_error(format!("session listing: {error:#}"))
         }
     };
     let infos = sessions
@@ -236,11 +224,22 @@ pub async fn handle_load(
             return responder.respond_with_error(AcpError::invalid_params().data(
                 serde_json::json!({
                     "session_id": req.session_id.to_string(),
-                    "error": format!("session introuvable ou workspace incompatible: {error:#}")
+                    "error": format!("session not found or workspace mismatch: {error:#}")
                 }),
             ))
         }
     };
+    // D-13 : comme `session/delete` et `session/close`, un `session/load`
+    // doit attendre la fin d'un turn éventuel — sinon le replay s'entrelace
+    // avec les notifications du turn en cours.
+    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
+        return responder.respond_with_error(AcpError::invalid_params().data(
+            serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": error.to_string(),
+            }),
+        ));
+    }
     if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await
     {
         state.sessions.clear_mcp(&req.session_id.0).await;
@@ -338,11 +337,20 @@ pub async fn handle_resume(
             return responder.respond_with_error(AcpError::invalid_params().data(
                 serde_json::json!({
                     "session_id": req.session_id.to_string(),
-                    "error": format!("session introuvable ou workspace incompatible: {error:#}")
+                    "error": format!("session not found or workspace mismatch: {error:#}")
                 }),
             ))
         }
     };
+    // D-13 : même garde que pour `session/load`.
+    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
+        return responder.respond_with_error(AcpError::invalid_params().data(
+            serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": error.to_string(),
+            }),
+        ));
+    }
     if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await
     {
         state.sessions.clear_mcp(&req.session_id.0).await;
@@ -382,11 +390,11 @@ pub async fn handle_delete(
         Ok(true) => responder.respond(DeleteSessionResponse::new()),
         Ok(false) => {
             responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-                "session_id": req.session_id.to_string(), "error": "session introuvable"
+                "session_id": req.session_id.to_string(), "error": "session not found"
             })))
         }
         Err(error) => {
-            responder.respond_with_internal_error(format!("suppression de session: {error:#}"))
+            responder.respond_with_internal_error(format!("session deletion: {error:#}"))
         }
     }
 }
@@ -413,11 +421,11 @@ pub async fn handle_close(
         Ok(true) => responder.respond(CloseSessionResponse::new()),
         Ok(false) => {
             responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
-                "session_id": req.session_id.to_string(), "error": "session introuvable"
+                "session_id": req.session_id.to_string(), "error": "session not found"
             })))
         }
         Err(error) => {
-            responder.respond_with_internal_error(format!("fermeture de session: {error:#}"))
+            responder.respond_with_internal_error(format!("session close: {error:#}"))
         }
     }
 }
@@ -428,15 +436,15 @@ pub async fn handle_set_mode(
     state: &AppState,
     cx: &ConnectionTo<Client>,
 ) -> Result<(), AcpError> {
-    let Some(new_mode) = AcpSessionMode::from_str_lossy(&req.mode_id.0) else {
-        let valid = AcpSessionMode::all()
+    let Some(new_mode) = RuntimeSessionMode::from_str_lossy(&req.mode_id.0) else {
+        let valid = RuntimeSessionMode::all()
             .iter()
             .map(|mode| session_mode_id(*mode).0.to_string())
             .collect::<Vec<_>>()
             .join(", ");
         return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
             "mode_id": req.mode_id.to_string(),
-            "error": format!("mode_id invalide. Modes valides: {valid}")
+            "error": format!("invalid mode_id. Valid modes: {valid}")
         })));
     };
     let updated = match state.sessions.set_mode(&req.session_id.0, new_mode).await {
@@ -445,7 +453,7 @@ pub async fn handle_set_mode(
             return responder.respond_with_error(AcpError::invalid_params().data(
                 serde_json::json!({
                     "session_id": req.session_id.to_string(),
-                    "error": format!("impossible de changer le mode: {error:#}")
+                    "error": format!("failed to set mode: {error:#}")
                 }),
             ))
         }
@@ -465,10 +473,20 @@ pub async fn handle_fork(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
+    // D-13 : même garde que pour `session/load` — le fork copie l'état persisté
+    // pendant qu'un turn pourrait encore l'écrire.
+    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
+        return responder.respond_with_error(AcpError::invalid_params().data(
+            serde_json::json!({
+                "session_id": req.session_id.to_string(),
+                "error": error.to_string(),
+            }),
+        ));
+    }
     let forked = match state.sessions.fork(&req.session_id.0).await {
         Ok(forked) => forked,
         Err(error) => {
-            return responder.respond_with_internal_error(format!("fork de session: {error:#}"))
+            return responder.respond_with_internal_error(format!("session fork: {error:#}"))
         }
     };
     responder.respond(ForkSessionResponse::new(SessionId::from(forked.id)))

@@ -123,7 +123,6 @@ impl ToolProvider for RecordingTool {
         ToolCallResult {
             content: "recorded".into(),
             is_ok: true,
-            executed: true,
             ui: None,
         }
     }

@@ -5,7 +5,9 @@
 
 use crate::core::auth::sapisid_hash;
 use crate::core::cookies::CookieJar;
-use anyhow::{bail, Context};
+use crate::core::GeminiError;
+use anyhow::Context;
+
 use base64::Engine;
 use reqwest::header::{HeaderValue, AUTHORIZATION, CONTENT_TYPE};
 use tracing::debug;
@@ -16,6 +18,10 @@ use super::Client;
 impl Client {
     /// Upload Scotty resumable : décode l'image base64, initie l'upload,
     /// pousse les octets et retourne la référence.
+    ///
+    /// C-16 : tous les échecs de ce chemin produisent l'erreur typée
+    /// `GeminiError::UploadFailed` (au lieu d'un anyhow générique) afin que
+    /// les couches supérieures puissent réagir au cas spécifique.
     pub async fn upload_image(&self, base64_data: &str, mime_type: &str) -> anyhow::Result<String> {
         // Éventuel préfixe `data:<mime>;base64,` (tolérant, comme Zed/API).
         let b64 = base64_data
@@ -24,13 +30,17 @@ impl Client {
             .map(|(_, b)| b)
             .unwrap_or(base64_data);
         if b64.len() > MAX_IMAGE_B64 {
-            bail!("image base64 trop volumineuse ({} octets)", b64.len());
+            return Err(GeminiError::UploadFailed(format!(
+                "base64 image too large ({} bytes)",
+                b64.len()
+            ))
+            .into());
         }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(b64)
-            .context("décodage base64 de l'image")?;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|error| {
+            GeminiError::UploadFailed(format!("image base64 decode: {error}"))
+        })?;
         if bytes.is_empty() {
-            bail!("image vide");
+            return Err(GeminiError::UploadFailed("empty image".into()).into());
         }
 
         let tokens = self.page_tokens().await;
@@ -61,13 +71,13 @@ impl Client {
             HeaderValue::from_static("application/x-www-form-urlencoded;charset=utf-8"),
         );
         if let Some(cookie) = jar.as_ref().and_then(CookieJar::header) {
-            let mut v = HeaderValue::from_str(&cookie).context("header Cookie invalide")?;
+            let mut v = HeaderValue::from_str(&cookie).context("invalid Cookie header")?;
             v.set_sensitive(true);
             h.insert(reqwest::header::COOKIE, v);
         }
         if let Some(sapisid) = jar.as_ref().and_then(CookieJar::sapisid) {
             let mut v = HeaderValue::from_str(&sapisid_hash(sapisid, "https://gemini.google.com"))
-                .context("header Authorization invalide")?;
+                .context("invalid Authorization header")?;
             v.set_sensitive(true);
             h.insert(AUTHORIZATION, v);
         }
@@ -78,23 +88,28 @@ impl Client {
             .headers(h)
             .send()
             .await
-            .context("initiation upload Scotty")?;
+            .map_err(|error| {
+                GeminiError::UploadFailed(format!("Scotty upload initiation: {error}"))
+            })?;
         let upload_url = resp
             .headers()
             .get("x-goog-upload-url")
             .and_then(|v| v.to_str().ok())
             .map(str::to_string)
-            .context("réponse d'initiation sans X-Goog-Upload-URL")?;
+            .ok_or_else(|| {
+                GeminiError::UploadFailed("initiation response without X-Goog-Upload-URL".into())
+            })?;
         // Sécurité : valider que l'URL d'upload pointe bien vers l'hôte attendu.
         let upload_host = reqwest::Url::parse(&upload_url)
-            .context("URL d'upload Scotty invalide")?
+            .map_err(|error| GeminiError::UploadFailed(format!("invalid Scotty upload URL: {error}")))?
             .host_str()
             .unwrap_or("")
             .to_string();
         if upload_host != UPLOAD_HOST {
-            bail!(
-                "hôte d'upload Scotty inattendu: {upload_host} (attendu: {UPLOAD_HOST}) — possible MITM"
-            );
+            return Err(GeminiError::UploadFailed(format!(
+                "unexpected Scotty upload host: {upload_host} (expected: {UPLOAD_HOST}) — possible MITM"
+            ))
+            .into());
         }
 
         // 2) Envoi des octets + finalisation.
@@ -116,17 +131,24 @@ impl Client {
             .body(bytes)
             .send()
             .await
-            .context("envoi image Scotty")?;
+            .map_err(|error| {
+                GeminiError::UploadFailed(format!("Scotty image push: {error}"))
+            })?;
         let file_ref = resp
             .text()
             .await
-            .context("lecture référence Scotty")?
+            .map_err(|error| {
+                GeminiError::UploadFailed(format!("Scotty file reference read: {error}"))
+            })?
             .trim()
             .to_string();
         if !file_ref.starts_with('/') {
-            bail!("référence de fichier invalide: {file_ref}");
+            return Err(GeminiError::UploadFailed(format!(
+                "invalid file reference: {file_ref}"
+            ))
+            .into());
         }
-        debug!(r#ref = %file_ref, "image uploadée (Scotty)");
+        debug!(r#ref = %file_ref, "image uploaded (Scotty)");
         Ok(file_ref)
     }
 }
