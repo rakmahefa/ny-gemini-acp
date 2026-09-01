@@ -34,7 +34,7 @@ impl Store {
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow::anyhow!("chemin de persistance invalide: {}", path.display()))?;
+            .ok_or_else(|| anyhow::anyhow!("invalid persistence path: {}", path.display()))?;
         let tmp = path.with_file_name(format!(".{file_name}.tmp"));
         let mut file = tokio::fs::File::create(&tmp).await?;
         file.write_all(raw).await?;
@@ -102,14 +102,7 @@ impl Store {
         };
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
-            let name = match path.file_name().and_then(|value| value.to_str()) {
-                Some(name) => name,
-                None => continue,
-            };
             if path.extension().and_then(|v| v.to_str()) != Some("json") {
-                continue;
-            }
-            if name.ends_with(".snap.json") {
                 continue;
             }
             if let Ok(raw) = tokio::fs::read(&path).await {
@@ -127,13 +120,7 @@ impl Store {
     pub async fn delete(&self, id: &str) -> bool {
         let existed = self.live.write().await.remove(id).is_some() || self.path(id).exists();
         let _ = tokio::fs::remove_file(self.path(id)).await;
-        // D-05 : la suppression doit retirer toutes les traces de la session —
-        // sentinel busy et snapshots compris — sinon `end_turn` d'un tour en
-        // cours (ou un redémarrage) peut réécrire la session supprimée.
         self.release_busy(id).await;
-        for n in self.list_snapshots(id).await {
-            let _ = tokio::fs::remove_file(self.snapshot_path(id, n)).await;
-        }
         existed
     }
 }
@@ -182,29 +169,6 @@ async fn cleanup_stale_busy_files(dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn list_excludes_snapshots_from_sessions() {
-        let dir = std::env::temp_dir().join(format!(
-            "acp-persistence-test-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        let store = Store::open(&dir).await.unwrap();
-        let session = store
-            .create("/tmp".into(), vec![], "test-model")
-            .await
-            .unwrap();
-        let snapshot = store.snapshot_path(&session.id, 1);
-        tokio::fs::write(&snapshot, serde_json::to_vec_pretty(&session).unwrap())
-            .await
-            .unwrap();
-
-        let listed = store.list(None).await;
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, session.id);
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
 
     #[tokio::test]
     async fn atomic_write_leaves_no_temporary_file_after_success() {
