@@ -1,4 +1,4 @@
-//! Types du module state : rôles, modes de session, données persistées, erreurs.
+//! Types for session state: roles, modes, persisted data, and errors.
 
 use crate::time;
 use serde::{Deserialize, Serialize};
@@ -6,8 +6,6 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 use super::History;
-
-pub const MAX_SNAPSHOTS: usize = 10;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -119,34 +117,32 @@ impl Session {
             think: self.think,
             tools_enabled: self.tools_enabled,
             mode: self.mode,
-            turn_count: 0,
+            turn_count: self.turn_count,
             messages: self.messages.clone(),
         }
     }
 }
 
-#[derive(Debug, Error)]
-pub enum TurnError {
-    #[error("session not found: {0}")]
-    NotFound(String),
-    #[error("a turn is already active on this session — send session/cancel first")]
-    AlreadyRunning,
+#[derive(Debug, Clone)]
+pub struct Live {
+    pub session: Session,
+    pub generation: u64,
 }
 
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("persisted session write failed: {0}")]
-    Persistence(String),
+    #[error("session was deleted: {0}")]
+    SessionDeleted(String),
     #[error("stale turn generation: expected {expected}, current {current}")]
     StaleGeneration { expected: u64, current: u64 },
-    /// La session a été supprimée pendant le tour : le commit est abandonné
-    /// plutôt que de ressusciter la session supprimée (D-05).
-    #[error("session deleted during turn: {0}")]
-    SessionDeleted(String),
+    #[error("session persistence failed: {0}")]
+    Persistence(String),
 }
 
-/// Runtime session cache. Turn concurrency and cancellation are owned by `TurnManager`.
-pub struct Live {
-    pub session: Session,
-    pub generation: u64,
+#[derive(Debug, Error)]
+pub enum TurnError {
+    #[error("a turn is already active on this session")]
+    AlreadyRunning,
+    #[error("session not found: {0}")]
+    NotFound(String),
 }
