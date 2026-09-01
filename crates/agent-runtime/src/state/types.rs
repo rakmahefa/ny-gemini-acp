@@ -117,32 +117,32 @@ impl Session {
             think: self.think,
             tools_enabled: self.tools_enabled,
             mode: self.mode,
-            turn_count: self.turn_count,
+            turn_count: 0,
             messages: self.messages.clone(),
         }
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Live {
-    pub session: Session,
-    pub generation: u64,
+#[derive(Debug, Error)]
+pub enum TurnError {
+    #[error("session not found: {0}")]
+    NotFound(String),
+    #[error("a turn is already active on this session — send session/cancel first")]
+    AlreadyRunning,
 }
 
 #[derive(Debug, Error)]
 pub enum StoreError {
-    #[error("session was deleted: {0}")]
-    SessionDeleted(String),
+    #[error("persisted session write failed: {0}")]
+    Persistence(String),
     #[error("stale turn generation: expected {expected}, current {current}")]
     StaleGeneration { expected: u64, current: u64 },
-    #[error("session persistence failed: {0}")]
-    Persistence(String),
+    #[error("session deleted during turn: {0}")]
+    SessionDeleted(String),
 }
 
-#[derive(Debug, Error)]
-pub enum TurnError {
-    #[error("a turn is already active on this session")]
-    AlreadyRunning,
-    #[error("session not found: {0}")]
-    NotFound(String),
+/// Runtime session cache. Turn concurrency and cancellation are owned by `TurnManager`.
+pub struct Live {
+    pub session: Session,
+    pub generation: u64,
 }
