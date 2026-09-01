@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Rust workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.82.0
+          components: rustfmt, clippy
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check audit markers
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE 'C-[0-9]+|D-[0-9]+|P-[0-9]+|I-[0-9]+|M-[0-9]+' crates --include='*.rs'; then
+            echo 'Audit markers must not be committed to Rust sources.' >&2
+            exit 1
+          fi
+
+      - name: Check Rust sources are English
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -RInE '[À-ÿ]' crates --include='*.rs' --exclude-dir=target; then
+            echo 'Non-ASCII French text must not be committed to Rust sources.' >&2
+            exit 1
+          fi
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Workspace check
+        run: cargo check --workspace --all-targets
+
+  advisory:
+    name: Dependency hygiene (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.82.0
+
+      - name: Install cargo-machete
+        uses: bnjbvr/cargo-machete@main
+
+      - name: Check unused dependencies
+        run: cargo machete
