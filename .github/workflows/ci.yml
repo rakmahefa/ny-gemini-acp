@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,21 +35,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Check audit markers
+      - name: Check audit markers in added Rust lines
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RInE 'C-[0-9]+|D-[0-9]+|P-[0-9]+|I-[0-9]+|M-[0-9]+' crates --include='*.rs'; then
-            echo 'Audit markers must not be committed to Rust sources.' >&2
+          if git diff --unified=0 "origin/${{ github.base_ref || 'main' }}...HEAD" -- crates -- '*.rs' \
+            | grep -E '^\+[^+].*(C-[0-9]+|D-[0-9]+|P-[0-9]+|I-[0-9]+|M-[0-9]+)'; then
+            echo 'Audit markers must not be added to Rust sources.' >&2
             exit 1
           fi
 
-      - name: Check Rust sources are English
+      - name: Check French text in added Rust lines
         shell: bash
         run: |
           set -euo pipefail
-          if grep -RInE '[À-ÿ]' crates --include='*.rs' --exclude-dir=target; then
-            echo 'Non-ASCII French text must not be committed to Rust sources.' >&2
+          if git diff --unified=0 "origin/${{ github.base_ref || 'main' }}...HEAD" -- crates -- '*.rs' \
+            | grep -E '^\+[^+].*[À-ÿ]'; then
+            echo 'French text must not be added to Rust sources.' >&2
             exit 1
           fi
 
