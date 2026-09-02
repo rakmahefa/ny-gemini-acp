@@ -116,7 +116,8 @@ impl EventBus {
         self.lock_senders().remove(turn_id);
         tracing::debug!(turn = turn_id, "closed turn transport subscriber");
     }
-}#[cfg(test)]
+}
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::events::EventContext;

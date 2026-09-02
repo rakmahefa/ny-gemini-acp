@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::registry::{Tool, ToolDef, ToolResult};
 use crate::tools::sandbox;
 
@@ -52,11 +53,21 @@ impl Tool for ShellExecTool {
         DEF.get_or_init(shell_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, _allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        _allowed_dirs: &[PathBuf],
+        cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let command = match args.get("command").and_then(Value::as_str) {
             Some(value) if !value.trim().is_empty() => value,
             _ => return ToolResult::Err("paramètre 'command' manquant ou vide".into()),
         };
+
+        if cancellation.is_cancelled() {
+            return ToolResult::Err("commande annulée avant son démarrage (session/cancel)".into());
+        }
 
         let timeout_secs = args
             .get("timeout")
@@ -100,25 +111,45 @@ impl Tool for ShellExecTool {
         };
         let process_group_id = child.id();
 
-        let execution =
-            tokio::time::timeout(Duration::from_secs(timeout_secs), child.wait_with_output());
-
-        match execution.await {
-            Ok(Ok(output)) => format_shell_output(&output, &analysis),
-            Ok(Err(error)) => ToolResult::Err(format!("échec de l'exécution: {error}")),
-            Err(_) => {
-                #[cfg(unix)]
-                if let Some(pid) = process_group_id {
-                    let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
-                    if rc != 0 {
-                        tracing::debug!(pid, "failed to kill the shell process group immediately");
-                    }
+        // Cancellation (SPEC-P1-04): `session/cancel` must interrupt a running
+        // command instead of leaving it run to its full timeout. The losing
+        // branch of the select is dropped and the whole process group is
+        // killed, mirroring the timeout behavior.
+        tokio::select! {
+            result = tokio::time::timeout(
+                Duration::from_secs(timeout_secs),
+                child.wait_with_output(),
+            ) => match result {
+                Ok(Ok(output)) => return format_shell_output(&output, &analysis),
+                Ok(Err(error)) => return ToolResult::Err(format!("échec de l'exécution: {error}")),
+                Err(_) => {
+                    kill_process_group(process_group_id);
+                    return ToolResult::Err(format!(
+                        "timeout après {timeout_secs}s; arbre de processus interrompu"
+                    ));
                 }
-                ToolResult::Err(format!(
-                    "timeout après {timeout_secs}s; arbre de processus interrompu"
-                ))
+            },
+            _ = cancellation.cancelled() => {
+                kill_process_group(process_group_id);
+                return ToolResult::Err(
+                    "commande annulée par session/cancel; arbre de processus interrompu".into(),
+                );
             }
         }
+    }
+}
+
+fn kill_process_group(pid: Option<u32>) {
+    #[cfg(unix)]
+    if let Some(pid) = pid {
+        let rc = unsafe { libc::kill(-(pid as libc::pid_t), libc::SIGKILL) };
+        if rc != 0 {
+            tracing::debug!(pid, "failed to kill the shell process group immediately");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
     }
 }
 
@@ -183,15 +214,28 @@ fn truncate_utf8(value: &mut String, max_bytes: usize) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    fn no_cancel() -> ToolCancellation {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        ToolCancellation::from_receiver(rx)
+    }
+
     use super::*;
 
     #[tokio::test]
     async fn shell_echo() {
         let result = ShellExecTool
-            .execute(&json!({"command": "echo hello"}), Path::new("/tmp"), &[])
+            .execute(
+                &json!({"command": "echo hello"}),
+                Path::new("/tmp"),
+                &[],
+                &no_cancel(),
+            )
             .await;
 
-        assert!(matches!(result, ToolResult::Ok(output) if output.contains("hello") && output.contains("exit code 0")));
+        assert!(
+            matches!(result, ToolResult::Ok(output) if output.contains("hello") && output.contains("exit code 0"))
+        );
     }
 
     #[tokio::test]
@@ -201,10 +245,13 @@ mod tests {
                 &json!({"command": "git --no-such-option status"}),
                 Path::new("/tmp"),
                 &[],
+                &no_cancel(),
             )
             .await;
 
-        assert!(matches!(result, ToolResult::Err(output) if output.contains("exit code ") && (output.contains("unknown option") || output.contains("unknown switch") || output.contains("no-such-option"))));
+        assert!(
+            matches!(result, ToolResult::Err(output) if output.contains("exit code ") && (output.contains("unknown option") || output.contains("unknown switch") || output.contains("no-such-option")))
+        );
     }
 
     #[test]
@@ -217,7 +264,9 @@ mod tests {
             .analyze_command("echo hello")
             .expect("safe analysis fixture must parse");
 
-        assert!(matches!(format_shell_output(&output, &analysis), ToolResult::Err(error) if error.contains("signal")));
+        assert!(
+            matches!(format_shell_output(&output, &analysis), ToolResult::Err(error) if error.contains("signal"))
+        );
     }
 
     #[tokio::test]
@@ -227,6 +276,7 @@ mod tests {
                 &json!({"command": "sleep 60", "timeout": 1}),
                 Path::new("/tmp"),
                 &[],
+                &no_cancel(),
             )
             .await;
 
@@ -236,7 +286,12 @@ mod tests {
     #[tokio::test]
     async fn shell_blocks_dangerous_command() {
         let result = ShellExecTool
-            .execute(&json!({"command": "sudo rm -rf /"}), Path::new("/tmp"), &[])
+            .execute(
+                &json!({"command": "sudo rm -rf /"}),
+                Path::new("/tmp"),
+                &[],
+                &no_cancel(),
+            )
             .await;
 
         assert!(matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
@@ -245,7 +300,12 @@ mod tests {
     #[tokio::test]
     async fn shell_blocks_system_shutdown() {
         let result = ShellExecTool
-            .execute(&json!({"command": "shutdown now"}), Path::new("/tmp"), &[])
+            .execute(
+                &json!({"command": "shutdown now"}),
+                Path::new("/tmp"),
+                &[],
+                &no_cancel(),
+            )
             .await;
 
         assert!(matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
@@ -254,7 +314,12 @@ mod tests {
     #[tokio::test]
     async fn shell_allows_git() {
         let result = ShellExecTool
-            .execute(&json!({"command": "git status"}), Path::new("/tmp"), &[])
+            .execute(
+                &json!({"command": "git status"}),
+                Path::new("/tmp"),
+                &[],
+                &no_cancel(),
+            )
             .await;
 
         assert!(!matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
@@ -270,9 +335,50 @@ mod tests {
     #[tokio::test]
     async fn shell_reports_risk_metadata() {
         let result = ShellExecTool
-            .execute(&json!({"command": "ls"}), Path::new("/tmp"), &[])
+            .execute(
+                &json!({"command": "ls"}),
+                Path::new("/tmp"),
+                &[],
+                &no_cancel(),
+            )
             .await;
 
         assert!(matches!(result, ToolResult::Ok(output) if output.contains("[risk=low]")));
     }
+}
+
+/// SPEC-P1-04 acceptance: `session/cancel` during `shell_exec sleep 30`
+/// must kill the process tree and return in well under 2 seconds.
+#[tokio::test]
+async fn session_cancel_kills_a_running_shell_within_two_seconds() {
+    let registry = crate::tools::registry::ToolRegistry::builtin();
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let cancellation = crate::tools::contracts::ToolCancellation::from_receiver(rx);
+
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = tx.send(true);
+    });
+
+    let start = std::time::Instant::now();
+    let result = registry
+        .call_async(
+            "shell_exec",
+            &json!({"command": "sleep 30", "timeout": 120}),
+            Path::new("/tmp"),
+            &[],
+            &cancellation,
+        )
+        .await;
+    canceller.await.expect("canceller task must finish");
+    let elapsed = start.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "cancelled shell call must return promptly, took {elapsed:?}"
+    );
+    assert!(
+        matches!(&result, Some(ToolResult::Err(message)) if message.contains("annulé")),
+        "cancelled shell call must be an error result, got {result:?}"
+    );
 }

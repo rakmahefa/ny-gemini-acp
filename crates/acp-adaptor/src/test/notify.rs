@@ -23,8 +23,14 @@ fn maps_ui_kind_to_native_acp_tool_kind() {
 #[test]
 fn maps_ui_status_to_native_acp_status() {
     assert_eq!(tool_status(ToolUiStatus::Pending), ToolCallStatus::Pending);
-    assert_eq!(tool_status(ToolUiStatus::Running), ToolCallStatus::InProgress);
-    assert_eq!(tool_status(ToolUiStatus::Succeeded), ToolCallStatus::Completed);
+    assert_eq!(
+        tool_status(ToolUiStatus::Running),
+        ToolCallStatus::InProgress
+    );
+    assert_eq!(
+        tool_status(ToolUiStatus::Succeeded),
+        ToolCallStatus::Completed
+    );
     assert_eq!(tool_status(ToolUiStatus::Failed), ToolCallStatus::Failed);
     assert_eq!(tool_status(ToolUiStatus::Cancelled), ToolCallStatus::Failed);
 }
@@ -115,7 +121,10 @@ fn tool_call_projection_keeps_structured_input_and_output() {
     assert_eq!(call.tool_call_id.0, "turn_1/tool_0".into());
     assert_eq!(call.kind, ToolKind::Read);
     assert_eq!(call.status, ToolCallStatus::Completed);
-    assert_eq!(call.raw_input, Some(json!({"path":"src/main.rs","offset":10,"limit":20})));
+    assert_eq!(
+        call.raw_input,
+        Some(json!({"path":"src/main.rs","offset":10,"limit":20}))
+    );
     assert_eq!(call.raw_output, Some(json!({"text":"fn main() {}"})));
 }
 
@@ -127,15 +136,18 @@ fn file_edit_projects_to_acp_edit_diff_and_location() {
         "test.txt",
         json!({"path":"test.txt"}),
     )
-    .with_content(vec![json!({
-        "type": "content",
-        "text": "**✏️ File Edit**"
-    }), json!({
-        "type": "diff",
-        "path": "test.txt",
-        "oldText": "before",
-        "newText": "after"
-    })])
+    .with_content(vec![
+        json!({
+            "type": "content",
+            "text": "**✏️ File Edit**"
+        }),
+        json!({
+            "type": "diff",
+            "path": "test.txt",
+            "oldText": "before",
+            "newText": "after"
+        }),
+    ])
     .with_locations(vec![json!({"path":"/tmp/test.txt","line":2})]);
 
     let call = tool_call_from_ui("turn_1/tool_1", &ui);
@@ -143,7 +155,10 @@ fn file_edit_projects_to_acp_edit_diff_and_location() {
     assert_eq!(call.content.len(), 2);
     assert!(format!("{:?}", call.content[1]).contains("Diff"));
     assert_eq!(call.locations.len(), 1);
-    assert_eq!(call.locations[0].path, std::path::PathBuf::from("/tmp/test.txt"));
+    assert_eq!(
+        call.locations[0].path,
+        std::path::PathBuf::from("/tmp/test.txt")
+    );
     assert_eq!(call.locations[0].line, Some(2));
 }
 
@@ -155,11 +170,17 @@ fn shell_projects_to_acp_execute_and_terminal() {
         "pwd",
         json!({"command":"pwd"}),
     )
-    .with_content(vec![json!({"type":"content","text":"**▣ Shell**"}), json!({"type":"terminal","id":"term-7"})]);
+    .with_content(vec![
+        json!({"type":"content","text":"**▣ Shell**"}),
+        json!({"type":"terminal","id":"term-7"}),
+    ]);
 
     let call = tool_call_from_ui("turn_1/tool_2", &ui);
     assert_eq!(call.kind, ToolKind::Execute);
-    assert!(call.content.iter().any(|content| format!("{content:?}").contains("Terminal")));
+    assert!(call
+        .content
+        .iter()
+        .any(|content| format!("{content:?}").contains("Terminal")));
 }
 
 #[test]
@@ -175,7 +196,10 @@ fn file_read_projects_to_acp_read_and_location() {
     let call = tool_call_from_ui("turn_1/tool_3", &ui);
     assert_eq!(call.kind, ToolKind::Read);
     assert_eq!(call.locations.len(), 1);
-    assert_eq!(call.locations[0].path, std::path::PathBuf::from("/tmp/src/main.rs"));
+    assert_eq!(
+        call.locations[0].path,
+        std::path::PathBuf::from("/tmp/src/main.rs")
+    );
     assert_eq!(call.locations[0].line, Some(10));
 }
 
@@ -191,7 +215,7 @@ fn malformed_rich_content_is_skipped_without_killing_the_projection() {
     )
     .with_content(vec![
         json!({"type":"diff","path":"test.txt"}), // malformé (newText absent)
-        json!({"type":"content","text":"ok"}),     // valide
+        json!({"type":"content","text":"ok"}),    // valide
     ])
     .completed(true, Some(json!({"text":"fallback"})));
 

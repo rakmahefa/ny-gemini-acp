@@ -1,6 +1,6 @@
 //! Risk classification for normalized shell commands.
 
-use super::parser::{parse_shell, ParsedShellCommand, ShellOperator};
+use super::parser::{ParsedShellCommand, ShellOperator};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
 pub enum RiskLevel {
@@ -58,22 +58,6 @@ pub struct ShellAnalysis {
 }
 
 impl ShellAnalysis {
-    pub fn analyze(command: &str) -> Self {
-        let parsed = parse_shell(command);
-        match parsed {
-            Ok(parsed) => Self::from_parsed(command, &parsed),
-            Err(error) => Self {
-                risk: RiskLevel::Critical,
-                commands: Vec::new(),
-                has_pipes: command.contains('|'),
-                has_env_injection: command.contains('$') || command.contains('`'),
-                has_dangerous_pipe_chain: true,
-                risk_description: format!("commande non analysable : {error}"),
-                line_count: command.lines().filter(|line| !line.trim().is_empty()).count(),
-            },
-        }
-    }
-
     pub(crate) fn from_parsed(command: &str, parsed: &ParsedShellCommand) -> Self {
         let commands = parsed
             .segments
@@ -87,7 +71,10 @@ impl ShellAnalysis {
         let has_dangerous_pipe_chain = parsed.has_non_pipe_operator();
         let has_env_injection = parsed.has_environment_expansion;
         let risk = compute_risk(parsed, has_env_injection, has_dangerous_pipe_chain);
-        let line_count = command.lines().filter(|line| !line.trim().is_empty()).count();
+        let line_count = command
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .count();
         let risk_description = build_risk_description(
             &risk,
             has_pipes,
@@ -138,18 +125,20 @@ fn compute_risk(
     };
 
     for segment in &parsed.segments {
-        let program = segment.program.rsplit('/').next().unwrap_or(&segment.program);
+        let program = segment
+            .program
+            .rsplit('/')
+            .next()
+            .unwrap_or(&segment.program);
         if matches!(program, "rm" | "rmdir" | "chmod" | "chown")
-            && segment.args.iter().any(|arg| arg == "/" || arg == "-rf" || arg == "-fr")
+            && segment
+                .args
+                .iter()
+                .any(|arg| arg == "/" || arg == "-rf" || arg == "-fr")
         {
             return RiskLevel::Critical;
         }
-        if matches!(
-            program,
-            "rm" | "rmdir" | "mv" | "cp" | "chmod" | "chown" | "docker" | "podman"
-                | "npm" | "npx" | "pnpm" | "yarn" | "bun" | "pip" | "pip3" | "cargo"
-                | "go" | "make" | "cmake" | "gcc" | "g++" | "clang" | "patch"
-        ) {
+        if is_high_risk_program(program, &segment.args) {
             risk = risk.max(RiskLevel::High);
         }
     }
@@ -163,6 +152,82 @@ fn compute_risk(
     }
 
     risk
+}
+
+/// Single source of truth for the High-risk program list. A program belongs
+/// here when it can execute or delete beyond the read-oriented posture of the
+/// sandbox (audit chap. 3.1 / 6.3). `git` benefits from one documented
+/// exception: safe read-only subcommands stay at their computed level, now
+/// that `-c`/alias/config injection vectors are refused at validation time.
+fn is_high_risk_program(program: &str, args: &[String]) -> bool {
+    if matches!(program, "git") {
+        return !is_safe_git_invocation(args);
+    }
+    matches!(
+        program,
+        "rm" | "rmdir"
+            | "mv"
+            | "cp"
+            | "chmod"
+            | "chown"
+            | "docker"
+            | "podman"
+            | "npm"
+            | "npx"
+            | "pnpm"
+            | "yarn"
+            | "bun"
+            | "pip"
+            | "pip3"
+            | "cargo"
+            | "go"
+            | "make"
+            | "cmake"
+            | "gcc"
+            | "g++"
+            | "clang"
+            | "patch"
+            | "gh"
+            | "sed"
+            | "find"
+            | "tar"
+            | "zip"
+            | "unzip"
+    )
+}
+
+/// Read-only git subcommands that are read-only in *every* argument form,
+/// once `-c`/`--config*`/alias/`ext::` vectors have been refused by the
+/// sandbox. Forms-capable subcommands (`tag`, `branch`, `remote`, `stash`)
+/// are excluded on purpose: they mutate with non-flag arguments. Anything
+/// not listed here stays High. A `git` invocation with no recognized
+/// subcommand is High.
+fn is_safe_git_invocation(args: &[String]) -> bool {
+    let subcommand = args
+        .iter()
+        .map(String::as_str)
+        .find(|arg| !arg.starts_with('-'));
+    matches!(
+        subcommand,
+        Some(
+            "status"
+                | "log"
+                | "diff"
+                | "show"
+                | "rev-parse"
+                | "describe"
+                | "shortlog"
+                | "reflog"
+                | "ls-files"
+                | "ls-remote"
+                | "ls-tree"
+                | "blame"
+                | "cat-file"
+                | "help"
+                | "version"
+                | "grep"
+        )
+    )
 }
 
 fn build_risk_description(

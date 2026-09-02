@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::core::cookies::CookieJar;
+use agent_runtime::LlmError;
 use serde_json::Value;
 use tokio::sync::RwLock;
 
@@ -65,7 +66,11 @@ pub enum StreamItem {
     },
 }
 
-pub type StreamResult = Result<StreamItem, String>;
+/// The streaming channel carries the typed error taxonomy end to end: a
+/// producer must never detype an `LlmError` into a `String`, otherwise every
+/// consumer-side classification branch (authentication, upload, divergence,
+/// ...) becomes dead code.
+pub type StreamResult = Result<StreamItem, LlmError>;
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PageTokens {

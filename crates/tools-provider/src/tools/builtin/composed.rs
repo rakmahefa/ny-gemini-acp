@@ -11,6 +11,7 @@ use super::{
     file::{FileEditTool, FileReadTool},
     search::SearchTool,
 };
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::registry::{Tool, ToolDef, ToolResult};
 
 fn search_and_read_params() -> Value {
@@ -40,7 +41,13 @@ impl Tool for SearchAndReadTool {
         DEF.get_or_init(search_and_read_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let pattern = match args
             .get("pattern")
             .and_then(Value::as_str)
@@ -65,7 +72,10 @@ impl Tool for SearchAndReadTool {
             "glob": args.get("glob").and_then(Value::as_str).unwrap_or(""),
             "max_results": max_matches
         });
-        let matches = match SearchTool.execute(&search_args, cwd, allowed_dirs).await {
+        let matches = match SearchTool
+            .execute(&search_args, cwd, allowed_dirs, _cancellation)
+            .await
+        {
             ToolResult::Ok(value) => value,
             ToolResult::Err(error) => return ToolResult::Err(error),
         };
@@ -85,7 +95,10 @@ impl Tool for SearchAndReadTool {
                 break;
             }
             let read_args = json!({"path": path, "offset": line_no.saturating_sub(context).max(1), "limit": context * 2 + 1});
-            let excerpt = match FileReadTool.execute(&read_args, cwd, allowed_dirs).await {
+            let excerpt = match FileReadTool
+                .execute(&read_args, cwd, allowed_dirs, _cancellation)
+                .await
+            {
                 ToolResult::Ok(value) => value,
                 ToolResult::Err(error) => format!("[lecture impossible: {error}]"),
             };
@@ -131,13 +144,27 @@ impl Tool for ReplaceInFileTool {
         DEF.get_or_init(replace_in_file_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
-        FileEditTool.execute(args, cwd, allowed_dirs).await
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        cancellation: &ToolCancellation,
+    ) -> ToolResult {
+        FileEditTool
+            .execute(args, cwd, allowed_dirs, cancellation)
+            .await
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    fn no_cancel() -> ToolCancellation {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        ToolCancellation::from_receiver(rx)
+    }
+
     use super::*;
 
     #[tokio::test]
@@ -152,6 +179,7 @@ mod tests {
                 &json!({"path":"test.txt","old_string":"world","new_string":"rust"}),
                 &dir,
                 &[],
+                &no_cancel(),
             )
             .await;
         assert!(result.is_ok());

@@ -16,6 +16,7 @@
 //! - `UploadFailed` : chemin d'upload Scotty (`client/upload.rs`) ;
 //! - `SafetyBlocked` : métadonnée typée `blockReason` du flux décodé.
 
+use agent_runtime::LlmError;
 use thiserror::Error;
 
 /// Erreur du backend Gemini web, produite par `client::stream`,
@@ -25,9 +26,7 @@ use thiserror::Error;
 pub enum GeminiError {
     /// Cookies expirés ou invalides — `BardErrorInfo [<code>]` dans le corps.
     /// Code 401 = cookies expirés.
-    #[error(
-        "cookies expired or invalid (BardErrorInfo [{code}]) — re-export vendor/cookie.json"
-    )]
+    #[error("cookies expired or invalid (BardErrorInfo [{code}]) — re-export vendor/cookie.json")]
     CookiesExpired { code: i64 },
 
     /// Rejet explicite du backend Gemini ne permettant pas d'être classé comme
@@ -72,3 +71,44 @@ pub enum GeminiError {
 }
 
 pub type GeminiResult<T> = Result<T, GeminiError>;
+
+/// Maps a backend error onto the runtime taxonomy. This is the single
+/// classification point used both for errors produced before the stream
+/// spawns and for errors carried by the typed streaming channel
+/// (`StreamResult = Result<StreamItem, LlmError>`).
+///
+/// `CookiesExpired` is classified as `authentication` on purpose: for a
+/// cookie-based provider, expired cookies are the trigger for the right user
+/// reflex (re-export vendor/cookie.json), not an upstream failure.
+pub(crate) fn map_gemini_error(error: &anyhow::Error) -> LlmError {
+    let Some(error) = error.downcast_ref::<GeminiError>() else {
+        return LlmError::Provider(format!("{error:#}"));
+    };
+
+    match error {
+        GeminiError::CookiesExpired { code } => LlmError::Authentication(format!(
+            "cookies expired or invalid (BardErrorInfo [{code}])"
+        )),
+        GeminiError::UpstreamRejected { code } => LlmError::Provider(format!(
+            "Gemini upstream rejected request (BardErrorInfo [{code}])"
+        )),
+        GeminiError::UnknownModel(model) => LlmError::Unavailable(model.clone()),
+        GeminiError::Network(message) => LlmError::Network(message.clone()),
+        GeminiError::Http { status } => match status {
+            401 | 403 => {
+                LlmError::Authentication(format!("Gemini authentication rejected (HTTP {status})"))
+            }
+            408 => LlmError::Network("Gemini request timed out (HTTP 408)".into()),
+            429 => LlmError::Provider("Gemini request rate-limited (HTTP 429)".into()),
+            400 | 422 => {
+                LlmError::InvalidRequest(format!("Gemini rejected the request (HTTP {status})"))
+            }
+            500..=599 => LlmError::Provider(format!("Gemini upstream failure (HTTP {status})")),
+            _ => LlmError::Provider(format!("Gemini HTTP failure (HTTP {status})")),
+        },
+        GeminiError::StreamDivergence => LlmError::StreamDivergence,
+        GeminiError::UploadFailed(message) => LlmError::Upload(message.clone()),
+        GeminiError::SafetyBlocked(message) => LlmError::Provider(message.clone()),
+        GeminiError::Other(error) => LlmError::Provider(format!("{error:#}")),
+    }
+}

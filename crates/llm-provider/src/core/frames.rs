@@ -310,44 +310,6 @@ pub fn bard_error(raw: &str) -> Option<i64> {
     let re = RE.get_or_init(|| Regex::new(r"BardErrorInfo\s*\[(\d+)\]").expect("regex bard"));
     re.captures(raw)?.get(1)?.as_str().parse().ok()
 }
-pub fn detect_safety_block(raw: &str) -> Option<String> {
-    if raw.contains("blockReason") {
-        if let Some(start) = raw
-            .find(r#"\"blockReason\":\"#)
-            .or_else(|| raw.find(r#"\"blockReason\": \"#))
-        {
-            let rest = &raw[start..];
-            let colon = rest.find(':').unwrap_or(0);
-            let rest = rest[colon + 1..].trim_start();
-            if let Some(end) = rest.find('"') {
-                let reason = &rest[..end];
-                if !reason.is_empty() {
-                    return Some(format!("Gemini a refusé de répondre (blockReason: {reason}). Reformulez votre prompt."));
-                }
-            }
-        }
-        return Some(
-            "Gemini a refusé de répondre (politique de sécurité). Reformulez votre prompt."
-                .to_string(),
-        );
-    }
-    let lower = raw.to_lowercase();
-    [
-        "I can't help with that",
-        "I'm not able to help with that",
-        "I cannot fulfill this request",
-        "I won't be able to help",
-        "content safety",
-        "against my safety guidelines",
-        "violates safety policy",
-    ]
-    .iter()
-    .find(|phrase| lower.contains(&phrase.to_lowercase()))
-    .map(|_| {
-        "Gemini a refusé de répondre à ce prompt (politique de contenu). Reformulez votre demande."
-            .to_string()
-    })
-}
 pub fn is_empty_stream(raw: &str) -> bool {
     if !raw.contains("\"wrb.fr\"") {
         return false;

@@ -199,7 +199,9 @@ impl History {
                     let mut plain = Vec::new();
                     let mut lines = content.lines().peekable();
                     while let Some(line) = lines.next() {
-                        if let Some((name, id, arguments)) = parse_canonical_tool_call(line, &mut lines) {
+                        if let Some((name, id, arguments)) =
+                            parse_canonical_tool_call(line, &mut lines)
+                        {
                             if !plain.is_empty() {
                                 normalized.push(HistoryEntry::Assistant {
                                     content: plain.join("\n"),

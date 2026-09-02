@@ -36,9 +36,9 @@ impl Client {
             ))
             .into());
         }
-        let bytes = base64::engine::general_purpose::STANDARD.decode(b64).map_err(|error| {
-            GeminiError::UploadFailed(format!("image base64 decode: {error}"))
-        })?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .map_err(|error| GeminiError::UploadFailed(format!("image base64 decode: {error}")))?;
         if bytes.is_empty() {
             return Err(GeminiError::UploadFailed("empty image".into()).into());
         }
@@ -101,7 +101,9 @@ impl Client {
             })?;
         // Sécurité : valider que l'URL d'upload pointe bien vers l'hôte attendu.
         let upload_host = reqwest::Url::parse(&upload_url)
-            .map_err(|error| GeminiError::UploadFailed(format!("invalid Scotty upload URL: {error}")))?
+            .map_err(|error| {
+                GeminiError::UploadFailed(format!("invalid Scotty upload URL: {error}"))
+            })?
             .host_str()
             .unwrap_or("")
             .to_string();
@@ -131,9 +133,7 @@ impl Client {
             .body(bytes)
             .send()
             .await
-            .map_err(|error| {
-                GeminiError::UploadFailed(format!("Scotty image push: {error}"))
-            })?;
+            .map_err(|error| GeminiError::UploadFailed(format!("Scotty image push: {error}")))?;
         let file_ref = resp
             .text()
             .await
@@ -143,10 +143,9 @@ impl Client {
             .trim()
             .to_string();
         if !file_ref.starts_with('/') {
-            return Err(GeminiError::UploadFailed(format!(
-                "invalid file reference: {file_ref}"
-            ))
-            .into());
+            return Err(
+                GeminiError::UploadFailed(format!("invalid file reference: {file_ref}")).into(),
+            );
         }
         debug!(r#ref = %file_ref, "image uploaded (Scotty)");
         Ok(file_ref)

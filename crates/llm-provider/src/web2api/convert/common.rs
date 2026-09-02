@@ -52,20 +52,43 @@ pub fn parse_tool_calls(text: &str) -> (String, Vec<Value>) {
         regex::Regex::new(r"(?s)```tool_call\s*\n(.*?)\n```").expect("regex statique")
     });
     let mut tool_calls = Vec::new();
+    let mut removals: Vec<(usize, usize)> = Vec::new();
     for cap in re.captures_iter(text) {
+        let whole = cap.get(0).expect("match has a whole span");
+        // SPEC-P1-06 (M7): a block is removed from the response only when it
+        // parses into a usable tool call. Invalid JSON stays visible and is
+        // logged — silently deleting model output loses information.
         let data: Value = match serde_json::from_str(cap[1].trim()) {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(error) => {
+                tracing::warn!(error = %error, "tool_call block with invalid JSON left in the response");
+                continue;
+            }
         };
         let Some(name) = data.get("name").and_then(Value::as_str) else {
+            tracing::warn!("tool_call block without a tool name left in the response");
             continue;
         };
         let arguments = data.get("arguments").cloned().unwrap_or_else(|| json!({}));
         let call_id = uuid::Uuid::new_v4().simple().to_string();
         tool_calls.push(json!({"id":format!("call_{call_id}"),"type":"function","function":{"name":name,"arguments":arguments.to_string()}}));
+        removals.push((whole.start(), whole.end()));
     }
-    let clean = re.replace_all(text, "").trim().to_string();
+    let clean = remove_spans(text, &removals).trim().to_string();
     (clean, tool_calls)
+}
+
+/// Builds `text` without the given spans, assumed non-overlapping and in scan
+/// order.
+fn remove_spans(text: &str, spans: &[(usize, usize)]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for &(start, end) in spans {
+        out.push_str(&text[cursor..start]);
+        cursor = end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,15 +140,43 @@ impl ToolChoice {
 
 pub fn warn_xsrf_ignored(xsrf: Option<&str>) {
     if xsrf.is_some() {
-        warn!(
-            "xsrf_token configured but ignored: the gemini client fetches SNlM0e automatically"
-        );
+        warn!("xsrf_token configured but ignored: the gemini client fetches SNlM0e automatically");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn invalid_tool_call_json_stays_visible_in_the_response() {
+        // SPEC-P1-06 (M7): an unparseable tool_call block must NOT be
+        // silently removed from the response.
+        let text = "avant\n```tool_call\n{invalid json}\n```\napres";
+        let (clean, calls) = parse_tool_calls(text);
+        assert!(calls.is_empty());
+        assert!(clean.contains("{invalid json}"), "clean = {clean:?}");
+        assert!(clean.contains("avant") && clean.contains("apres"));
+    }
+
+    #[test]
+    fn parsed_tool_call_blocks_are_removed() {
+        let text = "avant\n```tool_call\n{\"name\": \"a\", \"arguments\": {\"x\": 1}}\n```\napres";
+        let (clean, calls) = parse_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert!(clean.contains("avant") && clean.contains("apres"));
+        assert!(!clean.contains("tool_call"), "clean = {clean:?}");
+    }
+
+    #[test]
+    fn multi_line_tool_call_json_is_parsed_and_removed() {
+        let text =
+            "texte\n```tool_call\n{\n  \"name\": \"a\",\n  \"arguments\": {\"x\": 1}\n}\n```\nfin";
+        let (clean, calls) = parse_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["name"], "a");
+        assert!(clean.contains("texte") && clean.contains("fin"));
+    }
+
     #[test]
     fn tool_choice_parse_et_instruction() {
         assert_eq!(ToolChoice::parse(None), ToolChoice::Auto);

@@ -2,12 +2,21 @@
 
 use super::Store;
 
+/// Why `acquire_busy` failed. A live sentinel (`Busy`) means another turn owns
+/// the session; an `Io` failure means the storage backend itself is failing.
+/// Collapsing the two produced the lying "a turn is already active" diagnosis
+/// on disk-full or permission-denied states.
+pub(crate) enum AcquireBusyFailure {
+    Busy,
+    Io(std::io::Error),
+}
+
 impl Store {
     pub(crate) fn busy_path(&self, id: &str) -> std::path::PathBuf {
         self.dir.join(format!("{id}.busy"))
     }
 
-    pub(crate) async fn acquire_busy(&self, id: &str) -> anyhow::Result<()> {
+    pub(crate) async fn acquire_busy(&self, id: &str) -> Result<(), AcquireBusyFailure> {
         let path = self.busy_path(id);
         let content = format_busy_content();
 
@@ -20,7 +29,7 @@ impl Store {
             Ok(_) => {
                 if let Err(error) = tokio::fs::write(&path, &content).await {
                     let _ = tokio::fs::remove_file(&path).await;
-                    return Err(error.into());
+                    return Err(AcquireBusyFailure::Io(error));
                 }
                 Ok(())
             }
@@ -31,18 +40,19 @@ impl Store {
                         .write(true)
                         .create_new(true)
                         .open(&path)
-                        .await?;
+                        .await
+                        .map_err(AcquireBusyFailure::Io)?;
                     drop(file);
                     if let Err(error) = tokio::fs::write(&path, &content).await {
                         let _ = tokio::fs::remove_file(&path).await;
-                        return Err(error.into());
+                        return Err(AcquireBusyFailure::Io(error));
                     }
                     Ok(())
                 } else {
-                    anyhow::bail!("session {id} already busy")
+                    Err(AcquireBusyFailure::Busy)
                 }
             }
-            Err(e) => Err(e.into()),
+            Err(e) => Err(AcquireBusyFailure::Io(e)),
         }
     }
 
@@ -59,7 +69,11 @@ fn format_busy_content() -> String {
             start_time,
             crate::time::now_unix()
         ),
-        None => format!("pid={} ts={}\n", std::process::id(), crate::time::now_unix()),
+        None => format!(
+            "pid={} ts={}\n",
+            std::process::id(),
+            crate::time::now_unix()
+        ),
     }
 }
 

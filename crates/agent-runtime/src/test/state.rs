@@ -214,3 +214,109 @@ async fn open_removes_orphan_busy_sentinel() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn derived_title_survives_end_turn_and_store_reload() {
+    // SPEC-P0-02 acceptance: create -> derive title (written through the
+    // store path) -> end_turn -> reopen a store on the same data-dir ->
+    // session list and read return the title.
+    let dir = std::env::temp_dir().join(format!("acp-title-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    let (session, generation) = store.begin_turn(&s.id).await.unwrap();
+    store
+        .update_session(&s.id, |live| live.title = Some("Derived title".into()))
+        .await
+        .unwrap();
+    store.end_turn(&s.id, session, generation).await.unwrap();
+
+    let reloaded = Store::open(&dir).await.unwrap();
+    let restored = reloaded.get(&s.id).await.unwrap();
+    assert_eq!(restored.title.as_deref(), Some("Derived title"));
+    assert!(reloaded
+        .list(None)
+        .await
+        .iter()
+        .any(|session| session.title.as_deref() == Some("Derived title")));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn fork_of_titled_session_keeps_title() {
+    let dir =
+        std::env::temp_dir().join(format!("acp-title-fork-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    store
+        .update_session(&s.id, |live| live.title = Some("Derived title".into()))
+        .await
+        .unwrap();
+
+    let forked = store.fork(&s.id).await.unwrap();
+    assert_eq!(forked.title.as_deref(), Some("Derived title (fork)"));
+    // The fork copy itself must be titled on disk, not only in the live map.
+    let reopened = Store::open(&dir).await.unwrap();
+    let restored = reopened.get(&forked.id).await.unwrap();
+    assert_eq!(restored.title.as_deref(), Some("Derived title (fork)"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn session_without_derived_title_stays_untitled() {
+    let dir =
+        std::env::temp_dir().join(format!("acp-title-none-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    let (session, generation) = store.begin_turn(&s.id).await.unwrap();
+    store.end_turn(&s.id, session, generation).await.unwrap();
+    let restored = store.get(&s.id).await.unwrap();
+    assert!(restored.title.is_none());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn io_failure_on_begin_turn_reports_busy_io_not_already_running() {
+    // SPEC-P1-01 acceptance: a failing storage backend must surface as a
+    // BusyIo diagnostic, never as "a turn is already active". A session id
+    // longer than the filesystem limit makes the sentinel creation fail with
+    // an I/O error regardless of the environment's privileges.
+    let dir = std::env::temp_dir().join(format!("acp-busyio-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let hostile_id = format!("sess_{}", "a".repeat(300));
+    match store.begin_turn(&hostile_id).await {
+        Err(TurnError::BusyIo(message)) => {
+            assert!(
+                !message.is_empty(),
+                "BusyIo must carry the underlying error"
+            );
+        }
+        other => panic!("expected BusyIo, got {other:?}"),
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn concurrent_begin_turn_still_reports_already_running() {
+    // SPEC-P1-01 acceptance: the concurrency signal is preserved.
+    let dir = std::env::temp_dir().join(format!("acp-busy-conc-{}", uuid::Uuid::new_v4().simple()));
+    let store = Store::open(&dir).await.unwrap();
+    let s = store
+        .create("/tmp".into(), vec![], TEST_MODEL)
+        .await
+        .unwrap();
+    let _first = store.begin_turn(&s.id).await.unwrap();
+    assert!(matches!(
+        store.begin_turn(&s.id).await,
+        Err(TurnError::AlreadyRunning)
+    ));
+    std::fs::remove_dir_all(&dir).ok();
+}

@@ -14,7 +14,10 @@ async fn tool_result_cannot_bypass_execution() {
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 2);
     assert_eq!(
-        events.iter().map(|event| event.sequence()).collect::<Vec<_>>(),
+        events
+            .iter()
+            .map(|event| event.sequence())
+            .collect::<Vec<_>>(),
         vec![0, 1]
     );
 
@@ -64,7 +67,10 @@ async fn tool_call_cannot_overlap_an_open_assistant_stream() {
     let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
     assert_eq!(events.len(), 7);
     assert_eq!(
-        events.iter().map(|event| event.sequence()).collect::<Vec<_>>(),
+        events
+            .iter()
+            .map(|event| event.sequence())
+            .collect::<Vec<_>>(),
         (0..7).collect::<Vec<_>>()
     );
 }

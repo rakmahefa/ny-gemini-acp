@@ -1,8 +1,8 @@
 //! Presentation view of tool calls (C-32): `ToolUiKind` and `ToolUiStatus`
-//! are a host-neutral projection of the execution lifecycle
-//! (`tools-provider::tools::lifecycle::ToolLifecycleState`) for UI cards.
-//! They carry no transition logic of their own — see
-//! `events::integrity` for the mapping between the three state machines.
+//! are the host-neutral projection of the tool-call execution progress for
+//! UI cards. They carry no transition logic of their own — see
+//! `events::integrity` for the mapping between the integrity journal and
+//! the presented state.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

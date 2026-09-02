@@ -1,5 +1,6 @@
 //! Native filesystem discovery builtins: `glob` and `list_directory`.
 
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::{
     registry::{Tool, ToolDef, ToolResult},
     sandbox,
@@ -32,7 +33,13 @@ impl Tool for GlobTool {
         static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
         DEF.get_or_init(glob_def)
     }
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let pattern = match args.get("pattern").and_then(Value::as_str) {
             Some(pattern) if !pattern.trim().is_empty() => pattern,
             _ => return ToolResult::Err("paramètre 'pattern' manquant ou vide".into()),
@@ -80,7 +87,13 @@ impl Tool for ListDirectoryTool {
         static DEF: std::sync::OnceLock<ToolDef> = std::sync::OnceLock::new();
         DEF.get_or_init(list_directory_def)
     }
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let root = match args
             .get("path")
             .and_then(Value::as_str)
@@ -207,7 +220,8 @@ fn is_ignored_dir(name: &str) -> bool {
 fn glob_matches(pattern: &str, relative: &str, basename: &str) -> bool {
     let shared = crate::tools::glob::glob_matches;
     shared(pattern, relative) || shared(pattern, basename)
-}fn format_paths(paths: Vec<PathBuf>) -> String {
+}
+fn format_paths(paths: Vec<PathBuf>) -> String {
     paths
         .into_iter()
         .map(|path| path.display().to_string())
@@ -216,6 +230,12 @@ fn glob_matches(pattern: &str, relative: &str, basename: &str) -> bool {
 }
 #[cfg(test)]
 mod tests {
+
+    fn no_cancel() -> ToolCancellation {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        ToolCancellation::from_receiver(rx)
+    }
+
     use super::*;
     #[tokio::test]
     async fn glob_finds_matching_files() {
@@ -228,7 +248,7 @@ mod tests {
             .await
             .unwrap();
         let result = GlobTool
-            .execute(&json!({"pattern":"**/*.rs"}), &dir, &[])
+            .execute(&json!({"pattern":"**/*.rs"}), &dir, &[], &no_cancel())
             .await;
         assert!(matches!(&result, ToolResult::Ok(value) if value.contains("lib.rs")));
         assert!(!matches!(&result, ToolResult::Ok(value) if value.contains("lib.txt")));
@@ -240,7 +260,9 @@ mod tests {
         tokio::fs::create_dir_all(&dir).await.unwrap();
         tokio::fs::write(dir.join("b.txt"), "b").await.unwrap();
         tokio::fs::create_dir(dir.join("a-dir")).await.unwrap();
-        let result = ListDirectoryTool.execute(&json!({}), &dir, &[]).await;
+        let result = ListDirectoryTool
+            .execute(&json!({}), &dir, &[], &no_cancel())
+            .await;
         assert!(
             matches!(result, ToolResult::Ok(value) if value.starts_with("dir\ta-dir\nfile\tb.txt"))
         );
@@ -251,7 +273,12 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("acp-fs-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let result = GlobTool
-            .execute(&json!({"pattern":"*","path":"/etc"}), &dir, &[])
+            .execute(
+                &json!({"pattern":"*","path":"/etc"}),
+                &dir,
+                &[],
+                &no_cancel(),
+            )
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
         let _ = tokio::fs::remove_dir_all(dir).await;

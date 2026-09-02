@@ -13,7 +13,7 @@ pub const TOOL_CALL_CLOSE: &str = "```";
 pub const TOOL_RESULT_PREFIX: &str = "[Tool result]:";
 
 #[derive(Serialize)]
-struct ToolResultEnvelope<'a> {
+struct PromptToolResultRecord<'a> {
     content: &'a str,
     id: &'a str,
     status: &'static str,
@@ -37,7 +37,7 @@ pub fn format_tool_call(id: &str, name: &str, arguments: &Value) -> String {
 /// The envelope uses a struct to make JSON field order deterministic, which is
 /// part of this text protocol's canonical representation.
 pub fn format_tool_result(id: &str, name: &str, content: &str, is_ok: bool) -> String {
-    let envelope = ToolResultEnvelope {
+    let envelope = PromptToolResultRecord {
         content,
         id,
         status: if is_ok { "ok" } else { "error" },

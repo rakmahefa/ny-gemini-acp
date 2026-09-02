@@ -15,6 +15,5 @@ pub mod tool_history;
 pub mod tool_ux;
 
 pub use contracts::{ToolCancellation, ToolPermissionMode};
-pub use lifecycle::{LifecycleError, ToolLifecycle, ToolLifecycleState};
 pub use mcp::{McpCatalog, McpError, McpServerConfig, McpTransportKind};
 pub use registry::ToolRegistry;

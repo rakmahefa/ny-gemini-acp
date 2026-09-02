@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex};
 use agent_runtime::events::{EventBus, TurnEventEmitter};
 use agent_runtime::state::{HistoryEntry, Store};
 use agent_runtime::{
-    AgentLoopConfig, Cancellation, LlmError, LlmModelInfo, LlmProvider, ModelEvent,
-    ModelRequest, ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider,
-    ToolUiModel, TurnExecutionRequest, TurnService,
+    AgentLoopConfig, Cancellation, LlmError, LlmModelInfo, LlmProvider, ModelEvent, ModelRequest,
+    ToolCallRequest, ToolCallResult, ToolConfigurationError, ToolProvider, ToolUiModel,
+    TurnExecutionRequest, TurnService,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
@@ -58,7 +58,9 @@ impl LlmProvider for ScriptedLlm {
     }
 
     async fn upload_image(&self, _base64: &str, _mime: &str) -> Result<String, LlmError> {
-        Err(LlmError::Upload("image upload is not part of this test".into()))
+        Err(LlmError::Upload(
+            "image upload is not part of this test".into(),
+        ))
     }
 
     fn model_info(&self, _model: &str) -> LlmModelInfo {
@@ -322,4 +324,102 @@ async fn provider_failure_is_terminal_and_turn_is_finalized() {
 
     bus.close_turn("integration-turn");
     std::fs::remove_dir_all(dir).ok();
+}
+
+/// A provider whose stream never yields: the turn stays blocked in the model
+/// round until the cancellation signal reaches `stream_with_cancellation`.
+struct BlockingLlm;
+
+#[async_trait::async_trait]
+impl LlmProvider for BlockingLlm {
+    async fn stream(&self, _request: ModelRequest) -> Result<agent_runtime::LlmStream, LlmError> {
+        let (_tx, rx) = mpsc::channel::<Result<ModelEvent, LlmError>>(1);
+        std::future::pending::<()>().await;
+        Ok(rx)
+    }
+
+    async fn upload_image(&self, _base64: &str, _mime: &str) -> Result<String, LlmError> {
+        Err(LlmError::Upload("unused in this test".into()))
+    }
+
+    fn model_info(&self, _model: &str) -> LlmModelInfo {
+        LlmModelInfo::default()
+    }
+}
+
+#[tokio::test]
+async fn snapshot_read_after_cancel_and_wait_contains_the_committed_cancelled_turn() {
+    // SPEC-P1-02: session/load and session/resume must wait for the running
+    // turn BEFORE reading the persisted snapshot. A snapshot read before the
+    // wait replays the stale pre-turn state; a read after the wait replays
+    // the state the cancelled turn committed.
+    use agent_runtime::state::Role;
+    use agent_runtime::{RuntimeError, TurnExecutionRequest, TurnManager};
+
+    let (store, session_id, mut session, generation, service, _semantic, bus, _transport, dir) =
+        begin_test_turn(
+            "load-order",
+            Arc::new(BlockingLlm),
+            Arc::new(agent_runtime::NullToolProvider),
+        )
+        .await;
+
+    // Mimic the adaptor: the user message belongs to the turn's session copy.
+    session.messages.push((Role::User, "user text".into()));
+
+    // What the OLD order (snapshot read before cancel_and_wait) replayed.
+    let stale = store.get(&session_id).await.unwrap();
+    assert!(
+        stale.messages.entries().is_empty(),
+        "pre-turn snapshot must be empty: the turn has not committed yet"
+    );
+
+    let manager = TurnManager::new();
+    let bus_for_turn = bus.clone();
+    let sid = session_id.clone();
+    manager
+        .start(session_id.clone(), move |cancellation| async move {
+            let _transport = bus_for_turn.subscribe_turn("turn-load-order");
+            let mut semantic = TurnEventEmitter::new_with_required_transport(
+                bus_for_turn.clone(),
+                sid.clone(),
+                "turn-load-order",
+            );
+            service
+                .run_started(TurnExecutionRequest {
+                    session_id: sid.clone(),
+                    session,
+                    generation,
+                    references: Vec::new(),
+                    cancellation,
+                    semantic: &mut semantic,
+                    action_handler: None,
+                    permission_handler: None,
+                    build_prompt,
+                })
+                .await
+                .map(|_| ())
+                .map_err(|error| RuntimeError::Task(error.to_string()))
+        })
+        .await
+        .expect("turn must start");
+
+    let cancelled = manager
+        .cancel_and_wait(&session_id)
+        .await
+        .expect("cancel must succeed");
+    assert!(cancelled);
+
+    // What the NEW order replays: the committed cancelled turn.
+    let fresh = store.get(&session_id).await.unwrap();
+    let has_user_message = fresh
+        .messages
+        .entries()
+        .iter()
+        .any(|entry| matches!(entry, HistoryEntry::User { content } if content == "user text"));
+    assert!(
+        has_user_message,
+        "snapshot read AFTER cancel_and_wait must include the committed cancelled turn"
+    );
+    std::fs::remove_dir_all(&dir).ok();
 }

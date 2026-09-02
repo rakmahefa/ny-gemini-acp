@@ -180,16 +180,18 @@ fn project_content(value: &Value) -> Option<ToolCallContent> {
         return None;
     };
     let projected = match kind {
-        "content" => value
-            .get("text")
-            .and_then(Value::as_str)
-            .map(|text| ToolCallContent::from(ContentBlock::Text(TextContent::new(text.to_owned())))),
+        "content" => value.get("text").and_then(Value::as_str).map(|text| {
+            ToolCallContent::from(ContentBlock::Text(TextContent::new(text.to_owned())))
+        }),
         "diff" => {
             let path = value.get("path").and_then(Value::as_str);
             let new_text = value.get("newText").and_then(Value::as_str);
             match (path, new_text) {
                 (Some(path), Some(new_text)) => {
-                    let old_text = value.get("oldText").and_then(Value::as_str).map(str::to_owned);
+                    let old_text = value
+                        .get("oldText")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
                     Some(ToolCallContent::Diff(
                         Diff::new(PathBuf::from(path), new_text.to_owned()).old_text(old_text),
                     ))

@@ -84,7 +84,10 @@ impl Client {
             tokio::select! {
                 result = client.run_turn(tx.clone(), prompt, refs, &resolved) => {
                     if let Err(e) = result {
-                        let _ = tx.send(Err(format!("{e:#}"))).await;
+                        // The typed error crosses the channel unchanged: the
+                        // runtime taxonomy (authentication, upload, divergence,
+                        // ...) stays intact for every downstream consumer.
+                        let _ = tx.send(Err(crate::core::errors::map_gemini_error(&e))).await;
                     }
                 }
                 _ = tx.closed() => {}
@@ -113,6 +116,59 @@ impl Client {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use crate::core::GeminiError;
+    use agent_runtime::LlmError;
+
+    fn exit_error(error: GeminiError) -> LlmError {
+        // The exact projection applied by the spawned stream task when
+        // `run_turn` fails.
+        crate::core::errors::map_gemini_error(&anyhow::Error::new(error))
+    }
+
+    #[test]
+    fn cookies_expired_arrives_as_authentication_not_provider_string() {
+        let error = exit_error(GeminiError::CookiesExpired { code: 401 });
+        assert!(
+            matches!(error, LlmError::Authentication(_)),
+            "cookies expiration must be classified as authentication, got {error:?}"
+        );
+    }
+
+    #[test]
+    fn every_stream_error_variant_keeps_its_taxonomy() {
+        assert!(matches!(
+            exit_error(GeminiError::UpstreamRejected { code: 403 }),
+            LlmError::Provider(_) | LlmError::InvalidRequest(_)
+        ));
+        assert!(matches!(
+            exit_error(GeminiError::Network("timeout".into())),
+            LlmError::Network(_)
+        ));
+        assert!(matches!(
+            exit_error(GeminiError::Http { status: 401 }),
+            LlmError::Authentication(_)
+        ));
+        assert!(matches!(
+            exit_error(GeminiError::StreamDivergence),
+            LlmError::StreamDivergence
+        ));
+        assert!(matches!(
+            exit_error(GeminiError::UploadFailed("scotty".into())),
+            LlmError::Upload(_)
+        ));
+        assert!(matches!(
+            exit_error(GeminiError::SafetyBlocked("refused".into())),
+            LlmError::Provider(_)
+        ));
+        assert!(matches!(
+            exit_error(GeminiError::UnknownModel("nope".into())),
+            LlmError::Unavailable(_)
+        ));
     }
 }
 

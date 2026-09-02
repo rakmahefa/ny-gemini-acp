@@ -204,7 +204,9 @@ fn lex(command: &str) -> Result<Vec<LexItem>, ShellParseError> {
             }
             '\n' => {
                 flush(&mut token, &mut output);
-                if has_command_after(&chars, index + 1) && matches!(output.last(), Some(LexItem::Word(_))) {
+                if has_command_after(&chars, index + 1)
+                    && matches!(output.last(), Some(LexItem::Word(_)))
+                {
                     push_operator(&mut output, ShellOperator::Sequence)?;
                 }
                 at_token_start = true;
@@ -291,7 +293,10 @@ fn flush(token: &mut String, output: &mut Vec<LexItem>) {
     }
 }
 
-fn push_operator(output: &mut Vec<LexItem>, operator: ShellOperator) -> Result<(), ShellParseError> {
+fn push_operator(
+    output: &mut Vec<LexItem>,
+    operator: ShellOperator,
+) -> Result<(), ShellParseError> {
     if !matches!(output.last(), Some(LexItem::Word(_))) {
         return Err(ShellParseError::MissingCommandAfterOperator);
     }

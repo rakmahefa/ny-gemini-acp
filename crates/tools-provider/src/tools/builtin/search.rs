@@ -10,6 +10,7 @@ use std::time::Duration;
 use regex::Regex;
 use serde_json::{json, Value};
 
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::registry::{Tool, ToolDef, ToolResult};
 use crate::tools::sandbox;
 
@@ -48,7 +49,13 @@ impl Tool for SearchTool {
         DEF.get_or_init(search_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let pattern = match args.get("pattern").and_then(Value::as_str) {
             Some(value) if !value.is_empty() => value,
             _ => return ToolResult::Err("paramètre 'pattern' manquant ou vide".into()),
@@ -236,6 +243,12 @@ fn glob_matches(pattern: &str, path: &Path) -> bool {
 }
 #[cfg(test)]
 mod tests {
+
+    fn no_cancel() -> ToolCancellation {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        ToolCancellation::from_receiver(rx)
+    }
+
     use super::*;
 
     #[tokio::test]
@@ -254,6 +267,7 @@ mod tests {
                 &json!({"pattern":"fn hello","path":"src","glob":"*.rs"}),
                 &dir,
                 &[],
+                &no_cancel(),
             )
             .await;
         assert!(matches!(result, ToolResult::Ok(value) if value.contains("a.rs:1:fn hello")));
@@ -265,7 +279,9 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        let result = SearchTool.execute(&json!({"pattern":"["}), &dir, &[]).await;
+        let result = SearchTool
+            .execute(&json!({"pattern":"["}), &dir, &[], &no_cancel())
+            .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("regex invalide")));
         let _ = tokio::fs::remove_dir_all(dir).await;
     }
@@ -279,7 +295,7 @@ mod tests {
             .await
             .unwrap();
         let result = SearchTool
-            .execute(&json!({"pattern":"pattern"}), &dir, &[])
+            .execute(&json!({"pattern":"pattern"}), &dir, &[], &no_cancel())
             .await;
         assert!(matches!(result, ToolResult::Ok(value) if value.contains("Aucune correspondance")));
         let _ = tokio::fs::remove_dir_all(dir).await;
@@ -291,7 +307,12 @@ mod tests {
             std::env::temp_dir().join(format!("acp-search-{}", uuid::Uuid::new_v4().simple()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let result = SearchTool
-            .execute(&json!({"pattern":"root","path":"/etc"}), &dir, &[])
+            .execute(
+                &json!({"pattern":"root","path":"/etc"}),
+                &dir,
+                &[],
+                &no_cancel(),
+            )
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
         let _ = tokio::fs::remove_dir_all(dir).await;

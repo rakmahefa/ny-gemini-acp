@@ -19,12 +19,7 @@ impl Store {
     }
 
     /// Écrit un snapshot via le même mécanisme atomique que les sessions.
-    pub(super) async fn persist_snapshot(
-        &self,
-        id: &str,
-        n: usize,
-        raw: &[u8],
-    ) -> Result<()> {
+    pub(super) async fn persist_snapshot(&self, id: &str, n: usize, raw: &[u8]) -> Result<()> {
         use anyhow::Context;
         Self::write_atomic(&self.snapshot_path(id, n), raw)
             .await

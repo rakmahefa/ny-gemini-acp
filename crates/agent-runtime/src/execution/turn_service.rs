@@ -222,7 +222,10 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let store = Arc::new(Store::open(&dir).await.unwrap());
-        let session = store.create("/tmp".into(), vec![], "test-model").await.unwrap();
+        let session = store
+            .create("/tmp".into(), vec![], "test-model")
+            .await
+            .unwrap();
         let (started, generation) = store.begin_turn(&session.id).await.unwrap();
         let bus = EventBus::new();
         let _projection = bus.subscribe_turn("turn-test");
@@ -276,7 +279,10 @@ mod tests {
             uuid::Uuid::new_v4().simple()
         ));
         let store = Arc::new(Store::open(&dir).await.unwrap());
-        let session = store.create("/tmp".into(), vec![], "test-model").await.unwrap();
+        let session = store
+            .create("/tmp".into(), vec![], "test-model")
+            .await
+            .unwrap();
         let (started, generation) = store.begin_turn(&session.id).await.unwrap();
         let bus = EventBus::new();
         let mut receiver = bus.subscribe_turn("turn-pre-cancel");
@@ -308,12 +314,21 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(TurnServiceError::Agent(AgentLoopError::Cancelled))));
+        assert!(matches!(
+            result,
+            Err(TurnServiceError::Agent(AgentLoopError::Cancelled))
+        ));
         assert!(semantic.is_terminal());
         let first = receiver.recv().await.unwrap();
         let second = receiver.recv().await.unwrap();
-        assert!(matches!(first, crate::events::SemanticEvent::TurnStarted { .. }));
-        assert!(matches!(second, crate::events::SemanticEvent::TurnCancelled { .. }));
+        assert!(matches!(
+            first,
+            crate::events::SemanticEvent::TurnStarted { .. }
+        ));
+        assert!(matches!(
+            second,
+            crate::events::SemanticEvent::TurnCancelled { .. }
+        ));
 
         bus.close_turn("turn-pre-cancel");
         std::fs::remove_dir_all(&dir).ok();

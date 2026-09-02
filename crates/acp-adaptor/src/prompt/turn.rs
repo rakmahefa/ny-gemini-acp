@@ -14,7 +14,9 @@ use agent_client_protocol::schema::v1::{
 use agent_client_protocol::Error as AcpError;
 use agent_runtime::events::TurnEventEmitter;
 use agent_runtime::state::{Role, TurnError};
-use agent_runtime::{AgentLoopError, LlmError, LlmProviderErrorKind, SessionManager, TurnExecutionRequest};
+use agent_runtime::{
+    AgentLoopError, LlmError, LlmProviderErrorKind, SessionManager, TurnExecutionRequest,
+};
 use permission::AcpToolPermissionHandler;
 use tools_provider::tools::executor::safe_session_update;
 
@@ -46,6 +48,7 @@ fn agent_error_kind(error: &AgentLoopError) -> &'static str {
         AgentLoopError::NoProgress => "no_progress",
         AgentLoopError::MaxRounds(_) => "max_rounds",
         AgentLoopError::ToolCallLimit { .. } => "tool_call_limit",
+        AgentLoopError::ToolCallBudgetExhausted { .. } => "tool_call_budget",
         AgentLoopError::InvalidToolCall(_) => "invalid_tool_call",
         AgentLoopError::InvalidModelSequence(_) => "invalid_model_sequence",
         AgentLoopError::SemanticEventRejected => "semantic_event_rejected",
@@ -89,18 +92,14 @@ fn turn_service_error_response(
         agent_runtime::TurnServiceError::Agent(agent_error) => {
             agent_error_response(session_id, agent_error)
         }
-        agent_runtime::TurnServiceError::Persistence(persistence) => {
-            AcpError::internal_error().data(serde_json::json!({
+        agent_runtime::TurnServiceError::Persistence(persistence) => AcpError::internal_error()
+            .data(serde_json::json!({
                 "error": "turn_finalization_failed",
                 "kind": "persistence",
                 "message": persistence.to_string(),
                 "session_id": session_id,
-            }))
-        }
-        agent_runtime::TurnServiceError::AgentAndPersistence {
-            agent,
-            persistence,
-        } => {
+            })),
+        agent_runtime::TurnServiceError::AgentAndPersistence { agent, persistence } => {
             let mut data = serde_json::json!({
                 "error": "turn_failed_and_finalization_failed",
                 "kind": "agent_and_persistence",
@@ -157,6 +156,17 @@ pub async fn run_turn(
             fail_before_execution(ctx.semantic);
             return Err(AcpError::invalid_params().data(serde_json::json!({"session_id": session_id.to_string(), "error": "a turn is already running; send session/cancel first"})));
         }
+        Err(TurnError::BusyIo(message)) => {
+            fail_before_execution(ctx.semantic);
+            // Storage fault, not a concurrency signal: projected as an
+            // internal error so the user never gets told to cancel a turn
+            // that does not exist.
+            return Err(AcpError::internal_error().data(serde_json::json!({
+                "session_id": session_id.to_string(),
+                "error": "session_storage_io_failure",
+                "message": message,
+            })));
+        }
     };
 
     let (user_text, images) = blocks_to_parts(&req.prompt);
@@ -164,7 +174,17 @@ pub async fn run_turn(
 
     if session.title.is_none() && !user_text.trim().is_empty() {
         let title = derive_title(&user_text);
-        session.title = Some(title.clone());
+        // Persistence invariant: the store's live entry must receive the title
+        // here. `end_turn` merges the live entry's title into the final commit,
+        // so a session that only ever notified the UI lost its title on
+        // restart or fork (session/list and session/load returned None).
+        let persisted = ctx
+            .store
+            .update_session(sid, |s| s.title = Some(title.clone()))
+            .await;
+        if let Err(error) = persisted {
+            tracing::warn!(session=%session_id, error=%error, "failed to persist derived session title");
+        }
         safe_session_update(
             &ctx.cx,
             &session_id,
@@ -172,14 +192,23 @@ pub async fn run_turn(
         );
     }
 
-    let refs = match uploads::upload_images(&*ctx.llm, &ctx.cx, &session_id, &images).await {
+    let refs = match uploads::upload_images(&*ctx.llm, Some(&ctx.cx), &session_id, &images).await {
         Ok(refs) => refs,
-        Err(()) => {
+        Err(upload_error) => {
             fail_before_execution(ctx.semantic);
+            // The user message is pushed BEFORE finalizing so it survives the
+            // replay: the failed turn still shows what the user asked for.
+            session.messages.push((Role::User, user_text));
             if let Err(error) = ctx.store.end_turn(sid, session, generation).await {
-                tracing::warn!(session=%session_id, error=%error, "turn finalization failed after image upload refusal");
+                tracing::warn!(session=%session_id, error=%error, "turn finalization failed after image upload failure");
             }
-            return Ok(PromptResponse::new(StopReason::Refusal));
+            return Err(AcpError::internal_error().data(serde_json::json!({
+                "session_id": session_id.to_string(),
+                "error": "image_upload_failed",
+                "message": upload_error.message,
+                "image_index": upload_error.index,
+                "image_total": upload_error.total,
+            })));
         }
     };
 
@@ -188,7 +217,7 @@ pub async fn run_turn(
     let action_handler = action::shared(ctx.cx.clone(), session_id.clone());
     let permission_handler = std::sync::Arc::new(AcpToolPermissionHandler::new(
         ctx.cx.clone(),
-        ctx.tools.clone(),
+        ctx.store.clone(),
     ));
 
     let result = ctx
@@ -213,19 +242,18 @@ pub async fn run_turn(
             span.record("outcome", "success");
             let usage_prompt =
                 crate::prompt::build::build_prompt(&result.session, Some(&*ctx.tools));
-            if let Err(error) = notify_usage(
-                &ctx.cx,
-                &session_id,
-                &usage_prompt,
-                &result.outcome.output,
-            ) {
+            if let Err(error) =
+                notify_usage(&ctx.cx, &session_id, &usage_prompt, &result.outcome.output)
+            {
                 tracing::warn!(session=%session_id, error=%error, "notify_usage failed after successful turn");
             }
             Ok(PromptResponse::new(StopReason::EndTurn))
         }
         Err(error) => {
             let outcome = match &error {
-                agent_runtime::TurnServiceError::Agent(agent_error) => agent_error_kind(agent_error),
+                agent_runtime::TurnServiceError::Agent(agent_error) => {
+                    agent_error_kind(agent_error)
+                }
                 agent_runtime::TurnServiceError::Persistence(_) => "persistence",
                 agent_runtime::TurnServiceError::AgentAndPersistence { .. } => {
                     "agent_and_persistence"
@@ -287,7 +315,9 @@ mod tests {
             None
         );
         assert_eq!(
-            map_agent_error(&AgentLoopError::Action(AgentActionError::Failed("boom".into()))),
+            map_agent_error(&AgentLoopError::Action(AgentActionError::Failed(
+                "boom".into()
+            ))),
             None
         );
     }
@@ -303,7 +333,10 @@ mod tests {
             agent_error_kind(&AgentLoopError::SemanticEventRejected),
             "semantic_event_rejected"
         );
-        assert_eq!(agent_error_kind(&AgentLoopError::MaxRounds(3)), "max_rounds");
+        assert_eq!(
+            agent_error_kind(&AgentLoopError::MaxRounds(3)),
+            "max_rounds"
+        );
     }
 
     #[test]

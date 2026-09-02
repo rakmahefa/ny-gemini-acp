@@ -34,7 +34,5 @@ fn derive_title_vide_renvoie_defaut() {
 #[test]
 fn derive_title_unicode_compte_chars_pas_octets() {
     let title = derive_title(&"🚀".repeat(300));
-    assert!(
-        title.chars().count() <= agent_runtime::session::MAX_TITLE_LENGTH + 1
-    );
+    assert!(title.chars().count() <= agent_runtime::session::MAX_TITLE_LENGTH + 1);
 }

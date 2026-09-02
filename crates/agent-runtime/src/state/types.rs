@@ -63,6 +63,19 @@ impl SessionMode {
     }
 }
 
+/// A session-scoped permission rule (SPEC-P1-04): the memory of an
+/// "always allow" or "always reject" choice for one tool/kind pair. Rules
+/// live and die with the session — they are never inherited by forks and
+/// never shared across sessions, because no global permission store exists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPermissionRule {
+    pub tool: String,
+    /// Permission kind: "read", "write" or "execute".
+    pub kind: String,
+    /// true = always allow, false = always reject.
+    pub allow: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -80,6 +93,9 @@ pub struct Session {
     pub turn_count: u64,
     #[serde(alias = "history")]
     pub messages: History,
+    /// "Always allow / always reject" choices, scoped to this session only.
+    #[serde(default)]
+    pub permission_rules: Vec<SessionPermissionRule>,
 }
 
 impl Session {
@@ -103,6 +119,7 @@ impl Session {
             mode: SessionMode::Default,
             turn_count: 0,
             messages: History::new(),
+            permission_rules: Vec::new(),
         }
     }
 
@@ -121,6 +138,9 @@ impl Session {
             mode: self.mode,
             turn_count: 0,
             messages: self.messages.clone(),
+            // Permission grants are session-scoped: a fork is a new session
+            // and never inherits them.
+            permission_rules: Vec::new(),
         }
     }
 }
@@ -131,6 +151,12 @@ pub enum TurnError {
     NotFound(String),
     #[error("a turn is already active on this session — send session/cancel first")]
     AlreadyRunning,
+    /// The busy sentinel could not be created or written for an I/O reason
+    /// (disk full, permission denied, name too long, ...). Distinct from
+    /// `AlreadyRunning`: telling the user to cancel a turn that does not
+    /// exist would be a lying diagnostic.
+    #[error("session storage I/O failure: {0}")]
+    BusyIo(String),
 }
 
 #[derive(Debug, Error)]

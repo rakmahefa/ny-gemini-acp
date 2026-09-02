@@ -450,18 +450,27 @@ impl McpCatalog {
         args: &Value,
         _cwd: &Path,
         _extra_dirs: &[PathBuf],
+        cancellation: &crate::tools::contracts::ToolCancellation,
     ) -> Option<crate::tools::registry::ToolResult> {
         let binding = self.tools.iter().find(|binding| {
             qualified_name(&binding.server_name, &binding.descriptor.name) == qualified
         })?;
         let server = self.servers.get(binding.server_index)?;
+        // Cancellation (SPEC-P1-04): a cancelled session/cancel aborts the
+        // in-flight request instead of waiting out the full 120 s timeout.
+        // The stdio transport correlates responses by request id, so the
+        // abandoned response cannot poison a subsequent call.
         let mut server = server.lock().await;
-        match server
-            .call_tool(&binding.descriptor.name, args.clone())
-            .await
-        {
-            Ok(result) => Some(result.into_tool_result()),
-            Err(error) => Some(crate::tools::registry::ToolResult::Err(error.to_string())),
+        let call = server.call_tool(&binding.descriptor.name, args.clone());
+        tokio::pin!(call);
+        tokio::select! {
+            result = &mut call => match result {
+                Ok(result) => Some(result.into_tool_result()),
+                Err(error) => Some(crate::tools::registry::ToolResult::Err(error.to_string())),
+            },
+            _ = cancellation.cancelled() => Some(crate::tools::registry::ToolResult::Err(
+                "outil MCP annulé par session/cancel".into(),
+            )),
         }
     }
 }

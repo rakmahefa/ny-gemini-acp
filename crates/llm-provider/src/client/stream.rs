@@ -18,6 +18,7 @@ use tracing::{debug, trace, warn};
 use super::config::{StreamItem, StreamResult, ENDPOINT, TOKEN_TTL};
 use super::payload::{extract_page_tokens, load_jar, next_reqid, payload};
 use super::Client;
+use agent_runtime::LlmError;
 
 // C-17 : plafond par frame individuelle (ligne du flux Gemini). Ne pas
 // confondre avec `MAX_BUFFER_BYTES` (core/frames.rs) qui borne le buffer
@@ -46,7 +47,9 @@ struct IncrementalUtf8 {
 
 impl IncrementalUtf8 {
     fn new() -> Self {
-        Self { residual: Vec::new() }
+        Self {
+            residual: Vec::new(),
+        }
     }
 
     /// Pousse un chunk d'octets et retourne le texte valide correspondant.
@@ -107,13 +110,7 @@ async fn feed_decoded_text(
     raw_accumulator: &mut String,
     text: &str,
 ) -> anyhow::Result<bool> {
-    if state
-        .decoder
-        .pending()
-        .len()
-        .saturating_add(text.len())
-        > MAX_FRAME_BYTES
-    {
+    if state.decoder.pending().len().saturating_add(text.len()) > MAX_FRAME_BYTES {
         return Err(GeminiError::Other(anyhow::anyhow!(
             "Gemini frame exceeded the configured safety limit ({MAX_FRAME_BYTES} bytes)"
         ))
@@ -129,41 +126,52 @@ async fn feed_decoded_text(
         truncate_at_char_boundary(raw_accumulator, MAX_RAW_ACCUMULATOR);
     }
 
-    // D-14 : erreur amont wire-level — détection par regex précise
-    // (BardErrorInfo [code]) au lieu d'un `contains` sur le flux brut, qui
-    // pouvait déclencher un faux positif si le modèle échoédait ce texte.
-    if let Some(code) = frames::bard_error(&format!(
-        "{}{}",
-        state.decoder.pending(),
-        text
-    )) {
-        if code == 401 {
-            return Err(GeminiError::CookiesExpired { code }.into());
-        }
-        return Err(GeminiError::UpstreamRejected { code }.into());
-    }
+    // SPEC-P1-06: no detection runs on the undecoded raw stream. Backend
+    // errors and safety blocks are identified on DECODED frames only, so a
+    // model echoing e.g. "BardErrorInfo [401]" inside legitimate prose can
+    // never kill the stream by mistake.
     for frame in state.decoder.feed(text) {
-        // D-14 : blocage sécurité détecté sur les frames JSON décodées
-        // (métadonnée typée `blockReason`) et non sur le flux brut — un
-        // « blockReason » présent dans le texte du modèle ne tue plus le
-        // stream par erreur.
         if let GeminiFrameEvent::Metadata { kind, value } = &frame {
             if kind == "blockReason" {
                 let reason = value.as_str().unwrap_or("politique de sécurité");
                 let _ = state
                     .tx
-                    .send(Err(GeminiError::SafetyBlocked(format!(
+                    .send(Err(LlmError::Provider(format!(
                         "Gemini a refusé de répondre (blockReason: {reason}). Reformulez votre prompt."
-                    ))
-                    .to_string()))
+                    ))))
                     .await;
                 return Ok(true);
             }
         }
+        if let Some(code) = decoded_bard_error(&frame) {
+            if code == 401 {
+                return Err(GeminiError::CookiesExpired { code }.into());
+            }
+            return Err(GeminiError::UpstreamRejected { code }.into());
+        }
         validate_frame_event(&frame)?;
-        emit_frame(frame, state.emitted, state.emitted_tools, state.diverged, state.tx).await?;
+        emit_frame(
+            frame,
+            state.emitted,
+            state.emitted_tools,
+            state.diverged,
+            state.tx,
+        )
+        .await?;
     }
     Ok(false)
+}
+
+/// Detects a backend error marker inside a DECODED frame's metadata payload
+/// (e.g. an `unparsed_frame` preview). This replaces the former pre-decode
+/// scan of the raw stream: a structural, protocol-level signal only. Text
+/// candidates are deliberately NOT scanned — prose quoting the marker is
+/// data, not a backend failure.
+fn decoded_bard_error(frame: &GeminiFrameEvent) -> Option<i64> {
+    match frame {
+        GeminiFrameEvent::Metadata { value, .. } => frames::bard_error(&value.to_string()),
+        GeminiFrameEvent::Text(_) | GeminiFrameEvent::ToolCall { .. } => None,
+    }
 }
 
 impl Client {
@@ -199,16 +207,14 @@ impl Client {
                 Err(e) => {
                     // D-14 : décision de retry basée sur les erreurs typées (et
                     // plus sur des sous-chaînes du message d'erreur).
-                    let fatal = e
-                        .downcast_ref::<GeminiError>()
-                        .is_some_and(|error| {
-                            matches!(
-                                error,
-                                GeminiError::CookiesExpired { .. }
-                                    | GeminiError::UpstreamRejected { .. }
-                                    | GeminiError::UnknownModel(_)
-                            )
-                        });
+                    let fatal = e.downcast_ref::<GeminiError>().is_some_and(|error| {
+                        matches!(
+                            error,
+                            GeminiError::CookiesExpired { .. }
+                                | GeminiError::UpstreamRejected { .. }
+                                | GeminiError::UnknownModel(_)
+                        )
+                    });
                     if fatal {
                         return Err(e);
                     }
@@ -301,15 +307,21 @@ impl Client {
                         if blocked {
                             return Ok(Some(()));
                         }
-                        if let Some(reason) = frames::detect_safety_block(&raw_accumulator) {
-                            let _ = state.tx.send(Err(reason)).await;
-                            return Ok(Some(()));
-                        }
+                        // SPEC-P1-06: the former raw-accumulator safety scan
+                        // (hardcoded refusal phrases like "I can't help with
+                        // that") is removed. Safety blocks are detected on
+                        // the typed `blockReason` metadata of decoded frames
+                        // above; prose quoting a refusal phrase is data.
                         if *state.diverged {
                             return Err(GeminiError::StreamDivergence.into());
                         }
                         if state.emitted.is_empty() && state.emitted_tools.is_empty() && frames::is_empty_stream(&raw_accumulator) {
-                            let _ = state.tx.send(Err("Gemini n'a produit aucune réponse exploitable.".to_string())).await;
+                            let _ = state
+                                .tx
+                                .send(Err(LlmError::Provider(
+                                    "Gemini produced no usable response.".to_string(),
+                                )))
+                                .await;
                             return Ok(Some(()));
                         }
                         return Ok(Some(()));
@@ -644,5 +656,76 @@ mod tests {
         let mut s = "ééé".to_string();
         truncate_at_char_boundary(&mut s, 0);
         assert_eq!(s, "");
+    }
+}
+
+#[cfg(test)]
+mod decoded_detection_tests {
+    use super::*;
+    use crate::core::frames::{GeminiFrameDecoder, GeminiFrameEvent};
+    use serde_json::{json, Value};
+
+    fn wire_line(inner: Value) -> String {
+        let escaped = serde_json::to_string(&inner.to_string()).unwrap();
+        format!("[[\"wrb.fr\",[62,0],{escaped}],[\"di\",72]]")
+    }
+
+    /// SPEC-P1-06: prose quoting a refusal phrase or a backend error marker
+    /// is data — it must be emitted, never abort the stream.
+    #[tokio::test]
+    async fn prose_quoting_refusal_phrases_and_error_markers_is_emitted() {
+        let decoder = &mut GeminiFrameDecoder::new();
+        let emitted = &mut String::new();
+        let tools = &mut HashSet::new();
+        let diverged = &mut false;
+        let (tx, mut rx) = mpsc::channel(8);
+        let state = &mut AttemptState {
+            decoder,
+            emitted,
+            emitted_tools: tools,
+            diverged,
+            tx: &tx,
+        };
+        let raw = &mut String::new();
+
+        let inner = json!([
+            null,
+            ["tok"],
+            "padding-padding-padding-padding",
+            [],
+            json!([[
+                "c",
+                ["Le modele a dit : I can't help with that et BardErrorInfo [401]"]
+            ]]),
+            [],
+            [],
+            []
+        ]);
+        let line = wire_line(inner);
+        let blocked = feed_decoded_text(state, raw, &format!("{line}\n"))
+            .await
+            .unwrap();
+        assert!(!blocked, "legitimate prose quoting markers must not abort");
+        // Release the channel sender so the collector below can drain it.
+        drop(tx);
+        let mut seen = String::new();
+        while let Ok(item) = rx.try_recv() {
+            if let Ok(StreamItem::Text(delta)) = item {
+                seen.push_str(&delta);
+            }
+        }
+        assert!(seen.contains("I can't help with that"), "seen = {seen:?}");
+        assert!(seen.contains("BardErrorInfo [401]"), "seen = {seen:?}");
+    }
+
+    /// SPEC-P1-06: a structural backend error (unparsed frame metadata) is
+    /// still classified as a real failure.
+    #[tokio::test]
+    async fn structural_backend_error_in_metadata_is_detected() {
+        let frame = GeminiFrameEvent::Metadata {
+            kind: "unparsed_frame".into(),
+            value: serde_json::json!({"preview": "{\"error\": \"BardErrorInfo [401]\"}"}),
+        };
+        assert_eq!(decoded_bard_error(&frame), Some(401));
     }
 }

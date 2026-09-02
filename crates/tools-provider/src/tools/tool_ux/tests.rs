@@ -47,10 +47,20 @@ fn core_tools_keep_one_text_card() {
         ("list_directory", json!({"path":"src"})),
         ("search", json!({"pattern":"foo"})),
         ("shell_exec", json!({"command":"cargo test"})),
-        ("AskUserQuestion", json!({"questions":[{"question":"Continue?","options":[{"label":"Yes"}]}]})),
+        (
+            "AskUserQuestion",
+            json!({"questions":[{"question":"Continue?","options":[{"label":"Yes"}]}]}),
+        ),
     ] {
         let info = ToolInfo::build(name, &args, cwd, None);
-        assert_eq!(info.content.first().and_then(|v| v.get("type")).and_then(Value::as_str), Some("content"), "missing card for {name}");
+        assert_eq!(
+            info.content
+                .first()
+                .and_then(|v| v.get("type"))
+                .and_then(Value::as_str),
+            Some("content"),
+            "missing card for {name}"
+        );
     }
 }
 
@@ -64,9 +74,15 @@ fn rich_presentation_remains_structured_and_host_neutral() {
         None,
     );
     assert_eq!(edit.kind, ToolUiKind::FileEdit);
-    assert!(edit.content.iter().any(|v| v.get("type").and_then(Value::as_str) == Some("diff")));
+    assert!(edit
+        .content
+        .iter()
+        .any(|v| v.get("type").and_then(Value::as_str) == Some("diff")));
     assert_eq!(edit.locations.len(), 1);
-    assert_eq!(edit.locations[0].get("path").and_then(Value::as_str), Some("/tmp/project/src/lib.rs"));
+    assert_eq!(
+        edit.locations[0].get("path").and_then(Value::as_str),
+        Some("/tmp/project/src/lib.rs")
+    );
 
     let shell = ToolInfo::build("shell_exec", &json!({"command":"pwd"}), cwd, Some("term-7"));
     assert_eq!(shell.kind, ToolUiKind::Shell);
@@ -75,9 +91,17 @@ fn rich_presentation_remains_structured_and_host_neutral() {
             && v.get("id").and_then(Value::as_str) == Some("term-7")
     }));
 
-    let read = ToolInfo::build("file_read", &json!({"path":"src/lib.rs","offset":7}), cwd, None);
+    let read = ToolInfo::build(
+        "file_read",
+        &json!({"path":"src/lib.rs","offset":7}),
+        cwd,
+        None,
+    );
     assert_eq!(read.kind, ToolUiKind::FileRead);
-    assert_eq!(read.locations[0].get("line").and_then(Value::as_u64), Some(7));
+    assert_eq!(
+        read.locations[0].get("line").and_then(Value::as_u64),
+        Some(7)
+    );
 }
 
 #[test]

@@ -13,7 +13,7 @@ mod types;
 
 pub use history::{History, HistoryEntry};
 pub(crate) use types::MAX_SNAPSHOTS;
-pub use types::{Live, Role, Session, SessionMode, StoreError, TurnError};
+pub use types::{Live, Role, Session, SessionMode, SessionPermissionRule, StoreError, TurnError};
 
 #[derive(Clone)]
 pub struct Store {
@@ -25,9 +25,16 @@ impl Store {
     pub async fn begin_turn(&self, id: &str) -> Result<(Session, u64), TurnError> {
         // The filesystem sentinel is the inter-process ownership boundary. Do
         // not hold the global in-memory write lock across filesystem I/O.
-        self.acquire_busy(id)
-            .await
-            .map_err(|_| TurnError::AlreadyRunning)?;
+        match self.acquire_busy(id).await {
+            Ok(()) => {}
+            // A live sentinel means another turn owns the session.
+            Err(busy::AcquireBusyFailure::Busy) => return Err(TurnError::AlreadyRunning),
+            // Any other failure is a storage fault, not a concurrency signal.
+            Err(busy::AcquireBusyFailure::Io(error)) => {
+                tracing::error!(session = %id, error = %error, "busy sentinel I/O failure");
+                return Err(TurnError::BusyIo(error.to_string()));
+            }
+        }
 
         let mut live = self.live.write().await;
         if let Some(entry) = live.get_mut(id) {
@@ -75,7 +82,12 @@ impl Store {
         Ok(())
     }
 
-    pub async fn end_turn(&self, id: &str, session: Session, expected_gen: u64) -> Result<(), StoreError> {
+    pub async fn end_turn(
+        &self,
+        id: &str,
+        session: Session,
+        expected_gen: u64,
+    ) -> Result<(), StoreError> {
         // D-05 : le verrou d'écriture est tenu jusqu'au commit. `end_turn` est
         // appelé une seule fois par tour : la contention acceptable achète une
         // atomité réelle face à un `update_session` concurrent (fusion) et face
@@ -107,6 +119,11 @@ impl Store {
         // set_model, set_think, tools_enabled, titre, répertoires) font foi
         // depuis l'entrée live ; le tour ne contribue que l'historique et
         // turn_count.
+        //
+        // Invariant (SPEC-P0-02) : `title` merge depuis l'entrée live, qui
+        // est écrite par l'adaptateur via `update_session` au moment de la
+        // dérivation du titre. Un titre qui n'a été que notifié à l'UI sans
+        // écriture store serait écrasé ici et perdu après redémarrage/fork.
         let live_session = &entry.session;
         final_session.cwd = live_session.cwd.clone();
         final_session.additional_directories = live_session.additional_directories.clone();
@@ -115,6 +132,10 @@ impl Store {
         final_session.think = live_session.think;
         final_session.tools_enabled = live_session.tools_enabled;
         final_session.mode = live_session.mode;
+        // SPEC-P1-04: "always allow/reject" rules are written mid-turn via
+        // `update_session`; taking the live entry's rules keeps them across
+        // the final commit.
+        final_session.permission_rules = live_session.permission_rules.clone();
 
         final_session.messages.normalize_legacy();
         final_session.updated_at = crate::time::now_iso();
@@ -123,9 +144,10 @@ impl Store {
         // Commit the canonical session first. A snapshot is an auxiliary
         // recovery artifact and must never become newer than the canonical
         // state while the canonical write is failing.
-        let persist_result = self.persist(&final_session).await.map_err(|error| {
-            StoreError::Persistence(error.to_string())
-        });
+        let persist_result = self
+            .persist(&final_session)
+            .await
+            .map_err(|error| StoreError::Persistence(error.to_string()));
 
         if persist_result.is_ok() {
             if !final_session.messages.is_empty() {

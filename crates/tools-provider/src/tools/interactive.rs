@@ -11,6 +11,8 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
+use crate::tools::contracts::ToolCancellation;
+
 use agent_client_protocol::schema::v1::{
     CreateElicitationRequest, ElicitationAction, ElicitationContentValue, ElicitationFormMode,
     ElicitationPropertySchema, ElicitationSchema, ElicitationSessionScope, SessionId,
@@ -115,7 +117,13 @@ impl Tool for AskUserQuestionTool {
         DEF.get_or_init(definition)
     }
 
-    async fn execute(&self, args: &Value, _cwd: &Path, _allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        _cwd: &Path,
+        _allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let input: AskUserInput = match serde_json::from_value(args.clone()) {
             Ok(input) => input,
             Err(error) => {

@@ -9,6 +9,7 @@ use std::time::Duration;
 use reqwest::{Client, Url};
 use serde_json::{json, Value};
 
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::registry::{Tool, ToolDef, ToolResult};
 
 const SEARCH_ENDPOINT: &str = "https://html.duckduckgo.com/html/";
@@ -65,7 +66,13 @@ impl Tool for WebSearchTool {
         DEF.get_or_init(web_search_def)
     }
 
-    async fn execute(&self, args: &Value, _cwd: &Path, _allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        _cwd: &Path,
+        _allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let query = match normalized_bounded_string(args.get("query"), MAX_QUERY_CHARS) {
             Some(value) if !value.is_empty() => value,
             _ => return ToolResult::Err("paramètre 'query' manquant, vide ou trop long".into()),
@@ -406,6 +413,12 @@ fn format_results(results: &[SearchResult]) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    fn no_cancel() -> ToolCancellation {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        ToolCancellation::from_receiver(rx)
+    }
+
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
@@ -432,10 +445,7 @@ mod tests {
         let results = parse_results(html, 1);
 
         assert_eq!(results.len(), 1);
-        assert_eq!(
-            results[0].snippet,
-            "A useful snippet with nested tags."
-        );
+        assert_eq!(results[0].snippet, "A useful snippet with nested tags.");
     }
 
     #[test]
@@ -481,7 +491,7 @@ mod tests {
     #[tokio::test]
     async fn empty_query_is_rejected_without_network() {
         let result = WebSearchTool
-            .execute(&json!({"query":"   "}), Path::new("."), &[])
+            .execute(&json!({"query":"   "}), Path::new("."), &[], &no_cancel())
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("query")));
     }
@@ -493,6 +503,7 @@ mod tests {
                 &json!({"query":"x".repeat(MAX_QUERY_CHARS + 1)}),
                 Path::new("."),
                 &[],
+                &no_cancel(),
             )
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("trop long")));

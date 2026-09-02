@@ -13,6 +13,10 @@ use crate::{
 
 const DEFAULT_MAX_ROUNDS: usize = 20;
 const DEFAULT_MAX_TOOL_CALLS_PER_ROUND: usize = 32;
+/// Honest per-turn business bound (SPEC-P1-05): a turn may execute at most
+/// this many tool calls in total across all rounds. Exhausting it is a real,
+/// reported condition — not a disguised overflow check.
+const DEFAULT_MAX_TOOL_CALLS_PER_TURN: usize = 128;
 /// C-17 : plafond de sécurité runtime (chars de contexte). La voie ACP
 /// applique un budget bien plus strict en amont (`MAX_PROMPT_CHARS = 32_000`
 /// dans acp-adaptor/prompt/build.rs) : la compaction d'urgence ci-dessous ne
@@ -57,12 +61,14 @@ pub trait AgentActionHandler: Send + Sync {
 pub struct AgentLoopConfig {
     pub max_rounds: usize,
     pub max_tool_calls_per_round: usize,
+    pub max_tool_calls_per_turn: usize,
 }
 impl Default for AgentLoopConfig {
     fn default() -> Self {
         Self {
             max_rounds: DEFAULT_MAX_ROUNDS,
             max_tool_calls_per_round: DEFAULT_MAX_TOOL_CALLS_PER_ROUND,
+            max_tool_calls_per_turn: DEFAULT_MAX_TOOL_CALLS_PER_TURN,
         }
     }
 }
@@ -76,6 +82,11 @@ impl AgentLoopConfig {
         if self.max_tool_calls_per_round == 0 {
             return Err(AgentLoopError::InvalidConfig(
                 "max_tool_calls_per_round must be greater than zero".into(),
+            ));
+        }
+        if self.max_tool_calls_per_turn == 0 {
+            return Err(AgentLoopError::InvalidConfig(
+                "max_tool_calls_per_turn must be greater than zero".into(),
             ));
         }
         Ok(self)
@@ -107,6 +118,8 @@ pub enum AgentLoopError {
     MaxRounds(usize),
     #[error("model emitted too many tool calls in one round: {actual} > {limit}")]
     ToolCallLimit { actual: usize, limit: usize },
+    #[error("tool call budget exhausted for this turn: {actual} > {limit}")]
+    ToolCallBudgetExhausted { actual: usize, limit: usize },
     #[error("invalid tool call: {0}")]
     InvalidToolCall(String),
     #[error("invalid model event sequence: {0}")]
@@ -278,14 +291,17 @@ impl AgentLoop {
                     session.messages.push_assistant(round_result.text.clone());
                 }
                 for call in &executable {
-                    let message = format!(
-                        "non exécuté : appel abandonné suite à l'action « {action_name} »"
-                    );
+                    let message =
+                        format!("non exécuté : appel abandonné suite à l'action « {action_name} »");
                     let ui = tools.ui_model(&call.id, &call.name, &call.arguments);
-                    let completed_ui = ui
-                        .map(|model| model.completed(false, Some(serde_json::json!({"text": message}))));
-                    if !sink.tool_call_requested(call.id.clone(), call.name.clone(), completed_ui.clone())
-                    {
+                    let completed_ui = ui.map(|model| {
+                        model.completed(false, Some(serde_json::json!({"text": message})))
+                    });
+                    if !sink.tool_call_requested(
+                        call.id.clone(),
+                        call.name.clone(),
+                        completed_ui.clone(),
+                    ) {
                         let _ = sink.turn_failed();
                         return Err(AgentLoopError::SemanticEventRejected);
                     }
@@ -329,12 +345,15 @@ impl AgentLoop {
                 });
             }
 
-            total_tool_calls = total_tool_calls.checked_add(executable.len()).ok_or(
-                AgentLoopError::ToolCallLimit {
-                    actual: usize::MAX,
-                    limit: usize::MAX,
-                },
-            )?;
+            let projected = total_tool_calls.saturating_add(executable.len());
+            if projected > self.config.max_tool_calls_per_turn {
+                let _ = sink.turn_failed();
+                return Err(AgentLoopError::ToolCallBudgetExhausted {
+                    actual: projected,
+                    limit: self.config.max_tool_calls_per_turn,
+                });
+            }
+            total_tool_calls = projected;
             ensure_not_cancelled(&cancellation, sink)?;
 
             if !round_result.text.trim().is_empty() {
@@ -767,7 +786,8 @@ mod tests {
             Arc::new(crate::NullToolProvider),
             AgentLoopConfig {
                 max_rounds: 0,
-                max_tool_calls_per_round: 1
+                max_tool_calls_per_round: 1,
+                max_tool_calls_per_turn: 8
             }
         )
         .is_err());

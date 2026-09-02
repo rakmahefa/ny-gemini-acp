@@ -3,6 +3,7 @@
 //! The migration stays on the existing `Tool`/`ToolRegistry` architecture and
 //! centralizes path security through `sandbox::validate_path`.
 
+use crate::tools::contracts::ToolCancellation;
 use crate::tools::registry::{Tool, ToolDef, ToolResult};
 use crate::tools::sandbox;
 use serde_json::{json, Value};
@@ -52,7 +53,13 @@ impl Tool for FileReadTool {
         DEF.get_or_init(file_read_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let path = match resolve_path(args, cwd, allowed_dirs) {
             Ok(p) => p,
             Err(e) => return e,
@@ -159,7 +166,13 @@ impl Tool for FileWriteTool {
         DEF.get_or_init(file_write_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let path = match resolve_path(args, cwd, allowed_dirs) {
             Ok(p) => p,
             Err(e) => return e,
@@ -201,7 +214,13 @@ impl Tool for FileEditTool {
         DEF.get_or_init(file_edit_def)
     }
 
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult {
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        _cancellation: &ToolCancellation,
+    ) -> ToolResult {
         let path = match resolve_path(args, cwd, allowed_dirs) {
             Ok(p) => p,
             Err(e) => return e,
@@ -263,6 +282,12 @@ async fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+
+    fn no_cancel() -> ToolCancellation {
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        ToolCancellation::from_receiver(rx)
+    }
+
     use super::*;
 
     async fn temp_dir() -> PathBuf {
@@ -279,7 +304,12 @@ mod tests {
             .await
             .unwrap();
         let result = FileReadTool
-            .execute(&json!({"path":"test.txt","offset":2,"limit":1}), &dir, &[])
+            .execute(
+                &json!({"path":"test.txt","offset":2,"limit":1}),
+                &dir,
+                &[],
+                &no_cancel(),
+            )
             .await;
         assert!(matches!(result, ToolResult::Ok(value) if value == "two"));
         let _ = tokio::fs::remove_dir_all(dir).await;
@@ -289,7 +319,12 @@ mod tests {
     async fn write_allows_empty_content() {
         let dir = temp_dir().await;
         let result = FileWriteTool
-            .execute(&json!({"path":"empty.txt","content":""}), &dir, &[])
+            .execute(
+                &json!({"path":"empty.txt","content":""}),
+                &dir,
+                &[],
+                &no_cancel(),
+            )
             .await;
         assert!(result.is_ok());
         assert_eq!(
@@ -312,6 +347,7 @@ mod tests {
                 &json!({"path":"test.txt","old_string":"x","new_string":"y"}),
                 &dir,
                 &[],
+                &no_cancel(),
             )
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("ambigu")));
@@ -328,6 +364,7 @@ mod tests {
                 &json!({"path":"test.txt","old_string":"x","new_string":"y","replace_all":true}),
                 &dir,
                 &[],
+                &no_cancel(),
             )
             .await;
         assert!(result.is_ok());
@@ -339,7 +376,7 @@ mod tests {
     async fn traversal_is_blocked() {
         let dir = temp_dir().await;
         let result = FileReadTool
-            .execute(&json!({"path":"../../etc/passwd"}), &dir, &[])
+            .execute(&json!({"path":"../../etc/passwd"}), &dir, &[], &no_cancel())
             .await;
         assert!(matches!(result, ToolResult::Err(error) if error.contains("Sécurité")));
         let _ = tokio::fs::remove_dir_all(dir).await;

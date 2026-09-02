@@ -247,13 +247,12 @@ mod tests {
 
         // The assistant scope is handed off to the pending action, not exposed as
         // an `AssistantCompleted` event before that action executes.
-        assert!(harness
-            .emitter
-            .tool_call_requested("call-1", "search"));
+        assert!(harness.emitter.tool_call_requested("call-1", "search"));
         let events: Vec<_> = std::iter::from_fn(|| harness.receiver.try_recv().ok()).collect();
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, crate::events::SemanticEvent::AssistantCompleted { .. })));
+        assert!(!events.iter().any(|event| matches!(
+            event,
+            crate::events::SemanticEvent::AssistantCompleted { .. }
+        )));
     }
 
     #[tokio::test]

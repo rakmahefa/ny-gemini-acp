@@ -99,6 +99,7 @@ async fn stream_deltas(state: &AppState, prompt: &str, resolved: &Resolved, ctx:
             )
         };
         let _ = tx.send(Ok(chunk(None, None))).await;
+        let mut upstream_error: Option<String> = None;
         while let Some(item) = rx.recv().await {
             match item {
                 Ok(StreamItem::Text(delta)) => {
@@ -112,15 +113,30 @@ async fn stream_deltas(state: &AppState, prompt: &str, resolved: &Resolved, ctx:
                 }
                 Ok(StreamItem::ToolCall { .. }) | Ok(StreamItem::Metadata { .. }) => {}
                 Err(error) => {
-                    tracing::warn!("chat stream interrupted: {error}");
+                    // SPEC-P1-06 (M6): an upstream error is surfaced as an
+                    // error chunk with finish_reason "error" — never disguised
+                    // as a normal "stop" + [DONE] end of stream.
+                    upstream_error = Some(error.to_string());
                     break;
                 }
             }
+        }
+        if let Some(error) = upstream_error {
+            let error_chunk = upstream_error_chunk(&cid, created, &model_name, &error);
+            let _ = tx.send(Ok(sse_event(error_chunk))).await;
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+            return;
         }
         let _ = tx.send(Ok(chunk(None, Some("stop")))).await;
         let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
     });
     sse(out).into_response()
+}
+
+/// SPEC-P1-06 (M6): the OpenAI-style error terminal chunk — finish_reason
+/// "error" plus an error object, never a normal "stop".
+fn upstream_error_chunk(cid: &str, created: u64, model_name: &str, error: &str) -> Value {
+    serde_json::json!({"id": cid, "object": "chat.completion.chunk", "created": created, "model": model_name, "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}], "error": {"message": format!("upstream error: {error}"), "code": "upstream_error"}})
 }
 
 async fn complete(

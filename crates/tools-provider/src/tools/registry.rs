@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use agent_runtime::ToolConfigurationError;
 
+use super::contracts::ToolCancellation;
 use super::mcp::McpCatalog;
 
 #[derive(Debug, Clone, Default)]
@@ -62,7 +63,17 @@ impl ToolResult {
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
     fn definition(&self) -> &ToolDef;
-    async fn execute(&self, args: &Value, cwd: &Path, allowed_dirs: &[PathBuf]) -> ToolResult;
+
+    /// Executes the tool. `cancellation` is the session cancellation signal:
+    /// long-running tools (shell, MCP) must observe it and abort promptly
+    /// instead of running to their full timeout after a session/cancel.
+    async fn execute(
+        &self,
+        args: &Value,
+        cwd: &Path,
+        allowed_dirs: &[PathBuf],
+        cancellation: &ToolCancellation,
+    ) -> ToolResult;
 }
 
 pub struct ToolRegistry {
@@ -99,7 +110,11 @@ impl ToolRegistry {
 
     pub fn register(&mut self, tool: Box<dyn Tool>) {
         let name = tool.definition().name;
-        if self.tools.iter().any(|existing| existing.definition().name == name) {
+        if self
+            .tools
+            .iter()
+            .any(|existing| existing.definition().name == name)
+        {
             tracing::error!(name, "duplicate builtin tool identity rejected");
             return;
         }
@@ -107,12 +122,12 @@ impl ToolRegistry {
         self.tools.push(tool);
     }
 
-    pub fn register_mcp(
-        &mut self,
-        catalog: Arc<McpCatalog>,
-    ) -> Result<(), ToolConfigurationError> {
-        let builtin_names: std::collections::HashSet<&str> =
-            self.tools.iter().map(|tool| tool.definition().name).collect();
+    pub fn register_mcp(&mut self, catalog: Arc<McpCatalog>) -> Result<(), ToolConfigurationError> {
+        let builtin_names: std::collections::HashSet<&str> = self
+            .tools
+            .iter()
+            .map(|tool| tool.definition().name)
+            .collect();
         let conflicts: Vec<String> = catalog
             .definitions()
             .into_iter()
@@ -180,6 +195,7 @@ impl ToolRegistry {
         args: &Value,
         cwd: &Path,
         extra_dirs: &[PathBuf],
+        cancellation: &ToolCancellation,
     ) -> Option<ToolResult> {
         let mut allowed = self.sandbox.allowed_dirs.clone();
         for dir in extra_dirs {
@@ -188,16 +204,24 @@ impl ToolRegistry {
             }
         }
 
+        if cancellation.is_cancelled() {
+            return Some(ToolResult::Err(
+                "outil annulé avant son démarrage (session/cancel)".into(),
+            ));
+        }
+
         // Builtins own their canonical identities. An MCP catalog can only
         // service names which are not already claimed by a builtin.
         if let Some(tool) = self.tools.iter().find(|t| t.definition().name == name) {
-            return Some(tool.execute(args, cwd, &allowed).await);
+            return Some(tool.execute(args, cwd, &allowed, cancellation).await);
         }
         if let Some(mcp) = &self.mcp {
             // D-18 : même périmètre fusionné (sandbox + extra) que pour les
             // builtins — les deux types d'outils d'une même session ne doivent
             // pas avoir des périmètres d'accès différents.
-            return mcp.call_async(name, args, cwd, &allowed).await;
+            return mcp
+                .call_async(name, args, cwd, &allowed, cancellation)
+                .await;
         }
         None
     }
@@ -257,4 +281,91 @@ mod tests {
         sorted.sort();
         assert_eq!(names, sorted);
     }
+}
+
+/// SPEC-P1-04 acceptance: a `session/cancel` during a long MCP tool call
+/// returns in well under 2 seconds instead of waiting the full request
+/// timeout. A fake stdio MCP server sleeps 30 s before answering tools/call.
+#[tokio::test]
+async fn session_cancel_interrupts_a_long_mcp_tool_call_within_two_seconds() {
+    use crate::tools::contracts::ToolCancellation;
+    use crate::tools::mcp::{McpCatalog, McpServerConfig, McpTransportKind};
+    use crate::tools::registry::ToolRegistry;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    let script =
+        std::env::temp_dir().join(format!("fake-mcp-{}.py", uuid::Uuid::new_v4().simple()));
+    std::fs::write(
+        &script,
+        r#"import sys, json, time
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    req = json.loads(line)
+    resp_id = req.get("id")
+    if resp_id is None:
+        continue
+    method = req.get("method", "")
+    if method == "tools/call":
+        time.sleep(30)
+        result = {"content": [{"type": "text", "text": "done"}]}
+    elif method == "tools/list":
+        result = {"tools": [{"name": "slow", "description": "slow tool", "inputSchema": {"type": "object"}}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": resp_id, "result": result}), flush=True)
+"#,
+    )
+    .expect("fake MCP server script must be written");
+
+    let catalog = McpCatalog::from_configs(vec![McpServerConfig {
+        name: "fake".into(),
+        transport: McpTransportKind::Stdio,
+        command: Some("python3".into()),
+        args: vec![script.display().to_string()],
+        env: Default::default(),
+        cwd: None,
+        url: None,
+        headers: Default::default(),
+    }])
+    .await
+    .expect("fake MCP catalog must build");
+    assert!(catalog.has_tools());
+
+    let mut registry = ToolRegistry::new();
+    registry
+        .register_mcp(std::sync::Arc::new(catalog))
+        .expect("registration must succeed");
+
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let cancellation = ToolCancellation::from_receiver(rx);
+
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let _ = tx.send(true);
+    });
+
+    let start = Instant::now();
+    let result = registry
+        .call_async(
+            "mcp__fake__slow",
+            &serde_json::json!({}),
+            Path::new("/tmp"),
+            &[],
+            &cancellation,
+        )
+        .await;
+    canceller.await.expect("canceller task must finish");
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "cancelled MCP call must return promptly, took {elapsed:?}"
+    );
+    assert!(
+        matches!(&result, Some(crate::tools::registry::ToolResult::Err(message)) if message.contains("annulé")),
+        "cancelled MCP call must be an error result, got {result:?}"
+    );
+    std::fs::remove_file(&script).ok();
 }

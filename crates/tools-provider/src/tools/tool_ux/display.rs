@@ -1,5 +1,5 @@
-use serde_json::Value;
 use serde_json::json;
+use serde_json::Value;
 
 use super::types::{CardBodyKind, ToolVisual, MAX_CARD_BODY_CHARS, MAX_RAW_INPUT_CHARS};
 
@@ -48,10 +48,15 @@ pub(crate) fn ux_card(
     }
     let rendered_body = body
         .map(|(body, kind, error)| render_card_body(body, kind, error))
-        .unwrap_or_else(|| render_card_body("_En attente du résultat…_", CardBodyKind::Content, false));
+        .unwrap_or_else(|| {
+            render_card_body("_En attente du résultat…_", CardBodyKind::Content, false)
+        });
     text.push_str("\n\n");
     text.push_str(&rendered_body);
-    text_content(&agent_runtime::text::truncate_chars(&text, MAX_CARD_BODY_CHARS), false)
+    text_content(
+        &agent_runtime::text::truncate_chars(&text, MAX_CARD_BODY_CHARS),
+        false,
+    )
 }
 
 fn render_card_body(body: &str, kind: CardBodyKind, error: bool) -> String {
@@ -105,7 +110,11 @@ pub(crate) fn text_content(text: &str, error: bool) -> Value {
     json!({"type": "content", "text": rendered})
 }
 
-pub(crate) fn diff_content(path: &std::path::Path, old_text: Option<String>, new_text: String) -> Value {
+pub(crate) fn diff_content(
+    path: &std::path::Path,
+    old_text: Option<String>,
+    new_text: String,
+) -> Value {
     json!({
         "type": "diff",
         "path": path,

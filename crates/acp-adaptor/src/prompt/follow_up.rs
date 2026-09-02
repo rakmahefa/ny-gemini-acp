@@ -91,7 +91,10 @@ pub async fn request_action(
 
     let tool_call = ToolCall::new(
         call_id.clone(),
-        format!("Follow-up · {}", agent_runtime::text::truncate_chars(label, 80)),
+        format!(
+            "Follow-up · {}",
+            agent_runtime::text::truncate_chars(label, 80)
+        ),
     )
     .kind(ToolKind::Other)
     .status(ToolCallStatus::Pending)

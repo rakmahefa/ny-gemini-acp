@@ -87,41 +87,54 @@ impl StdioTransport {
                 message: "request write timeout".into(),
             })??;
 
-        let mut response_line = String::new();
-        let read = async {
-            loop {
-                response_line.clear();
-                let read = self
-                    .stdout
-                    .read_line(&mut response_line)
-                    .await
-                    .map_err(|error| McpError::Transport {
-                        transport: "stdio".into(),
-                        message: error.to_string(),
-                    })?;
-                if read == 0 {
-                    let status = self.child.try_wait().ok().flatten();
-                    return Err(McpError::Transport {
-                        transport: "stdio".into(),
-                        message: format!("server closed stdout (status={status:?})"),
-                    });
+        // ID correlation (SPEC-P1-04): an aborted earlier request can leave a
+        // stale response in flight; skip any line whose id does not match the
+        // request being served so a cancelled call can never poison the next
+        // one. Server-initiated notifications carry no id and are skipped too.
+        loop {
+            let mut response_line = String::new();
+            let read = async {
+                loop {
+                    response_line.clear();
+                    let read =
+                        self.stdout
+                            .read_line(&mut response_line)
+                            .await
+                            .map_err(|error| McpError::Transport {
+                                transport: "stdio".into(),
+                                message: error.to_string(),
+                            })?;
+                    if read == 0 {
+                        let status = self.child.try_wait().ok().flatten();
+                        return Err(McpError::Transport {
+                            transport: "stdio".into(),
+                            message: format!("server closed stdout (status={status:?})"),
+                        });
+                    }
+                    if response_line.len() > MAX_MESSAGE_BYTES {
+                        return Err(McpError::MessageTooLarge);
+                    }
+                    if response_line.trim().is_empty() {
+                        continue;
+                    }
+                    break Ok::<(), McpError>(());
                 }
-                if response_line.len() > MAX_MESSAGE_BYTES {
-                    return Err(McpError::MessageTooLarge);
-                }
-                if response_line.trim().is_empty() {
+            };
+            tokio::time::timeout(IO_TIMEOUT, read)
+                .await
+                .map_err(|_| McpError::Transport {
+                    transport: "stdio".into(),
+                    message: "response read timeout".into(),
+                })??;
+            match parse_json_rpc_response(response_line.as_bytes(), Some(request.id)) {
+                Ok(response) => return Ok(response),
+                Err(McpError::Protocol(message)) if message.contains("id mismatch") => {
+                    tracing::debug!(expected = request.id, "skipping stale MCP response line");
                     continue;
                 }
-                break Ok::<(), McpError>(());
+                Err(error) => return Err(error),
             }
-        };
-        tokio::time::timeout(IO_TIMEOUT, read)
-            .await
-            .map_err(|_| McpError::Transport {
-                transport: "stdio".into(),
-                message: "response read timeout".into(),
-            })??;
-        parse_json_rpc_response(response_line.as_bytes(), None)
+        }
     }
 
     pub(super) async fn notify(

@@ -19,10 +19,7 @@ pub fn parse_tag_attributes(input: &str) -> BTreeMap<String, String> {
         }
 
         let key_start = index;
-        while index < bytes.len()
-            && !bytes[index].is_ascii_whitespace()
-            && bytes[index] != b'='
-        {
+        while index < bytes.len() && !bytes[index].is_ascii_whitespace() && bytes[index] != b'=' {
             index += 1;
         }
         if key_start == index {
@@ -134,7 +131,10 @@ pub fn truncate_chars(value: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_xml_entities, find_tag_end, parse_follow_up_tag, parse_tag_attributes, truncate_chars};
+    use super::{
+        decode_xml_entities, find_tag_end, parse_follow_up_tag, parse_tag_attributes,
+        truncate_chars,
+    };
 
     #[test]
     fn accepts_reordered_double_quoted_attributes() {
@@ -170,8 +170,12 @@ mod tests {
 
     #[test]
     fn parses_follow_up_tag_variants() {
-        let (label, query) = parse_follow_up_tag("<FollowUp label=\"Run tests\" query=\"cargo test\" />").unwrap();
-        assert_eq!((label.as_str(), query.as_str()), ("Run tests", "cargo test"));
+        let (label, query) =
+            parse_follow_up_tag("<FollowUp label=\"Run tests\" query=\"cargo test\" />").unwrap();
+        assert_eq!(
+            (label.as_str(), query.as_str()),
+            ("Run tests", "cargo test")
+        );
         let (label, query) = parse_follow_up_tag("<FollowUp label=\"L\" query=\"Q\">").unwrap();
         assert_eq!((label.as_str(), query.as_str()), ("L", "Q"));
         assert!(parse_follow_up_tag("<FollowUp label=\"\" query=\"Q\" />").is_none());

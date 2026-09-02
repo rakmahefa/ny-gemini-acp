@@ -119,7 +119,9 @@ fn sandbox_rejette_sh_c() {
     let sb = ShellSandbox::new();
     assert!(sb.validate("sh -c 'rm -rf /'").is_err());
     assert!(sb.validate("bash -c 'echo pwned'").is_err());
-    assert!(sb.validate("python -c 'import os; os.system(\"rm -rf /\")'").is_err());
+    assert!(sb
+        .validate("python -c 'import os; os.system(\"rm -rf /\")'")
+        .is_err());
 }
 
 #[test]
@@ -136,7 +138,9 @@ fn sandbox_bloque_pipe_vers_sh() {
     let sb = ShellSandbox::new();
     assert!(sb.validate("echo 'rm -rf /' | sh").is_err());
     assert!(sb.validate("cat payload | bash").is_err());
-    assert!(sb.validate("find . -name '*.sh' -exec sh -c '{}' \\;").is_err());
+    assert!(sb
+        .validate("find . -name '*.sh' -exec sh -c '{}' \\;")
+        .is_err());
 }
 
 #[test]
@@ -188,7 +192,9 @@ fn sandbox_bloque_environment_expansion() {
 
 #[test]
 fn sandbox_bloque_programme_hors_allowlist() {
-    assert!(ShellSandbox::new().validate("unknown-command --version").is_err());
+    assert!(ShellSandbox::new()
+        .validate("unknown-command --version")
+        .is_err());
     assert!(ShellSandbox::new().validate("/bin/echo hello").is_err());
 }
 
@@ -203,7 +209,8 @@ fn sandbox_bloque_traversal_command_target() {
 fn sandbox_normalize_quotes() {
     let sb = ShellSandbox::new();
     assert_eq!(
-        sb.normalize("cat 'file name.txt' | grep \"foo bar\"").unwrap(),
+        sb.normalize("cat 'file name.txt' | grep \"foo bar\"")
+            .unwrap(),
         "cat file name.txt | grep foo bar"
     );
 }
@@ -232,7 +239,9 @@ fn analysis_commande_simple_low_risk() {
 
 #[test]
 fn analysis_pipe_medium_risk() {
-    let analysis = ShellSandbox::new().analyze_command("cat file.txt | grep pattern").unwrap();
+    let analysis = ShellSandbox::new()
+        .analyze_command("cat file.txt | grep pattern")
+        .unwrap();
     assert_eq!(analysis.risk, RiskLevel::Medium);
     assert!(analysis.has_pipes);
     assert_eq!(analysis.commands.len(), 2);
@@ -240,59 +249,87 @@ fn analysis_pipe_medium_risk() {
 
 #[test]
 fn analysis_rm_critical_risk() {
-    let analysis = ShellAnalysis::analyze("rm -rf ./build");
-    assert_eq!(analysis.risk, RiskLevel::Critical);
+    assert_eq!(
+        ShellSandbox::new().classify("rm -rf ./build"),
+        RiskLevel::Critical
+    );
 }
 
 #[test]
 fn analysis_dynamic_substitution_is_critical() {
-    let analysis = ShellAnalysis::analyze("echo $(cat /etc/passwd)");
+    assert_eq!(
+        ShellSandbox::new().classify("echo $(cat /etc/passwd)"),
+        RiskLevel::Critical
+    );
+    // $HOME parses fine (no command substitution) and still flags env injection.
+    let analysis = ShellSandbox::new()
+        .analyze_command("echo $HOME")
+        .expect("env expansion without substitution must parse");
     assert!(analysis.has_env_injection);
-    assert_eq!(analysis.risk, RiskLevel::Critical);
 }
 
 #[test]
 fn analysis_backtick_is_critical() {
-    let analysis = ShellAnalysis::analyze("echo `whoami`");
-    assert!(analysis.has_env_injection);
-    assert_eq!(analysis.risk, RiskLevel::Critical);
+    assert_eq!(
+        ShellSandbox::new().classify("echo `whoami`"),
+        RiskLevel::Critical
+    );
 }
 
 #[test]
 fn analysis_multiline_is_critical_for_policy() {
-    let analysis = ShellAnalysis::analyze("echo line1\necho line2\necho line3");
-    assert_eq!(analysis.risk, RiskLevel::Critical);
-    assert_eq!(analysis.line_count, 3);
+    // A multi-line command is a sequence operator: refused by validation and
+    // classified Critical (worst case).
+    assert_eq!(
+        ShellSandbox::new().classify("echo line1\necho line2\necho line3"),
+        RiskLevel::Critical
+    );
 }
 
 #[test]
 fn analysis_summary_format() {
-    let analysis = ShellSandbox::new().analyze_command("cat file.txt | grep pattern | sort").unwrap();
+    let analysis = ShellSandbox::new()
+        .analyze_command("cat file.txt | grep pattern | sort")
+        .unwrap();
     assert!(analysis.summary().contains("medium risk"));
     assert!(analysis.summary().contains("commands in pipe chain"));
 }
 
 #[test]
 fn risk_docker_high() {
-    assert_eq!(ShellAnalysis::analyze("docker build .").risk, RiskLevel::High);
+    // docker is refused outright by validation, so the unified classifier
+    // reports the worst case.
+    assert_eq!(
+        ShellSandbox::new().classify("docker build ."),
+        RiskLevel::Critical
+    );
 }
 
 #[test]
 fn risk_npm_high() {
-    assert_eq!(ShellAnalysis::analyze("npm install lodash").risk, RiskLevel::High);
+    assert_eq!(
+        ShellSandbox::new().classify("npm install lodash"),
+        RiskLevel::Critical
+    );
 }
 
 #[test]
 fn risk_echo_low() {
     assert_eq!(
-        ShellSandbox::new().analyze_command("echo hello world").unwrap().risk,
+        ShellSandbox::new()
+            .analyze_command("echo hello world")
+            .unwrap()
+            .risk,
         RiskLevel::Low
     );
 }
 
 #[test]
 fn risk_compilation_high() {
-    assert_eq!(ShellAnalysis::analyze("cargo build --release").risk, RiskLevel::High);
+    assert_eq!(
+        ShellSandbox::new().classify("cargo build --release"),
+        RiskLevel::Critical
+    );
 }
 
 #[test]

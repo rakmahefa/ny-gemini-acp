@@ -7,7 +7,7 @@ use agent_client_protocol::schema::v1::{
 };
 use serde_json::{json, Map, Value};
 
-use super::super::sandbox::{RiskLevel, ShellAnalysis};
+use super::super::sandbox::{RiskLevel, ShellSandbox};
 use super::super::tool_ux::{bounded_raw_input, classify_risk, ToolInfo};
 use super::ToolExecutor;
 
@@ -65,20 +65,31 @@ impl PermissionRequest {
             }
             "shell_exec" => {
                 let command = args.get("command").and_then(Value::as_str).unwrap_or("");
-                let analysis = ShellAnalysis::analyze(command);
-                if analysis.has_dangerous_pipe_chain {
-                    warnings
-                        .push("Chaîne de commandes potentiellement dangereuse détectée.".into());
-                }
-                if analysis.has_env_injection {
-                    warnings.push("Injection de variables d'environnement détectée.".into());
-                }
-                if analysis.risk >= RiskLevel::High {
-                    warnings.push(format!(
-                        "Niveau de risque {} : {}",
-                        analysis.risk.emoji(),
-                        analysis.risk.description()
-                    ));
+                // The analysis and the classification share a single entry
+                // point (`ShellSandbox`): a command the sandbox would refuse
+                // gets one honest warning instead of a heuristic guess.
+                match ShellSandbox::new().analyze_command(command) {
+                    Ok(analysis) => {
+                        if analysis.has_dangerous_pipe_chain {
+                            warnings.push(
+                                "Chaîne de commandes potentiellement dangereuse détectée.".into(),
+                            );
+                        }
+                        if analysis.has_env_injection {
+                            warnings
+                                .push("Injection de variables d'environnement détectée.".into());
+                        }
+                        if analysis.risk >= RiskLevel::High {
+                            warnings.push(format!(
+                                "Niveau de risque {} : {}",
+                                analysis.risk.emoji(),
+                                analysis.risk.description()
+                            ));
+                        }
+                    }
+                    Err(_) => warnings.push(
+                        "Cette commande sera refusée par le filtre heuristique de la sandbox (sans confinement OS).".into(),
+                    ),
                 }
             }
             _ => {}
@@ -117,7 +128,13 @@ impl PermissionRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionResult {
     Allow,
-    Reject,
+    /// The client selected "always allow": the caller is responsible for
+    /// remembering the decision (session-scoped).
+    AllowAlways,
+    Reject(String),
+    /// The client selected "always reject": the caller is responsible for
+    /// remembering the decision (session-scoped).
+    RejectAlways,
     Cancelled,
     TransportError(String),
 }
@@ -189,8 +206,14 @@ impl<'a> ToolExecutor<'a> {
         match response.outcome {
             RequestPermissionOutcome::Cancelled => PermissionResult::Cancelled,
             RequestPermissionOutcome::Selected(selected) => match selected.option_id.0.as_ref() {
-                "allow_once" | "allow_always" => PermissionResult::Allow,
-                "reject_once" | "reject_always" => PermissionResult::Reject,
+                "allow_once" => PermissionResult::Allow,
+                "allow_always" => PermissionResult::AllowAlways,
+                "reject_once" => PermissionResult::Reject(format!(
+                    "{} ({}) refusé par l'utilisateur.",
+                    request.kind.label(),
+                    request.summary
+                )),
+                "reject_always" => PermissionResult::RejectAlways,
                 unknown => PermissionResult::TransportError(format!(
                     "option de permission ACP inconnue: {unknown}"
                 )),
@@ -226,7 +249,9 @@ fn project_permission_content(value: &Value) -> anyhow::Result<ToolCallContent> 
                 Diff::new(path.to_owned(), new_text.to_owned()).old_text(old_text.to_owned()),
             ))
         }
-        other => Err(anyhow::anyhow!("unsupported permission content kind: {other}")),
+        other => Err(anyhow::anyhow!(
+            "unsupported permission content kind: {other}"
+        )),
     }
 }
 

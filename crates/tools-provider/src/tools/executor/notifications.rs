@@ -8,4 +8,3 @@ pub fn safe_session_update(
 ) {
     let _ = cx.send_notification(SessionNotification::new(session_id.clone(), update));
 }
-

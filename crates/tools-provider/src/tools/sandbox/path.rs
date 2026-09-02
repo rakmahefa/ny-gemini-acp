@@ -148,19 +148,27 @@ mod tests {
 
     #[test]
     fn sibling_prefix_is_not_accepted() {
-        assert!(!path_starts_with(Path::new("/tmp/workspace2"), Path::new("/tmp/workspace")));
+        assert!(!path_starts_with(
+            Path::new("/tmp/workspace2"),
+            Path::new("/tmp/workspace")
+        ));
     }
 
     #[test]
     fn existing_symlink_component_is_rejected() {
-        let root = std::env::temp_dir().join(format!("acp-sandbox-symlink-{}", uuid::Uuid::new_v4().simple()));
+        let root = std::env::temp_dir().join(format!(
+            "acp-sandbox-symlink-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
         let target = root.join("target");
         let link = root.join("link");
         std::fs::create_dir_all(&target).unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
         let result = validate_path("link/file.txt", &root, &[]);
-        assert!(matches!(result, Err(SecurityError(message)) if message.contains("lien symbolique")));
+        assert!(
+            matches!(result, Err(SecurityError(message)) if message.contains("lien symbolique"))
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

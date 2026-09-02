@@ -3,39 +3,10 @@ use std::sync::Arc;
 
 use crate::client::{Client, Config, StreamItem};
 use crate::config::AgentConfig;
-use crate::core::GeminiError;
+use crate::core::errors::map_gemini_error;
 use crate::semantic_stream::GeminiSemanticStream;
 use agent_runtime::{LlmError, LlmModelInfo, LlmProvider, LlmStream, ModelRequest};
 use tokio::sync::mpsc;
-
-fn map_gemini_error(error: &anyhow::Error) -> LlmError {
-    let Some(error) = error.downcast_ref::<GeminiError>() else {
-        return LlmError::Provider(format!("{error:#}"));
-    };
-
-    match error {
-        GeminiError::CookiesExpired { code } => {
-            LlmError::Authentication(format!("cookies expired or invalid (BardErrorInfo [{code}])"))
-        }
-        GeminiError::UpstreamRejected { code } => {
-            LlmError::Provider(format!("Gemini upstream rejected request (BardErrorInfo [{code}])"))
-        }
-        GeminiError::UnknownModel(model) => LlmError::Unavailable(model.clone()),
-        GeminiError::Network(message) => LlmError::Network(message.clone()),
-        GeminiError::Http { status } => match status {
-            401 | 403 => LlmError::Authentication(format!("Gemini authentication rejected (HTTP {status})")),
-            408 => LlmError::Network("Gemini request timed out (HTTP 408)".into()),
-            429 => LlmError::Provider("Gemini request rate-limited (HTTP 429)".into()),
-            400 | 422 => LlmError::InvalidRequest(format!("Gemini rejected the request (HTTP {status})")),
-            500..=599 => LlmError::Provider(format!("Gemini upstream failure (HTTP {status})")),
-            _ => LlmError::Provider(format!("Gemini HTTP failure (HTTP {status})")),
-        },
-        GeminiError::StreamDivergence => LlmError::StreamDivergence,
-        GeminiError::UploadFailed(message) => LlmError::Upload(message.clone()),
-        GeminiError::SafetyBlocked(message) => LlmError::Provider(message.clone()),
-        GeminiError::Other(error) => LlmError::Provider(format!("{error:#}")),
-    }
-}
 
 #[derive(Clone)]
 pub struct GeminiProvider {
@@ -55,7 +26,6 @@ impl GeminiProvider {
             client: Arc::new(Client::new(client_config).await?),
         })
     }
-
 }
 
 #[async_trait::async_trait]
@@ -113,7 +83,9 @@ impl LlmProvider for GeminiProvider {
                         }
                     }
                     Err(error) => {
-                        let _ = tx.send(Err(LlmError::Provider(error))).await;
+                        // The channel already carries the typed taxonomy
+                        // (SPEC-P0-03): no detyping happens here.
+                        let _ = tx.send(Err(error)).await;
                         return;
                     }
                 }
@@ -142,4 +114,3 @@ impl LlmProvider for GeminiProvider {
         LlmModelInfo { supports_reasoning }
     }
 }
-

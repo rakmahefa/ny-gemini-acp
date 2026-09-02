@@ -180,13 +180,13 @@ impl ToolProvider for DefaultToolProvider {
     }
 
     async fn call(&self, request: ToolCallRequest) -> ToolCallResult {
-        // D-17 : le propriétaire unique du bind/unbind de la clé de session
-        // dans la carte de cancellation est `ToolExecutor` (bind dans `new`,
-        // unbind dans `Drop`). Un re-bind ici volait puis détruisait ce
-        // binding à la fin de l'appel, laissant la carte vide pendant que
-        // l'executor avait encore besoin du canal d'annulation — et rien dans
-        // `registry::call_async` ne lit cette carte. L'annulation du provider
-        // passe par `request.cancellation` consommé par l'executor.
+        // Cancellation ownership (SPEC-P1-04): the runtime's cancellation
+        // receiver is adapted here into the tools-provider `ToolCancellation`
+        // contract and handed to `registry.call_async`, which propagates it
+        // to every builtin and MCP tool. Shell and MCP executions observe it
+        // with `tokio::select!` and abort promptly on session/cancel.
+        let cancellation =
+            crate::tools::contracts::ToolCancellation::from_receiver(request.cancellation.clone());
         let info = presentation_info(&request.name, &request.arguments, &request.cwd);
 
         let result = match self
@@ -196,6 +196,7 @@ impl ToolProvider for DefaultToolProvider {
                 &request.arguments,
                 &request.cwd,
                 &request.additional_dirs,
+                &cancellation,
             )
             .await
         {

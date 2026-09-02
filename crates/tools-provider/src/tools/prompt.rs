@@ -25,6 +25,7 @@ pub fn format_tool_result(tool: &str, content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tools::contracts::ToolCancellation;
     use crate::tools::registry::{Tool, ToolDef, ToolRegistry, ToolResult};
 
     struct DummyTool;
@@ -53,6 +54,7 @@ mod tests {
             _args: &serde_json::Value,
             _cwd: &std::path::Path,
             _allowed_dirs: &[std::path::PathBuf],
+            _cancellation: &ToolCancellation,
         ) -> ToolResult {
             ToolResult::Ok("ok".into())
         }

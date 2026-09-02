@@ -15,8 +15,10 @@ use agent_runtime::state::{HistoryEntry, SessionMode as RuntimeSessionMode};
 use agent_runtime::{AppState, SessionManager, ToolUiModel};
 use tools_provider::tools::tool_ux::{result_update, ToolInfo};
 
-// P-07 : une seule validation d'id de session — celle du runtime
-// (`SessionManager::validate_id`), réutilisée par tous les handlers.
+// Session-id validation has a single definition: the runtime's
+// `SessionManager::validate_id`, re-exported here and used by every session
+// handler including `handlers/config.rs`. A client-supplied id that fails
+// this check never reaches the store's persistence path.
 pub(crate) fn is_valid_session_id(id: &str) -> bool {
     SessionManager::validate_id(id).is_ok()
 }
@@ -139,12 +141,7 @@ fn replay_tool_result(
         .with_locations(rendered.locations)
         .completed(is_ok, Some(serde_json::json!({ "text": result_text })));
 
-        crate::prompt::notify::notify_tool_call_update(
-            cx,
-            session_id,
-            replay.id,
-            &result_ui,
-        )?;
+        crate::prompt::notify::notify_tool_call_update(cx, session_id, replay.id, &result_ui)?;
     }
     Ok(())
 }
@@ -218,6 +215,16 @@ pub async fn handle_load(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
+    // Invariant: wait for any running turn to finish BEFORE touching the
+    // persisted snapshot — otherwise the replay replays the stale pre-turn
+    // state and the cancelled turn vanishes from the replay. Same order as
+    // fork/delete/close.
+    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
+        return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+            "session_id": req.session_id.to_string(),
+            "error": error.to_string(),
+        })));
+    }
     let session = match state.sessions.load(&req.session_id.0, &req.cwd).await {
         Ok(session) => session,
         Err(error) => {
@@ -229,17 +236,6 @@ pub async fn handle_load(
             ))
         }
     };
-    // D-13 : comme `session/delete` et `session/close`, un `session/load`
-    // doit attendre la fin d'un turn éventuel — sinon le replay s'entrelace
-    // avec les notifications du turn en cours.
-    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
-        return responder.respond_with_error(AcpError::invalid_params().data(
-            serde_json::json!({
-                "session_id": req.session_id.to_string(),
-                "error": error.to_string(),
-            }),
-        ));
-    }
     if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await
     {
         state.sessions.clear_mcp(&req.session_id.0).await;
@@ -331,6 +327,14 @@ pub async fn handle_resume(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
+    // Same invariant as session/load: cancel any running turn and let it
+    // commit before reading the snapshot.
+    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
+        return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+            "session_id": req.session_id.to_string(),
+            "error": error.to_string(),
+        })));
+    }
     let session = match state.sessions.resume(&req.session_id.0, &req.cwd).await {
         Ok(session) => session,
         Err(error) => {
@@ -342,15 +346,6 @@ pub async fn handle_resume(
             ))
         }
     };
-    // D-13 : même garde que pour `session/load`.
-    if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
-        return responder.respond_with_error(AcpError::invalid_params().data(
-            serde_json::json!({
-                "session_id": req.session_id.to_string(),
-                "error": error.to_string(),
-            }),
-        ));
-    }
     if let Err(error) = configure_mcp(state, &req.session_id.0, req.mcp_servers, &session.cwd).await
     {
         state.sessions.clear_mcp(&req.session_id.0).await;
@@ -393,9 +388,7 @@ pub async fn handle_delete(
                 "session_id": req.session_id.to_string(), "error": "session not found"
             })))
         }
-        Err(error) => {
-            responder.respond_with_internal_error(format!("session deletion: {error:#}"))
-        }
+        Err(error) => responder.respond_with_internal_error(format!("session deletion: {error:#}")),
     }
 }
 
@@ -424,9 +417,7 @@ pub async fn handle_close(
                 "session_id": req.session_id.to_string(), "error": "session not found"
             })))
         }
-        Err(error) => {
-            responder.respond_with_internal_error(format!("session close: {error:#}"))
-        }
+        Err(error) => responder.respond_with_internal_error(format!("session close: {error:#}")),
     }
 }
 
@@ -473,15 +464,13 @@ pub async fn handle_fork(
     if !is_valid_session_id(&req.session_id.0) {
         return responder.respond_with_error(session_id_error(&req.session_id));
     }
-    // D-13 : même garde que pour `session/load` — le fork copie l'état persisté
-    // pendant qu'un turn pourrait encore l'écrire.
+    // Same invariant as session/load: the fork copies the persisted state,
+    // so any running turn must be cancelled and committed first.
     if let Err(error) = state.turns.cancel_and_wait(&req.session_id.0).await {
-        return responder.respond_with_error(AcpError::invalid_params().data(
-            serde_json::json!({
-                "session_id": req.session_id.to_string(),
-                "error": error.to_string(),
-            }),
-        ));
+        return responder.respond_with_error(AcpError::invalid_params().data(serde_json::json!({
+            "session_id": req.session_id.to_string(),
+            "error": error.to_string(),
+        })));
     }
     let forked = match state.sessions.fork(&req.session_id.0).await {
         Ok(forked) => forked,

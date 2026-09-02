@@ -64,7 +64,15 @@ pub async fn generate(
     for (b64, mime) in images {
         match state.client.upload_image(&b64, &mime).await {
             Ok(reference) => refs.push(reference),
-            Err(e) => tracing::warn!("image upload skipped: {e:#}"),
+            // SPEC-P1-06 (M6): a failed image upload is never silently
+            // swallowed — the client would receive a "normal" answer missing
+            // the image it sent. Surface a structured upstream error.
+            Err(e) => {
+                return json_response(
+                    StatusCode::BAD_GATEWAY,
+                    serde_json::json!({"error": {"message": format!("image upload failed: {e}"), "status": "UPLOAD_FAILED"}}),
+                );
+            }
         }
     }
     if stream && !has_tools {
@@ -111,6 +119,7 @@ async fn stream_chunks(
     let prompt = prompt.to_string();
     tokio::spawn(async move {
         let mut emitted = String::new();
+        let mut upstream_error: Option<String> = None;
         while let Some(item) = rx.recv().await {
             match item {
                 Ok(StreamItem::Text(delta)) => {
@@ -122,15 +131,28 @@ async fn stream_chunks(
                 }
                 Ok(StreamItem::ToolCall { .. }) | Ok(StreamItem::Metadata { .. }) => {}
                 Err(error) => {
-                    tracing::warn!("Gemini stream interrupted: {error}");
+                    // SPEC-P1-06 (M6): an upstream error is reported as an
+                    // error to the client — never disguised as a normal
+                    // finished stream with finishReason STOP.
+                    upstream_error = Some(error.to_string());
                     break;
                 }
             }
+        }
+        if let Some(error) = upstream_error {
+            let _ = tx.send(Ok(sse_event(upstream_error_chunk(&error)))).await;
+            return;
         }
         let final_chunk = serde_json::json!({"candidates": [{"content": {"parts": [{"text": ""}], "role": "model"}, "finishReason": "STOP", "index": 0}], "usageMetadata": convert::usage_google(&prompt, &emitted), "modelVersion": model_name});
         let _ = tx.send(Ok(sse_event(final_chunk))).await;
     });
     sse(out).into_response()
+}
+
+/// SPEC-P1-06 (M6): the Google-style error terminal event — a top-level
+/// error object, never a finished stream with finishReason STOP.
+fn upstream_error_chunk(error: &str) -> Value {
+    serde_json::json!({"error": {"message": format!("upstream error: {error}"), "status": "UPSTREAM_FAILED"}})
 }
 
 fn response_object(text: &str, model_name: &str, prompt: &str, has_tools: bool) -> Value {
