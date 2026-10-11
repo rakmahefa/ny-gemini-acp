@@ -39,6 +39,9 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
     }
 
     let mut cancel_rx = cancellation.subscribe();
+    if *cancel_rx.borrow() {
+        return Err(ModelProjectionError::Cancelled);
+    }
     let mut text = String::new();
     let mut tool_calls = Vec::new();
     let mut event_count = 0usize;
