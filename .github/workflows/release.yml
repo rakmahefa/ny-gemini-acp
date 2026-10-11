@@ -38,9 +38,9 @@ jobs:
             exit 1
           fi
 
-          git fetch --no-tags origin dev
+          git fetch --no-tags origin main
           if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-            echo "::error::Release tags must point to a commit reachable from dev."
+            echo "::error::Release tags must point to a commit reachable from main."
             exit 1
           fi
           echo "Validated release tag $RELEASE_TAG against branch dev."
