@@ -7,7 +7,7 @@
 //! known today (git config/alias hooks, `ext::` transports, `sed`'s `e`
 //! capability, `tar` post-archive hooks, `find` destructive predicates) are
 //! blocked on a best-effort basis at argument-validation time — see
-//! `docs/adr/0001-sandbox-execution.md`.
+//! `PROJECT.md` documents the remaining limitation.
 
 use std::collections::HashSet;
 use std::path::Path;
