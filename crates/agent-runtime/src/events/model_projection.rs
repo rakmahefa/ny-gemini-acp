@@ -207,6 +207,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn already_cancelled_stream_returns_without_waiting_for_an_event() {
+        let (_tx, rx) = mpsc::channel(1);
+        let cancellation = Cancellation::new();
+        cancellation.cancel();
+        let mut harness = emitter();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            consume_model_stream(rx, &cancellation, &mut harness.emitter),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(Err(ModelProjectionError::Cancelled))));
+    }
+
+
+    #[tokio::test]
     async fn projects_reasoning_then_text_without_agent_loop() {
         let (tx, rx) = mpsc::channel(4);
         tx.send(Ok(ModelEvent::ReasoningDelta("think".into())))
