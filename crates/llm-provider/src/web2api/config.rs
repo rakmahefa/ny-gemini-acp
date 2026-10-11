@@ -16,7 +16,6 @@ pub struct Config {
     pub request_timeout_sec: u64,
     pub gemini_bl: String,
     pub auth_user: Option<u32>,
-    pub xsrf_token: Option<String>,
     pub default_model: String,
     pub log_requests: bool,
     pub cookie_file: Option<PathBuf>,
@@ -35,7 +34,6 @@ impl Default for Config {
             request_timeout_sec: 180,
             gemini_bl: DEFAULT_BL.to_string(),
             auth_user: None,
-            xsrf_token: None,
             default_model: DEFAULT_MODEL.to_string(),
             log_requests: true,
             cookie_file: None,
@@ -136,9 +134,6 @@ fn apply_env(config: &mut Config) {
     }
     if let Some(v) = get("AUTH_USER") {
         config.auth_user = v.parse().ok();
-    }
-    if let Some(v) = get("XSRF_TOKEN") {
-        config.xsrf_token = Some(v);
     }
     if let Some(v) = get("DEFAULT_MODEL") {
         config.default_model = v;

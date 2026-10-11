@@ -26,7 +26,6 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let config = std::sync::Arc::new(config::load());
-    convert::warn_xsrf_ignored(config.xsrf_token.as_deref());
 
     let client = Client::new(ClientConfig {
         cookie_file: config

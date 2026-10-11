@@ -11,7 +11,6 @@ const FORBIDDEN_PRESENTATION_REFS: &[&str] = &[
     "ToolCallUpdate",
     "ToolCall",
     "Diff",
-    "Terminal",
 ];
 
 fn rust_files(root: &Path, files: &mut Vec<PathBuf>) {

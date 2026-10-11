@@ -26,7 +26,6 @@ async fn runtime_new_creates_state_and_session_manager() {
     .expect("runtime");
     assert!(runtime.state().store.list(None).await.is_empty());
     assert!(!runtime.state().tools.has_tools());
-    let _ = runtime.state().sessions.store().clone();
     runtime.shutdown().await;
 }
 

@@ -305,13 +305,3 @@ impl McpTransport {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::super::McpTransportKind;
-
-    #[test]
-    fn invalid_transport_kind_is_not_used_directly() {
-        assert_eq!(McpTransportKind::Http, McpTransportKind::Http);
-    }
-}
