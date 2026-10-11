@@ -1,4 +1,4 @@
-name: Release Linux
+name: Linux Release
 
 on:
   push:
@@ -12,64 +12,149 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+
 jobs:
-  linux-x86_64:
-    name: Build and publish Linux x86-64 release
+
+  build-release:
+
+    name: Build Linux release
+
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+
+    timeout-minutes: 30
+
+
     steps:
-      - name: Checkout tagged source
+
+      - name: Checkout tag
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          persist-credentials: false
 
-      - name: Enforce dev-only release source
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
+
+      - name: Validate release tag
+        shell: bash
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_REF" != refs/tags/* ]]; then
-            echo "::error::This workflow only publishes version tags."
+
+          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag must use vMAJOR.MINOR.PATCH format."
             exit 1
           fi
-          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::Use a stable vMAJOR.MINOR.PATCH tag."
-            exit 1
-          fi
+
 
           git fetch --no-tags origin main
+
+
           if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-            echo "::error::Release tags must point to a commit reachable from main."
+            echo "::error::Release tag must point to a commit reachable from main."
             exit 1
           fi
-          echo "Validated release tag $RELEASE_TAG against branch dev."
 
-      - name: Install stable Rust
+
+          echo "Release tag validated: $GITHUB_REF_NAME"
+
+
+
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Package release binaries
-        id: package
-        run: bash scripts/package-release.sh "$RUNNER_TEMP/release-assets" "$GITHUB_REF_NAME"
 
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          ASSET_DIR: ${{ runner.temp }}/release-assets
+
+      - name: Build release package
+
+        shell: bash
+
         run: |
+
           set -euo pipefail
-          ARCHIVE="$ASSET_DIR/ny-gemini-acp-$RELEASE_TAG-linux-x86_64.tar.gz"
+
+          mkdir -p "$RUNNER_TEMP/release-assets"
+
+          bash scripts/package-release.sh \
+            "$RUNNER_TEMP/release-assets" \
+            "$GITHUB_REF_NAME"
+
+
+
+      - name: Verify generated assets
+
+        shell: bash
+
+        run: |
+
+          set -euo pipefail
+
+          ARCHIVE="$RUNNER_TEMP/release-assets/ny-gemini-acp-$GITHUB_REF_NAME-linux-x86_64.tar.gz"
+
           CHECKSUM="$ARCHIVE.sha256"
 
-          if [[ ! -s "$ARCHIVE" || ! -s "$CHECKSUM" ]]; then
-            echo "::error::Release archive or checksum was not generated."
+
+          if [[ ! -s "$ARCHIVE" ]]; then
+            echo "::error::Missing release archive."
             exit 1
           fi
 
-          gh release create "$RELEASE_TAG" \
-            --verify-tag \
-            --title "Ny Gemini ACP $RELEASE_TAG" \
-            --generate-notes \
+
+          if [[ ! -s "$CHECKSUM" ]]; then
+            echo "::error::Missing checksum."
+            exit 1
+          fi
+
+
+          echo "Release assets verified."
+
+
+
+      - name: Upload assets to existing GitHub Release
+
+        env:
+
+          GH_TOKEN: ${{ github.token }}
+
+          RELEASE_TAG: ${{ github.ref_name }}
+
+
+        shell: bash
+
+        run: |
+
+          set -euo pipefail
+
+
+          ARCHIVE="$RUNNER_TEMP/release-assets/ny-gemini-acp-$RELEASE_TAG-linux-x86_64.tar.gz"
+
+          CHECKSUM="$ARCHIVE.sha256"
+
+
+
+          if ! gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+
+            echo "::error::GitHub Release $RELEASE_TAG does not exist."
+            echo "Create the draft release first from GitHub website."
+            exit 1
+
+          fi
+
+
+
+          gh release upload "$RELEASE_TAG" \
             "$ARCHIVE" \
-            "$CHECKSUM"
+            "$CHECKSUM" \
+            --repo "$GITHUB_REPOSITORY"
+
+
+
+          echo "Assets uploaded successfully."
+
+
+
+      - name: Summary
+
+        shell: bash
+
+        run: |
+
+          echo "Linux release completed."
+          echo "Tag: $GITHUB_REF_NAME"
