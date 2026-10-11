@@ -8,6 +8,7 @@ use axum::response::sse::{Event, KeepAliveStream, Sse};
 use axum::response::{IntoResponse, Response};
 use llm_provider::client::Client;
 use serde_json::Value;
+use subtle::ConstantTimeEq;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -18,24 +19,7 @@ const MAX_BODY: usize = 16 * 1024 * 1024;
 const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, x-api-key, x-goog-api-key, Accept";
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    let ab = a.as_bytes();
-    let bb = b.as_bytes();
-    if ab.len() != bb.len() {
-        let mut acc = 0xffu8;
-        for byte in ab {
-            acc ^= byte;
-        }
-        for byte in bb {
-            acc ^= byte;
-        }
-        let _ = acc;
-        return false;
-    }
-    let mut acc = 0u8;
-    for (x, y) in ab.iter().zip(bb.iter()) {
-        acc |= x ^ y;
-    }
-    acc == 0
+    bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }
 
 #[derive(Clone)]
