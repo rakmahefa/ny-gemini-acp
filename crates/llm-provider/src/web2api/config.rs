@@ -47,11 +47,14 @@ impl Default for Config {
 }
 
 fn config_paths() -> [PathBuf; 2] {
+    // Apply the shared user config first and the project-local config second,
+    // so the local file intentionally overrides global defaults.
     [
-        PathBuf::from("./config.json"),
         dirs_config().join("gemini-web2api/config.json"),
+        PathBuf::from("./config.json"),
     ]
 }
+
 fn dirs_config() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -59,19 +62,44 @@ fn dirs_config() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub fn load() -> Config {
+fn load_from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Config {
     let mut config = Config::default();
-    for path in config_paths() {
+    for path in paths {
         if let Ok(raw) = std::fs::read_to_string(&path) {
             match serde_json::from_str::<Config>(&raw) {
                 Ok(from_file) => {
-                    config = from_file;
+                    config = merge_config(config, from_file);
                     tracing::info!("config loaded from {}", path.display());
                 }
-                Err(e) => tracing::warn!("invalid config.json ({}): {e}", path.display()),
+                Err(error) => tracing::warn!("invalid config.json ({}): {error}", path.display()),
             }
         }
     }
+    config
+}
+
+// Keep this explicit: a file may specify only a subset of fields, and should
+// override those fields without erasing values from the preceding layer.
+fn merge_config(mut base: Config, override_with: Config) -> Config {
+    base.port = override_with.port;
+    base.host = override_with.host;
+    base.retry_attempts = override_with.retry_attempts;
+    base.retry_delay_sec = override_with.retry_delay_sec;
+    base.request_timeout_sec = override_with.request_timeout_sec;
+    base.gemini_bl = override_with.gemini_bl;
+    base.auth_user = override_with.auth_user;
+    base.xsrf_token = override_with.xsrf_token;
+    base.default_model = override_with.default_model;
+    base.log_requests = override_with.log_requests;
+    base.cookie_file = override_with.cookie_file;
+    base.proxy = override_with.proxy;
+    base.api_keys = override_with.api_keys;
+    base.cors_origins = override_with.cors_origins;
+    base
+}
+
+pub fn load() -> Config {
+    let mut config = load_from_paths(config_paths());
     apply_env(&mut config);
     config
 }
@@ -136,5 +164,31 @@ fn apply_env(config: &mut Config) {
             .filter(|origin| !origin.is_empty())
             .map(str::to_owned)
             .collect();
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_config_overrides_global_config() {
+        let root = std::env::temp_dir().join(format!(
+            "gemini-web2api-config-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let global = root.join("global.json");
+        let local = root.join("local.json");
+        std::fs::write(&global, r#"{"host":"0.0.0.0","port":9000}"#).unwrap();
+        std::fs::write(&local, r#"{"host":"127.0.0.1","port":8123}"#).unwrap();
+
+        let config = load_from_paths([global.clone(), local.clone()]);
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 8123);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
