@@ -74,7 +74,10 @@ fn load_from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Config {
         let parsed = match serde_json::from_str::<serde_json::Value>(&raw) {
             Ok(serde_json::Value::Object(values)) => values,
             Ok(_) => {
-                tracing::warn!("invalid config.json ({}): expected an object", path.display());
+                tracing::warn!(
+                    "invalid config.json ({}): expected an object",
+                    path.display()
+                );
                 continue;
             }
             Err(error) => {
@@ -165,7 +168,6 @@ fn apply_env(config: &mut Config) {
             .collect();
     }
 }
-
 
 #[cfg(test)]
 mod tests {
