@@ -181,10 +181,9 @@ async fn end_turn_merges_concurrent_config_updates() {
 }
 
 #[tokio::test]
-async fn delete_cleans_up_snapshots() {
-    // D-05 : Store::delete retire aussi les snapshots.
+async fn delete_cleans_up_legacy_snapshot_files() {
     let dir = std::env::temp_dir().join(format!(
-        "acp-delete-snapshots-test-{}",
+        "acp-delete-legacy-snapshots-test-{}",
         uuid::Uuid::new_v4().simple()
     ));
     let store = Store::open(&dir).await.unwrap();
@@ -192,7 +191,7 @@ async fn delete_cleans_up_snapshots() {
         .create("/tmp".into(), vec![], TEST_MODEL)
         .await
         .unwrap();
-    let snapshot = store.snapshot_path(&s.id, 3);
+    let snapshot = dir.join(format!("{}.3.snap.json", s.id));
     tokio::fs::write(&snapshot, b"{}").await.unwrap();
 
     assert!(store.delete(&s.id).await);
