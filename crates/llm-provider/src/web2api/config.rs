@@ -63,39 +63,38 @@ fn dirs_config() -> PathBuf {
 }
 
 fn load_from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Config {
-    let mut config = Config::default();
+    // Merge JSON objects before deserializing so omitted fields keep values
+    // from earlier layers instead of resetting to struct defaults.
+    let mut merged = serde_json::Map::new();
     for path in paths {
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<Config>(&raw) {
-                Ok(from_file) => {
-                    config = merge_config(config, from_file);
-                    tracing::info!("config loaded from {}", path.display());
-                }
-                Err(error) => tracing::warn!("invalid config.json ({}): {error}", path.display()),
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let parsed = match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(serde_json::Value::Object(values)) => values,
+            Ok(_) => {
+                tracing::warn!("invalid config.json ({}): expected an object", path.display());
+                continue;
             }
+            Err(error) => {
+                tracing::warn!("invalid config.json ({}): {error}", path.display());
+                continue;
+            }
+        };
+
+        let mut candidate = merged.clone();
+        candidate.extend(parsed);
+        match serde_json::from_value::<Config>(serde_json::Value::Object(candidate.clone())) {
+            Ok(_) => {
+                merged = candidate;
+                tracing::info!("config loaded from {}", path.display());
+            }
+            Err(error) => tracing::warn!("invalid config.json ({}): {error}", path.display()),
         }
     }
-    config
-}
 
-// Keep this explicit: a file may specify only a subset of fields, and should
-// override those fields without erasing values from the preceding layer.
-fn merge_config(mut base: Config, override_with: Config) -> Config {
-    base.port = override_with.port;
-    base.host = override_with.host;
-    base.retry_attempts = override_with.retry_attempts;
-    base.retry_delay_sec = override_with.retry_delay_sec;
-    base.request_timeout_sec = override_with.request_timeout_sec;
-    base.gemini_bl = override_with.gemini_bl;
-    base.auth_user = override_with.auth_user;
-    base.xsrf_token = override_with.xsrf_token;
-    base.default_model = override_with.default_model;
-    base.log_requests = override_with.log_requests;
-    base.cookie_file = override_with.cookie_file;
-    base.proxy = override_with.proxy;
-    base.api_keys = override_with.api_keys;
-    base.cors_origins = override_with.cors_origins;
-    base
+    serde_json::from_value::<Config>(serde_json::Value::Object(merged)).unwrap_or_default()
 }
 
 pub fn load() -> Config {
@@ -183,11 +182,11 @@ mod tests {
         let global = root.join("global.json");
         let local = root.join("local.json");
         std::fs::write(&global, r#"{"host":"0.0.0.0","port":9000}"#).unwrap();
-        std::fs::write(&local, r#"{"host":"127.0.0.1","port":8123}"#).unwrap();
+        std::fs::write(&local, r#"{"host":"127.0.0.1"}"#).unwrap();
 
         let config = load_from_paths([global.clone(), local.clone()]);
         assert_eq!(config.host, "127.0.0.1");
-        assert_eq!(config.port, 8123);
+        assert_eq!(config.port, 9000);
 
         std::fs::remove_dir_all(root).unwrap();
     }
