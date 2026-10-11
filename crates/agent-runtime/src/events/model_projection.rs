@@ -222,7 +222,6 @@ mod tests {
         assert!(matches!(result, Ok(Err(ModelProjectionError::Cancelled))));
     }
 
-
     #[tokio::test]
     async fn projects_reasoning_then_text_without_agent_loop() {
         let (tx, rx) = mpsc::channel(4);
