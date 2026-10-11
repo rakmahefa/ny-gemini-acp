@@ -123,7 +123,11 @@ fn apply_env(config: &mut Config) {
         config.proxy = Some(v);
     }
     if let Some(v) = get("API_KEYS") {
-        config.api_keys = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        config.api_keys = v
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
     }
     if let Some(v) = get("CORS_ORIGINS") {
         config.cors_origins = v
