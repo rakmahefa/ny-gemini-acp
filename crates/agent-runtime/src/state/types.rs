@@ -7,8 +7,6 @@ use thiserror::Error;
 
 use super::History;
 
-pub const MAX_SNAPSHOTS: usize = 10;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
     #[serde(rename = "user")]

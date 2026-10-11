@@ -15,11 +15,6 @@ use agent_runtime::ToolConfigurationError;
 use super::contracts::ToolCancellation;
 use super::mcp::McpCatalog;
 
-#[derive(Debug, Clone, Default)]
-pub struct SandboxConfig {
-    pub allowed_dirs: Vec<PathBuf>,
-}
-
 #[derive(Clone)]
 pub struct ToolDef {
     pub name: &'static str,
@@ -78,7 +73,6 @@ pub trait Tool: Send + Sync {
 
 pub struct ToolRegistry {
     tools: Vec<Box<dyn Tool>>,
-    sandbox: SandboxConfig,
     mcp: Option<Arc<McpCatalog>>,
 }
 
@@ -87,7 +81,6 @@ impl std::fmt::Debug for ToolRegistry {
         let names: Vec<&str> = self.tools.iter().map(|t| t.definition().name).collect();
         f.debug_struct("ToolRegistry")
             .field("tools", &names)
-            .field("sandbox", &self.sandbox)
             .field("mcp", &self.mcp.as_ref().map(|catalog| catalog.has_tools()))
             .finish()
     }
@@ -103,7 +96,6 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             tools: Vec::new(),
-            sandbox: SandboxConfig::default(),
             mcp: None,
         }
     }
@@ -197,7 +189,7 @@ impl ToolRegistry {
         extra_dirs: &[PathBuf],
         cancellation: &ToolCancellation,
     ) -> Option<ToolResult> {
-        let mut allowed = self.sandbox.allowed_dirs.clone();
+        let mut allowed = Vec::with_capacity(extra_dirs.len());
         for dir in extra_dirs {
             if !allowed.contains(dir) {
                 allowed.push(dir.clone());
@@ -216,9 +208,7 @@ impl ToolRegistry {
             return Some(tool.execute(args, cwd, &allowed, cancellation).await);
         }
         if let Some(mcp) = &self.mcp {
-            // D-18 : même périmètre fusionné (sandbox + extra) que pour les
-            // builtins — les deux types d'outils d'une même session ne doivent
-            // pas avoir des périmètres d'accès différents.
+            // Built-in and MCP tools receive the same session directory scope.
             return mcp
                 .call_async(name, args, cwd, &allowed, cancellation)
                 .await;

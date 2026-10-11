@@ -127,15 +127,26 @@ impl Store {
     pub async fn delete(&self, id: &str) -> bool {
         let existed = self.live.write().await.remove(id).is_some() || self.path(id).exists();
         let _ = tokio::fs::remove_file(self.path(id)).await;
-        // D-05 : la suppression doit retirer toutes les traces de la session —
-        // sentinel busy et snapshots compris — sinon `end_turn` d'un tour en
-        // cours (ou un redémarrage) peut réécrire la session supprimée.
         self.release_busy(id).await;
-        for n in self.list_snapshots(id).await {
-            let _ = tokio::fs::remove_file(self.snapshot_path(id, n)).await;
-        }
+        self.remove_legacy_snapshots(id).await;
         existed
     }
+    async fn remove_legacy_snapshots(&self, id: &str) {
+        let prefix = format!("{id}.");
+        let Ok(mut entries) = tokio::fs::read_dir(&self.dir).await else {
+            return;
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if name.starts_with(&prefix) && name.ends_with(".snap.json") {
+                let _ = tokio::fs::remove_file(entry.path()).await;
+            }
+        }
+    }
+
 }
 
 async fn cleanup_orphan_tmp_files(dir: &Path) {
@@ -194,7 +205,7 @@ mod tests {
             .create("/tmp".into(), vec![], "test-model")
             .await
             .unwrap();
-        let snapshot = store.snapshot_path(&session.id, 1);
+        let snapshot = dir.join(format!("{}.1.snap.json", session.id));
         tokio::fs::write(&snapshot, serde_json::to_vec_pretty(&session).unwrap())
             .await
             .unwrap();

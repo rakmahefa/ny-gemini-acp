@@ -8,11 +8,9 @@ use tokio::sync::RwLock;
 mod busy;
 pub mod history;
 mod persistence;
-mod snapshot;
 mod types;
 
 pub use history::{History, HistoryEntry};
-pub(crate) use types::MAX_SNAPSHOTS;
 pub use types::{Live, Role, Session, SessionMode, SessionPermissionRule, StoreError, TurnError};
 
 #[derive(Clone)]
@@ -141,29 +139,12 @@ impl Store {
         final_session.updated_at = crate::time::now_iso();
         final_session.turn_count = final_session.turn_count.saturating_add(1);
 
-        // Commit the canonical session first. A snapshot is an auxiliary
-        // recovery artifact and must never become newer than the canonical
-        // state while the canonical write is failing.
         let persist_result = self
             .persist(&final_session)
             .await
             .map_err(|error| StoreError::Persistence(error.to_string()));
 
         if persist_result.is_ok() {
-            if !final_session.messages.is_empty() {
-                let snap_n = final_session.messages.len();
-                match serde_json::to_vec_pretty(&final_session) {
-                    Ok(raw) => {
-                        if let Err(error) = self.persist_snapshot(id, snap_n, &raw).await {
-                            tracing::warn!(session = %id, snapshot = snap_n, error = %error, "snapshot persist failed after canonical session commit");
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(session = %id, snapshot = snap_n, error = %error, "snapshot serialization failed after canonical session commit");
-                    }
-                }
-                self.prune_snapshots(id, MAX_SNAPSHOTS).await;
-            }
             if let Some(entry) = live.get_mut(id) {
                 entry.session = final_session;
             }
