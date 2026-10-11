@@ -20,19 +20,20 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-tests-\${{ github.ref }}
+  group: release-tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   diagnostics:
     name: Test Linux release and collect diagnostics
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - name: Checkout dev source
         uses: actions/checkout@v4
         with:
-          ref: \${{ github.ref }}
+          ref: ${{ github.ref }}
+          persist-credentials: false
 
       - name: Enforce dev-only execution
         run: |
@@ -48,16 +49,16 @@ jobs:
 
       - name: Build a release candidate from dev
         id: package
-        if: \${{ !inputs.release_tag }}
+        if: ${{ !inputs.release_tag }}
         run: bash scripts/package-release.sh "$RUNNER_TEMP/release-assets"
 
       - name: Download a published release
         id: download
-        if: \${{ inputs.release_tag }}
+        if: ${{ inputs.release_tag }}
         env:
-          GH_TOKEN: \${{ github.token }}
-          RELEASE_TAG: \${{ inputs.release_tag }}
-          ASSET_DIR: \${{ runner.temp }}/release-assets
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          ASSET_DIR: ${{ runner.temp }}/release-assets
         run: |
           set -euo pipefail
           if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -80,8 +81,8 @@ jobs:
 
       - name: Prepare private cookie file
         env:
-          GEMINI_COOKIE: \${{ secrets.GEMINI_COOKIE }}
-          COOKIE_FILE: \${{ runner.temp }}/gemini-cookie.json
+          GEMINI_COOKIE: ${{ secrets.GEMINI_COOKIE }}
+          COOKIE_FILE: ${{ runner.temp }}/gemini-cookie.json
         run: |
           set -euo pipefail
           set +x
@@ -108,17 +109,17 @@ jobs:
 
       - name: Test archive and run HTTP smoke checks
         env:
-          COOKIE_FILE: \${{ runner.temp }}/gemini-cookie.json
+          COOKIE_FILE: ${{ runner.temp }}/gemini-cookie.json
           DIAGNOSTICS_PORT: "18281"
-          RUN_LIVE_INTEGRATION: \${{ inputs.run_live_integration || false }}
-          RELEASE_SOURCE: \${{ inputs.release_tag && 'published-release' || 'dev-candidate' }}
+          RUN_LIVE_INTEGRATION: ${{ inputs.run_live_integration || false }}
+          RELEASE_SOURCE: ${{ inputs.release_tag && 'published-release' || 'dev-candidate' }}
         run: |
           set -euo pipefail
-          ARCHIVE="\${{ steps.package.outputs.archive_path }}"
-          CHECKSUM="\${{ steps.package.outputs.checksum_path }}"
-          if [[ -n "\${{ inputs.release_tag }}" ]]; then
-            ARCHIVE="\${{ steps.download.outputs.archive_path }}"
-            CHECKSUM="\${{ steps.download.outputs.checksum_path }}"
+          ARCHIVE="${{ steps.package.outputs.archive_path }}"
+          CHECKSUM="${{ steps.package.outputs.checksum_path }}"
+          if [[ -n "${{ inputs.release_tag }}" ]]; then
+            ARCHIVE="${{ steps.download.outputs.archive_path }}"
+            CHECKSUM="${{ steps.download.outputs.checksum_path }}"
           fi
           bash scripts/test-release.sh "$ARCHIVE" "$CHECKSUM" "$RUNNER_TEMP/diagnostics"
 
@@ -130,9 +131,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-diagnostics-\${{ github.run_id }}
+          name: release-diagnostics-${{ github.run_id }}
           path: |
-            \${{ runner.temp }}/diagnostics/diagnostics.log
-            \${{ runner.temp }}/diagnostics/server-runtime.log
+            ${{ runner.temp }}/diagnostics/diagnostics.log
+            ${{ runner.temp }}/diagnostics/server-runtime.log
           if-no-files-found: warn
           retention-days: 30
