@@ -32,7 +32,7 @@ Keep these boundaries unless a demonstrated dependency problem justifies a chang
 
 For the ACP agent, copy `vendor/cookie.example.json` to `vendor/cookie.json`, then set the `SAPISID` value locally. The default cookie path can be overridden with `GEMINI_ACP_COOKIES`. ACP-specific options include `GEMINI_ACP_MODEL`, `GEMINI_ACP_AUTH_USER`, and `GEMINI_ACP_PROXY`.
 
-The HTTP server uses the same authentication cookie and supports configuration through its `config.json` and `GEMINI_WEB2API_*` options. Its default local endpoint is `127.0.0.1:8081`.
+The HTTP server uses the same authentication cookie and supports configuration through its `config.json` and `GEMINI_WEB2API_*` options. Its default local endpoint is `127.0.0.1:8081`. If `GEMINI_WEB2API_API_KEYS` is configured, send a key through `Authorization: Bearer …`, `x-api-key`, or `x-goog-api-key`; query-string keys are rejected. Browser origins are denied by default; configure `GEMINI_WEB2API_CORS_ORIGINS` as a comma-separated list of exact allowed origins when browser access is required. Keep the service bound to loopback unless API authentication and network exposure are configured deliberately.
 
 **Never commit a real cookie, token, or generated local configuration containing credentials.** The cookie is equivalent to a browser-session credential and must be treated as a secret.
 
