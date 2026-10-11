@@ -22,6 +22,7 @@ pub struct Config {
     pub cookie_file: Option<PathBuf>,
     pub proxy: Option<String>,
     pub api_keys: Vec<String>,
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for Config {
@@ -40,6 +41,7 @@ impl Default for Config {
             cookie_file: None,
             proxy: None,
             api_keys: Vec::new(),
+            cors_origins: Vec::new(),
         }
     }
 }
@@ -121,6 +123,14 @@ fn apply_env(config: &mut Config) {
         config.proxy = Some(v);
     }
     if let Some(v) = get("API_KEYS") {
-        config.api_keys = v.split(',').map(|s| s.trim().to_string()).collect();
+        config.api_keys = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+    }
+    if let Some(v) = get("CORS_ORIGINS") {
+        config.cors_origins = v
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(str::to_owned)
+            .collect();
     }
 }
