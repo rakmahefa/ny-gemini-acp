@@ -86,10 +86,9 @@ impl Store {
         session: Session,
         expected_gen: u64,
     ) -> Result<(), StoreError> {
-        // D-05 : le verrou d'écriture est tenu jusqu'au commit. `end_turn` est
-        // appelé une seule fois par tour : la contention acceptable achète une
-        // atomité réelle face à un `update_session` concurrent (fusion) et face
-        // à un `delete` concurrent (plus de résurrection de session supprimée).
+        // Hold the write lock through commit. This serializes the final turn write
+        // with concurrent updates or deletion, preventing lost changes and
+        // deleted-session resurrection.
         let mut live = self.live.write().await;
         let Some(entry) = live.get_mut(id) else {
             // La session a été supprimée pendant le tour (`Store::delete` retire
@@ -112,16 +111,10 @@ impl Store {
         }
 
         let mut final_session = session;
-        // D-05 : fusion au lieu d'écrasement — les champs de configuration
-        // modifiables en concurrent pendant le tour (session/set_mode,
-        // set_model, set_think, tools_enabled, titre, répertoires) font foi
-        // depuis l'entrée live ; le tour ne contribue que l'historique et
-        // turn_count.
-        //
-        // Invariant (SPEC-P0-02) : `title` merge depuis l'entrée live, qui
-        // est écrite par l'adaptateur via `update_session` au moment de la
-        // dérivation du titre. Un titre qui n'a été que notifié à l'UI sans
-        // écriture store serait écrasé ici et perdu après redémarrage/fork.
+        // Preserve settings changed while the turn is running. The turn contributes
+        // its history, while configuration fields and the title come from the live
+        // session. Titles must be stored through `update_session`; a title sent
+        // only to the UI would be discarded here and lost after reload or fork.
         let live_session = &entry.session;
         final_session.cwd = live_session.cwd.clone();
         final_session.additional_directories = live_session.additional_directories.clone();
@@ -130,9 +123,8 @@ impl Store {
         final_session.think = live_session.think;
         final_session.tools_enabled = live_session.tools_enabled;
         final_session.mode = live_session.mode;
-        // SPEC-P1-04: "always allow/reject" rules are written mid-turn via
-        // `update_session`; taking the live entry's rules keeps them across
-        // the final commit.
+        // Permission choices may change during a turn. Preserve the live session's
+        // rules so the final commit does not overwrite them.
         final_session.permission_rules = live_session.permission_rules.clone();
 
         final_session.messages.normalize_legacy();

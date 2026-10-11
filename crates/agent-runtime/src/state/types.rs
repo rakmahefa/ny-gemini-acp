@@ -61,10 +61,9 @@ impl SessionMode {
     }
 }
 
-/// A session-scoped permission rule (SPEC-P1-04): the memory of an
-/// "always allow" or "always reject" choice for one tool/kind pair. Rules
-/// live and die with the session — they are never inherited by forks and
-/// never shared across sessions, because no global permission store exists.
+/// A permission rule scoped to one session. It remembers an allow/reject choice
+/// for one tool and permission kind. Rules are not inherited by forks or shared
+/// across sessions because there is no global permission store.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionPermissionRule {
     pub tool: String,
@@ -163,8 +162,8 @@ pub enum StoreError {
     Persistence(String),
     #[error("stale turn generation: expected {expected}, current {current}")]
     StaleGeneration { expected: u64, current: u64 },
-    /// La session a été supprimée pendant le tour : le commit est abandonné
-    /// plutôt que de ressusciter la session supprimée (D-05).
+    /// The session was deleted while a turn was running, so its commit is
+    /// abandoned rather than recreating the deleted session.
     #[error("session deleted during turn: {0}")]
     SessionDeleted(String),
 }

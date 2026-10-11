@@ -13,23 +13,18 @@ use crate::{
 
 const DEFAULT_MAX_ROUNDS: usize = 20;
 const DEFAULT_MAX_TOOL_CALLS_PER_ROUND: usize = 32;
-/// Honest per-turn business bound (SPEC-P1-05): a turn may execute at most
-/// this many tool calls in total across all rounds. Exhausting it is a real,
-/// reported condition — not a disguised overflow check.
+/// Maximum tool calls allowed in a turn across all rounds. Reaching this limit
+/// is reported explicitly rather than disguised as an overflow condition.
 const DEFAULT_MAX_TOOL_CALLS_PER_TURN: usize = 128;
-/// C-17 : plafond de sécurité runtime (chars de contexte). La voie ACP
-/// applique un budget bien plus strict en amont (`MAX_PROMPT_CHARS = 32_000`
-/// dans acp-adaptor/prompt/build.rs) : la compaction d'urgence ci-dessous ne
-/// peut donc se déclencher que pour un point d'entrée non-ACP ou si ce plafond
-/// adaptateur venait à être relevé. Les deux niveaux sont volontairement
-/// distincts : budget prompt (adaptateur) ≠ garde-fou (runtime).
+/// Runtime fallback context-size limit in characters. The ACP adapter applies
+/// a stricter prompt budget before reaching the runtime, so emergency compaction
+/// mainly safeguards non-ACP callers. These limits serve different layers.
 const CONTEXT_WINDOW_CHARS: usize = 1_000_000;
 const COMPACTION_THRESHOLD_CHARS: usize = CONTEXT_WINDOW_CHARS * 9 / 10;
 const EMERGENCY_COMPACTION_CHARS: usize = CONTEXT_WINDOW_CHARS * 7 / 10;
-/// C-17 : tours préservés par la compaction runtime. L'adaptateur inclut de
-/// son côté au plus `MAX_MESSAGES = 12` messages dans le prompt — les deux
-/// bornes opèrent à des étages différents (compaction persistée vs fenêtre
-/// de prompt) et ne sont pas interchangeables.
+/// Number of recent turns preserved by runtime compaction. The ACP adapter
+/// independently limits messages in each prompt; the two limits operate at
+/// different stages and are not interchangeable.
 const PRESERVE_TURNS: usize = 10;
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -241,8 +236,8 @@ impl AgentLoop {
             let mut terminal_action: Option<(String, String)> = None; // (action, user_text)
             for call in tool_calls {
                 if terminal_action.is_some() {
-                    // C-04 : une action terminale a déjà été traitée — les appels
-                    // restants de ce round sont abandonnés avec trace (voir plus bas).
+                    // A terminal action has already been selected; remaining calls
+                    // are kept here so they can be reported as skipped below.
                     executable.push(call);
                     continue;
                 }
@@ -266,8 +261,6 @@ impl AgentLoop {
                                 continue;
                             }
                             Ok(None) => continue,
-                            // C-04 : les deux bras `Cancelled` étaient strictement
-                            // identiques — fusionnés.
                             Err(AgentActionError::Cancelled) => {
                                 let _ = sink.turn_cancelled();
                                 return Err(AgentLoopError::Cancelled);
@@ -283,10 +276,9 @@ impl AgentLoop {
             }
 
             if let Some((action_name, user_text)) = terminal_action {
-                // C-04 : l'action terminale (ex. FollowUp) remplace la suite du
-                // round, mais les tool calls déjà accumulés (ou restants) ne
-                // doivent pas disparaître sans trace : assistant text + entrée
-                // d'historique + événements sémantiques par appel abandonné.
+                // A terminal action (such as FollowUp) ends the rest of the round.
+                // Record outstanding tool calls in history and semantic events
+                // instead of silently dropping them.
                 if !round_result.text.trim().is_empty() {
                     session.messages.push_assistant(round_result.text.clone());
                 }
