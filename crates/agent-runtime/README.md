@@ -1,1 +1,0 @@
-Agent runtime crate. Owns session state, semantic events, orchestration and execution lifecycle; it does not own ACP transport.
