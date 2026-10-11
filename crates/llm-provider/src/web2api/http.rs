@@ -97,17 +97,15 @@ pub async fn cors_auth(State(state): State<AppState>, req: Request, next: Next) 
     }
 
     let path = req.uri().path();
-    let mut response = if !config.api_keys.is_empty()
-        && path.starts_with("/v1")
-        && !authorized(&req, config)
-    {
-        json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":{"message":"invalid api key"}}),
-        )
-    } else {
-        next.run(req).await
-    };
+    let mut response =
+        if !config.api_keys.is_empty() && path.starts_with("/v1") && !authorized(&req, config) {
+            json_response(
+                StatusCode::UNAUTHORIZED,
+                serde_json::json!({"error":{"message":"invalid api key"}}),
+            )
+        } else {
+            next.run(req).await
+        };
 
     if let Some(origin) = origin {
         response
