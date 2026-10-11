@@ -188,4 +188,48 @@ mod tests {
         assert!(!constant_time_eq("", "sk-abc"));
         assert!(!constant_time_eq("sk-abc", "sk-ABC"));
     }
+
+    #[test]
+    fn api_keys_are_accepted_only_from_headers() {
+        let config = Config {
+            api_keys: vec!["secret".into()],
+            ..Config::default()
+        };
+        let query_request = Request::builder()
+            .uri("/v1/models?key=secret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(!authorized(&query_request, &config));
+
+        let bearer_request = Request::builder()
+            .uri("/v1/models")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(authorized(&bearer_request, &config));
+    }
+
+    #[test]
+    fn cors_requires_an_exact_configured_origin() {
+        let config = Config {
+            cors_origins: vec!["http://localhost:3000".into()],
+            ..Config::default()
+        };
+        let allowed = Request::builder()
+            .uri("/v1/models")
+            .header(header::ORIGIN, "http://localhost:3000")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(
+            allowed_origin(&allowed, &config),
+            Some(HeaderValue::from_static("http://localhost:3000"))
+        );
+
+        let untrusted = Request::builder()
+            .uri("/v1/models")
+            .header(header::ORIGIN, "https://example.invalid")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(allowed_origin(&untrusted, &config).is_none());
+    }
 }
