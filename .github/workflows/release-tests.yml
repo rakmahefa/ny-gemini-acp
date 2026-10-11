@@ -3,7 +3,7 @@ name: Release Tests and Diagnostics
 on:
   push:
     branches:
-      - dev
+      - main
     tags:
       - "v*"
   workflow_dispatch:
@@ -48,12 +48,12 @@ jobs:
               echo "::error::Release tags must use vMAJOR.MINOR.PATCH."
               exit 1
             fi
-            git fetch --no-tags origin dev
+            git fetch --no-tags origin main
             if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
-              echo "::error::Only tags pointing to commits reachable from dev can be tested."
+              echo "::error::Only tags pointing to commits reachable from main can be tested."
               exit 1
             fi
-            echo "Testing release tag $GITHUB_REF_NAME from dev."
+            echo "Testing release tag $GITHUB_REF_NAME from main."
           else
             echo "::error::Run this workflow from dev or a version tag based on dev."
             exit 1
