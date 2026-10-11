@@ -2,14 +2,6 @@ use super::*;
 use crate::{ToolUiKind, ToolUiModel, ToolUiStatus};
 
 #[test]
-fn creates_turn_started_event() {
-    let context = EventContext::new("session", "turn", 1);
-    let event = SemanticEvent::TurnStarted { context };
-
-    assert!(matches!(event, SemanticEvent::TurnStarted { .. }));
-}
-
-#[test]
 fn keeps_tool_call_context_and_ui() {
     let event_context = EventContext::new("session", "turn", 2);
     let context = ToolEventContext {

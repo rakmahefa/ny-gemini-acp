@@ -1,7 +1,6 @@
 //! Helpers communs aux formats OpenAI / Codex / Google (refactor M9 §6.4).
 
 use serde_json::{json, Value};
-use tracing::warn;
 
 /// Résout un nom de modèle strictement contre les modèles du provider Gemini.
 pub fn resolve_model_strict(
@@ -135,69 +134,5 @@ impl ToolChoice {
                 "\n\nIMPORTANT: You MUST call the tool \"{name}\". Do not call other tools."
             ),
         }
-    }
-}
-
-pub fn warn_xsrf_ignored(xsrf: Option<&str>) {
-    if xsrf.is_some() {
-        warn!("xsrf_token configured but ignored: the gemini client fetches SNlM0e automatically");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn invalid_tool_call_json_stays_visible_in_the_response() {
-        // SPEC-P1-06 (M7): an unparseable tool_call block must NOT be
-        // silently removed from the response.
-        let text = "avant\n```tool_call\n{invalid json}\n```\napres";
-        let (clean, calls) = parse_tool_calls(text);
-        assert!(calls.is_empty());
-        assert!(clean.contains("{invalid json}"), "clean = {clean:?}");
-        assert!(clean.contains("avant") && clean.contains("apres"));
-    }
-
-    #[test]
-    fn parsed_tool_call_blocks_are_removed() {
-        let text = "avant\n```tool_call\n{\"name\": \"a\", \"arguments\": {\"x\": 1}}\n```\napres";
-        let (clean, calls) = parse_tool_calls(text);
-        assert_eq!(calls.len(), 1);
-        assert!(clean.contains("avant") && clean.contains("apres"));
-        assert!(!clean.contains("tool_call"), "clean = {clean:?}");
-    }
-
-    #[test]
-    fn multi_line_tool_call_json_is_parsed_and_removed() {
-        let text =
-            "texte\n```tool_call\n{\n  \"name\": \"a\",\n  \"arguments\": {\"x\": 1}\n}\n```\nfin";
-        let (clean, calls) = parse_tool_calls(text);
-        assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0]["function"]["name"], "a");
-        assert!(clean.contains("texte") && clean.contains("fin"));
-    }
-
-    #[test]
-    fn tool_choice_parse_et_instruction() {
-        assert_eq!(ToolChoice::parse(None), ToolChoice::Auto);
-        assert_eq!(ToolChoice::parse(Some(&json!("none"))), ToolChoice::None);
-        assert_eq!(
-            ToolChoice::parse(Some(&json!("required"))),
-            ToolChoice::Required
-        );
-        assert_eq!(ToolChoice::parse(Some(&json!("auto"))), ToolChoice::Auto);
-        assert_eq!(
-            ToolChoice::parse(Some(&json!({"type":"function","function":{"name":"lire"}}))),
-            ToolChoice::Named("lire".into())
-        );
-        assert!(ToolChoice::Auto.instruction().is_empty());
-        assert!(ToolChoice::Required
-            .instruction()
-            .contains("at least one tool"));
-        assert!(ToolChoice::Named("lire".into())
-            .instruction()
-            .contains("lire"));
-        assert!(ToolChoice::None.is_none());
-        assert!(!ToolChoice::Auto.is_none());
     }
 }

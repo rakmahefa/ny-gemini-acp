@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use llm_provider::client::Client;
 use serde_json::Value;
 use std::convert::Infallible;
+use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -18,24 +19,7 @@ const MAX_BODY: usize = 16 * 1024 * 1024;
 const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, x-api-key, x-goog-api-key, Accept";
 
 fn constant_time_eq(a: &str, b: &str) -> bool {
-    let ab = a.as_bytes();
-    let bb = b.as_bytes();
-    if ab.len() != bb.len() {
-        let mut acc = 0xffu8;
-        for byte in ab {
-            acc ^= byte;
-        }
-        for byte in bb {
-            acc ^= byte;
-        }
-        let _ = acc;
-        return false;
-    }
-    let mut acc = 0u8;
-    for (x, y) in ab.iter().zip(bb.iter()) {
-        acc |= x ^ y;
-    }
-    acc == 0
+    bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }
 
 #[derive(Clone)]
@@ -64,31 +48,70 @@ pub fn sse(rx: mpsc::Receiver<SseItem>) -> Sse<KeepAliveStream<ReceiverStream<Ss
 
 pub async fn cors_auth(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let config = &state.config;
+    let has_origin = req.headers().contains_key(header::ORIGIN);
+    let origin = allowed_origin(&req, config);
+
+    if has_origin && origin.is_none() {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            serde_json::json!({"error":{"message":"origin not allowed"}}),
+        );
+    }
+
     if req.method() == Method::OPTIONS {
+        let Some(origin) = origin else {
+            return StatusCode::FORBIDDEN.into_response();
+        };
         return (
             StatusCode::NO_CONTENT,
             [
-                (header::ACCESS_CONTROL_ALLOW_ORIGIN, "*"),
-                (header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, OPTIONS"),
-                (header::ACCESS_CONTROL_ALLOW_HEADERS, CORS_ALLOW_HEADERS),
+                (header::ACCESS_CONTROL_ALLOW_ORIGIN, origin),
+                (
+                    header::ACCESS_CONTROL_ALLOW_METHODS,
+                    HeaderValue::from_static("GET, POST, OPTIONS"),
+                ),
+                (
+                    header::ACCESS_CONTROL_ALLOW_HEADERS,
+                    HeaderValue::from_static(CORS_ALLOW_HEADERS),
+                ),
+                (header::VARY, HeaderValue::from_static("Origin")),
             ],
         )
             .into_response();
     }
-    let path = req.uri().path().to_string();
-    if !config.api_keys.is_empty() && path.starts_with("/v1") && !authorized(&req, config) {
-        return json_response(
-            StatusCode::UNAUTHORIZED,
-            serde_json::json!({"error":{"message":"invalid api key"}}),
-        );
+
+    let path = req.uri().path();
+    let mut response =
+        if !config.api_keys.is_empty() && path.starts_with("/v1") && !authorized(&req, config) {
+            json_response(
+                StatusCode::UNAUTHORIZED,
+                serde_json::json!({"error":{"message":"invalid api key"}}),
+            )
+        } else {
+            next.run(req).await
+        };
+
+    if let Some(origin) = origin {
+        response
+            .headers_mut()
+            .insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+        response
+            .headers_mut()
+            .insert(header::VARY, HeaderValue::from_static("Origin"));
     }
-    let mut response = next.run(req).await;
-    response.headers_mut().insert(
-        header::ACCESS_CONTROL_ALLOW_ORIGIN,
-        HeaderValue::from_static("*"),
-    );
     response
 }
+
+fn allowed_origin(req: &Request, config: &Config) -> Option<HeaderValue> {
+    let origin = req.headers().get(header::ORIGIN)?;
+    let raw_origin = origin.to_str().ok()?;
+    config
+        .cors_origins
+        .iter()
+        .any(|allowed| allowed == raw_origin)
+        .then(|| origin.clone())
+}
+
 fn authorized(req: &Request, config: &Config) -> bool {
     if let Some(auth) = req
         .headers()
@@ -108,15 +131,8 @@ fn authorized(req: &Request, config: &Config) -> bool {
             }
         }
     }
-    if let Some(query) = req.uri().query() {
-        for pair in query.split('&') {
-            if let Some(key) = pair.strip_prefix("key=") {
-                if config.api_keys.iter().any(|k| constant_time_eq(k, key)) {
-                    return true;
-                }
-            }
-        }
-    }
+    // Do not accept API keys in query strings: URLs can be logged, shared,
+    // cached, or copied into browser history and referrers.
     false
 }
 pub async fn json_body(req: Request) -> Result<Value, Box<Response>> {
@@ -153,5 +169,49 @@ mod tests {
         assert!(!constant_time_eq("sk-abc", ""));
         assert!(!constant_time_eq("", "sk-abc"));
         assert!(!constant_time_eq("sk-abc", "sk-ABC"));
+    }
+
+    #[test]
+    fn api_keys_are_accepted_only_from_headers() {
+        let config = Config {
+            api_keys: vec!["secret".into()],
+            ..Config::default()
+        };
+        let query_request = Request::builder()
+            .uri("/v1/models?key=secret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(!authorized(&query_request, &config));
+
+        let bearer_request = Request::builder()
+            .uri("/v1/models")
+            .header(header::AUTHORIZATION, "Bearer secret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(authorized(&bearer_request, &config));
+    }
+
+    #[test]
+    fn cors_requires_an_exact_configured_origin() {
+        let config = Config {
+            cors_origins: vec!["http://localhost:3000".into()],
+            ..Config::default()
+        };
+        let allowed = Request::builder()
+            .uri("/v1/models")
+            .header(header::ORIGIN, "http://localhost:3000")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert_eq!(
+            allowed_origin(&allowed, &config),
+            Some(HeaderValue::from_static("http://localhost:3000"))
+        );
+
+        let untrusted = Request::builder()
+            .uri("/v1/models")
+            .header(header::ORIGIN, "https://example.invalid")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        assert!(allowed_origin(&untrusted, &config).is_none());
     }
 }

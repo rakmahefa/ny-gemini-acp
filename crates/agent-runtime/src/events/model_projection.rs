@@ -39,6 +39,9 @@ pub(crate) async fn consume_model_stream<S: TurnEventSink + ?Sized>(
     }
 
     let mut cancel_rx = cancellation.subscribe();
+    if *cancel_rx.borrow() {
+        return Err(ModelProjectionError::Cancelled);
+    }
     let mut text = String::new();
     let mut tool_calls = Vec::new();
     let mut event_count = 0usize;
@@ -201,6 +204,22 @@ mod tests {
         let emitter =
             TurnEventEmitter::new(bus, "sess_0123456789abcdef0123456789abcdef", "turn_test");
         TestEmitter { emitter, receiver }
+    }
+
+    #[tokio::test]
+    async fn already_cancelled_stream_returns_without_waiting_for_an_event() {
+        let (_tx, rx) = mpsc::channel(1);
+        let cancellation = Cancellation::new();
+        cancellation.cancel();
+        let mut harness = emitter();
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            consume_model_stream(rx, &cancellation, &mut harness.emitter),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(Err(ModelProjectionError::Cancelled))));
     }
 
     #[tokio::test]

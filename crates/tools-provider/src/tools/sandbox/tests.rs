@@ -257,15 +257,14 @@ fn analysis_rm_critical_risk() {
 
 #[test]
 fn analysis_dynamic_substitution_is_critical() {
+    let sandbox = ShellSandbox::new();
     assert_eq!(
-        ShellSandbox::new().classify("echo $(cat /etc/passwd)"),
+        sandbox.classify("echo $(cat /etc/passwd)"),
         RiskLevel::Critical
     );
-    // $HOME parses fine (no command substitution) and still flags env injection.
-    let analysis = ShellSandbox::new()
-        .analyze_command("echo $HOME")
-        .expect("env expansion without substitution must parse");
-    assert!(analysis.has_env_injection);
+    // Environment expansion is rejected by the execution policy as well.
+    assert_eq!(sandbox.classify("echo $HOME"), RiskLevel::Critical);
+    assert!(sandbox.analyze_command("echo $HOME").is_err());
 }
 
 #[test]

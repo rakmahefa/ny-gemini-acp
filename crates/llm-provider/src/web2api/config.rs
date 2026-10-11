@@ -16,12 +16,12 @@ pub struct Config {
     pub request_timeout_sec: u64,
     pub gemini_bl: String,
     pub auth_user: Option<u32>,
-    pub xsrf_token: Option<String>,
     pub default_model: String,
     pub log_requests: bool,
     pub cookie_file: Option<PathBuf>,
     pub proxy: Option<String>,
     pub api_keys: Vec<String>,
+    pub cors_origins: Vec<String>,
 }
 
 impl Default for Config {
@@ -34,22 +34,25 @@ impl Default for Config {
             request_timeout_sec: 180,
             gemini_bl: DEFAULT_BL.to_string(),
             auth_user: None,
-            xsrf_token: None,
             default_model: DEFAULT_MODEL.to_string(),
             log_requests: true,
             cookie_file: None,
             proxy: None,
             api_keys: Vec::new(),
+            cors_origins: Vec::new(),
         }
     }
 }
 
 fn config_paths() -> [PathBuf; 2] {
+    // Apply the shared user config first and the project-local config second,
+    // so the local file intentionally overrides global defaults.
     [
-        PathBuf::from("./config.json"),
         dirs_config().join("gemini-web2api/config.json"),
+        PathBuf::from("./config.json"),
     ]
 }
+
 fn dirs_config() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -57,19 +60,46 @@ fn dirs_config() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-pub fn load() -> Config {
-    let mut config = Config::default();
-    for path in config_paths() {
-        if let Ok(raw) = std::fs::read_to_string(&path) {
-            match serde_json::from_str::<Config>(&raw) {
-                Ok(from_file) => {
-                    config = from_file;
-                    tracing::info!("config loaded from {}", path.display());
-                }
-                Err(e) => tracing::warn!("invalid config.json ({}): {e}", path.display()),
+fn load_from_paths(paths: impl IntoIterator<Item = PathBuf>) -> Config {
+    // Merge JSON objects before deserializing so omitted fields keep values
+    // from earlier layers instead of resetting to struct defaults.
+    let mut merged = serde_json::Map::new();
+    for path in paths {
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let parsed = match serde_json::from_str::<serde_json::Value>(&raw) {
+            Ok(serde_json::Value::Object(values)) => values,
+            Ok(_) => {
+                tracing::warn!(
+                    "invalid config.json ({}): expected an object",
+                    path.display()
+                );
+                continue;
             }
+            Err(error) => {
+                tracing::warn!("invalid config.json ({}): {error}", path.display());
+                continue;
+            }
+        };
+
+        let mut candidate = merged.clone();
+        candidate.extend(parsed);
+        match serde_json::from_value::<Config>(serde_json::Value::Object(candidate.clone())) {
+            Ok(_) => {
+                merged = candidate;
+                tracing::info!("config loaded from {}", path.display());
+            }
+            Err(error) => tracing::warn!("invalid config.json ({}): {error}", path.display()),
         }
     }
+
+    serde_json::from_value::<Config>(serde_json::Value::Object(merged)).unwrap_or_default()
+}
+
+pub fn load() -> Config {
+    let mut config = load_from_paths(config_paths());
     apply_env(&mut config);
     config
 }
@@ -105,9 +135,6 @@ fn apply_env(config: &mut Config) {
     if let Some(v) = get("AUTH_USER") {
         config.auth_user = v.parse().ok();
     }
-    if let Some(v) = get("XSRF_TOKEN") {
-        config.xsrf_token = Some(v);
-    }
     if let Some(v) = get("DEFAULT_MODEL") {
         config.default_model = v;
     }
@@ -121,6 +148,43 @@ fn apply_env(config: &mut Config) {
         config.proxy = Some(v);
     }
     if let Some(v) = get("API_KEYS") {
-        config.api_keys = v.split(',').map(|s| s.trim().to_string()).collect();
+        config.api_keys = v
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+    }
+    if let Some(v) = get("CORS_ORIGINS") {
+        config.cors_origins = v
+            .split(',')
+            .map(str::trim)
+            .filter(|origin| !origin.is_empty())
+            .map(str::to_owned)
+            .collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_config_overrides_global_config() {
+        let root = std::env::temp_dir().join(format!(
+            "gemini-web2api-config-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+
+        let global = root.join("global.json");
+        let local = root.join("local.json");
+        std::fs::write(&global, r#"{"host":"0.0.0.0","port":9000}"#).unwrap();
+        std::fs::write(&local, r#"{"host":"127.0.0.1"}"#).unwrap();
+
+        let config = load_from_paths([global.clone(), local.clone()]);
+        assert_eq!(config.host, "127.0.0.1");
+        assert_eq!(config.port, 9000);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

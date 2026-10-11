@@ -6,7 +6,7 @@ use super::common::{tool_call_block, ToolChoice};
 use llm_provider::core::tool_prompt::{tool_result_line, tool_use_section, BlockKind};
 
 const INSTRUCTION_OPENAI: &str = "You have access to tools. To call a tool, respond with:\n\\
-```tool_call\n{\"name\": \"func_name\", \"arguments\": {{...}}}\n```\n\\
+```tool_call\n{\"name\": \"func_name\", \"arguments\": {...}}\n```\n\\
 Only use tool_call blocks when needed.\n\n\\
 Available tools:\n";
 
@@ -116,5 +116,14 @@ mod tests {
         let prompt = messages_to_prompt(&[], Some(&tools), &ToolChoice::Required);
         assert!(prompt.contains("You have access to tools"));
         assert!(prompt.contains("MUST call at least one tool"));
+    }
+    #[test]
+    fn tool_call_instruction_uses_valid_json_argument_placeholder() {
+        let tools = vec![
+            json!({"type":"function","function":{"name":"search","description":"search the web","parameters":{}}}),
+        ];
+        let prompt = tools_section(&tools, &ToolChoice::Required).unwrap();
+        assert!(prompt.contains(r#""arguments": {...}"#));
+        assert!(!prompt.contains("{{...}}"));
     }
 }

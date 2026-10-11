@@ -1,1 +1,0 @@
-LLM provider crate. Gemini HTTP/session/configuration implementation lives here; the runtime consumes it through this provider boundary.
