@@ -1,0 +1,138 @@
+name: Release Tests and Diagnostics
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional published release tag to download (for example v0.3.0); empty tests a fresh dev build."
+        required: false
+        type: string
+      run_live_integration:
+        description: "Send one real prompt to Gemini (uses the account associated with GEMINI_COOKIE)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-tests-\${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  diagnostics:
+    name: Test Linux release and collect diagnostics
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout dev source
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.ref }}
+
+      - name: Enforce dev-only execution
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/dev" ]]; then
+            echo "::error::Run this workflow from the dev branch only."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/diagnostics" "$RUNNER_TEMP/release-assets"
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build a release candidate from dev
+        id: package
+        if: \${{ !inputs.release_tag }}
+        run: bash scripts/package-release.sh "$RUNNER_TEMP/release-assets"
+
+      - name: Download a published release
+        id: download
+        if: \${{ inputs.release_tag }}
+        env:
+          GH_TOKEN: \${{ github.token }}
+          RELEASE_TAG: \${{ inputs.release_tag }}
+          ASSET_DIR: \${{ runner.temp }}/release-assets
+        run: |
+          set -euo pipefail
+          if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must use vMAJOR.MINOR.PATCH."
+            exit 1
+          fi
+          ARCHIVE_NAME="ny-gemini-acp-$RELEASE_TAG-linux-x86_64.tar.gz"
+          CHECKSUM_NAME="$ARCHIVE_NAME.sha256"
+
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "$ARCHIVE_NAME" \
+            --pattern "$CHECKSUM_NAME" \
+            --dir "$ASSET_DIR"
+
+          {
+            printf 'archive_path=%s\n' "$ASSET_DIR/$ARCHIVE_NAME"
+            printf 'checksum_path=%s\n' "$ASSET_DIR/$CHECKSUM_NAME"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare private cookie file
+        env:
+          GEMINI_COOKIE: \${{ secrets.GEMINI_COOKIE }}
+          COOKIE_FILE: \${{ runner.temp }}/gemini-cookie.json
+        run: |
+          set -euo pipefail
+          set +x
+          if [[ -z "$GEMINI_COOKIE" ]]; then
+            echo "::error::Required repository secret GEMINI_COOKIE is missing."
+            exit 1
+          fi
+          echo "::add-mask::$GEMINI_COOKIE"
+          python3 - <<'PY'
+          import json
+          import os
+
+          value = os.environ.get("GEMINI_COOKIE", "")
+          if not value:
+              raise SystemExit("GEMINI_COOKIE is empty.")
+          path = os.environ["COOKIE_FILE"]
+          descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+              json.dump([{"name": "SAPISID", "value": value, "domain": ".google.com"}], handle)
+              handle.write("\n")
+          PY
+          unset GEMINI_COOKIE
+          echo "Temporary cookie file created with restrictive permissions; value omitted."
+
+      - name: Test archive and run HTTP smoke checks
+        env:
+          COOKIE_FILE: \${{ runner.temp }}/gemini-cookie.json
+          DIAGNOSTICS_PORT: "18281"
+          RUN_LIVE_INTEGRATION: \${{ inputs.run_live_integration || false }}
+          RELEASE_SOURCE: \${{ inputs.release_tag && 'published-release' || 'dev-candidate' }}
+        run: |
+          set -euo pipefail
+          ARCHIVE="\${{ steps.package.outputs.archive_path }}"
+          CHECKSUM="\${{ steps.package.outputs.checksum_path }}"
+          if [[ -n "\${{ inputs.release_tag }}" ]]; then
+            ARCHIVE="\${{ steps.download.outputs.archive_path }}"
+            CHECKSUM="\${{ steps.download.outputs.checksum_path }}"
+          fi
+          bash scripts/test-release.sh "$ARCHIVE" "$CHECKSUM" "$RUNNER_TEMP/diagnostics"
+
+      - name: Remove temporary cookie
+        if: always()
+        run: rm -f "$RUNNER_TEMP/gemini-cookie.json"
+
+      - name: Upload sanitized diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-diagnostics-\${{ github.run_id }}
+          path: |
+            \${{ runner.temp }}/diagnostics/diagnostics.log
+            \${{ runner.temp }}/diagnostics/server-runtime.log
+          if-no-files-found: warn
+          retention-days: 30
