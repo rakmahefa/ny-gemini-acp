@@ -8,8 +8,8 @@ use axum::response::sse::{Event, KeepAliveStream, Sse};
 use axum::response::{IntoResponse, Response};
 use llm_provider::client::Client;
 use serde_json::Value;
-use subtle::ConstantTimeEq;
 use std::convert::Infallible;
+use subtle::ConstantTimeEq;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
