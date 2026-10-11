@@ -146,7 +146,6 @@ impl Store {
             }
         }
     }
-
 }
 
 async fn cleanup_orphan_tmp_files(dir: &Path) {
