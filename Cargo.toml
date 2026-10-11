@@ -29,6 +29,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 regex = "1"
 sha1 = "0.10"
+subtle = "2.6"
 hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.22"
